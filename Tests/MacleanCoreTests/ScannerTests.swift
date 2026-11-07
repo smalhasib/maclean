@@ -236,6 +236,16 @@ private func node(_ tree: FileTree, _ relative: String) -> NodeID? {
         #expect(ScanBoundary.apfsContainer(ofSource: "//user@server/share") == nil)
     }
 
+    @Test func snapshotSourceDetection() {
+        #expect(ScanBoundary.isAPFSSnapshot(source: "/dev/disk3s1s1"))
+        #expect(ScanBoundary.isAPFSSnapshot(source: "/dev/disk12s4s2"))
+        #expect(!ScanBoundary.isAPFSSnapshot(source: "/dev/disk3s5"))
+        #expect(!ScanBoundary.isAPFSSnapshot(source: "/dev/disk3"))
+        #expect(!ScanBoundary.isAPFSSnapshot(source: "/dev/disk3s1s1s1"))
+        #expect(!ScanBoundary.isAPFSSnapshot(source: "/dev/disk3s1sx"))
+        #expect(!ScanBoundary.isAPFSSnapshot(source: "map auto_home"))
+    }
+
     @Test(.enabled(if: FileManager.default.fileExists(atPath: "/System/Volumes/Preboot")))
     func startupRootDescendsSameContainerVolumes() {
         let b = ScanBoundary.forRoot("/")
@@ -244,6 +254,9 @@ private func node(_ tree: FileTree, _ relative: String) -> NodeID? {
         #expect(!b.descendableMounts.contains("/System/Volumes/Data"))
         #expect(b.skippedPaths.contains("/System/Volumes/Data"))
         #expect(b.descendableMounts.allSatisfy { path in mounts.first(where: { $0.path == path })?.fsType == "apfs" })
+        #expect(b.descendableMounts.allSatisfy { path in
+            mounts.first(where: { $0.path == path }).map { !ScanBoundary.isAPFSSnapshot(source: $0.source) } ?? false
+        })
         // Only the root's own container: every descendable mount shares it.
         let rootContainer = mounts.first(where: { $0.path == "/" }).flatMap {
             ScanBoundary.apfsContainer(ofSource: $0.source)
@@ -293,6 +306,10 @@ private func node(_ tree: FileTree, _ relative: String) -> NodeID? {
         #expect(tree.flags(of: vm).isSuperset(of: [.directory, .mountPoint]))
         #expect(tree.device(of: vm) == vmDevice)
         #expect(!tree.flags(of: vm).contains(.restricted))
+        // A closed mount-point node has no children, so this proves VM was read.
+        let listing = (try? FileManager.default.contentsOfDirectory(atPath: "/System/Volumes/VM")) ?? []
+        try #require(!listing.isEmpty, "VM volume is empty: cannot tell whether it was read")
+        #expect(!tree.children(of: vm).isEmpty)
         if let preboot = node(tree, "Preboot") {
             #expect(tree.flags(of: preboot).contains(.mountPoint))
             #expect(tree.children(of: preboot).isEmpty)
