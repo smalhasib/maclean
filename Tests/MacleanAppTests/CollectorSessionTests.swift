@@ -123,9 +123,61 @@ import MacleanKit
     m2.viewDidChange()
     #expect(m1.currentNode == tree.root)
     #expect(m1.history.current == s.path)
-    // Back to the hidden folder lands on a visible ancestor too.
+    #expect(m1.history.canGoBack)
+    // Once uncollected, Back returns to the folder.
+    m2.toggleCollected(a)
+    m1.viewDidChange()
     m1.back()
-    #expect(m1.currentNode == tree.root)
+    #expect(m1.currentNode == tree.node(atPath: s.path + "/a/b"))
+}
+
+@Test @MainActor func backToHiddenFolderLandsOnVisibleAncestor() async throws {
+    let s = Scratch()
+    s.file("a/b/x.bin", bytes: 4096)
+    s.file("c/y.bin", bytes: 4096)
+    let session = await scannedSession(s)
+    let m = model(session)
+    m.visit(path: s.path + "/a/b")
+    m.visit(path: s.path + "/c")
+    session.collect([try #require(m.tree.node(atPath: s.path + "/a"))])
+    m.viewDidChange()
+    m.back()
+    #expect(m.currentNode == m.tree.root)
+}
+
+@Test @MainActor func uncollectIsNoOpWhileDeleting() async throws {
+    let s = Scratch()
+    s.file("a/x.bin", bytes: 4096)
+    s.file("b/y.bin", bytes: 4096)
+    let session = await scannedSession(s)
+    let m = model(session)
+    let tree = m.tree
+    let a = try #require(tree.node(atPath: s.path + "/a"))
+    let b = try #require(tree.node(atPath: s.path + "/b"))
+    session.collect([a, b])
+    session.isDeleting = true
+    session.uncollect([a])
+    session.uncollectAll()
+    m.toggleCollected(a)
+    m.selected = b
+    m.toggleCollected()
+    #expect(session.view?.collected == [a, b])
+    // The delete run itself still marks items removed.
+    session.markRemoved([a])
+    #expect(session.view?.collected == [b])
+    #expect(session.view?.removed == [a])
+}
+
+@Test @MainActor func carryOverDropsRefusedPaths() async throws {
+    let s = Scratch()
+    s.file("a/x.bin", bytes: 4096)
+    s.file("c/z.bin", bytes: 4096)
+    let session = await scannedSession(s)
+    session.collect([try #require(session.tree?.node(atPath: s.path + "/a"))])
+    session.protection.home = s.path + "/a"
+    await rescanned(session)
+    #expect(session.view?.collected.isEmpty == true)
+    #expect(session.carryOverDropped == 1)
 }
 
 @Test @MainActor func cmdDeleteOnSmallerObjectsRefuses() async throws {
@@ -233,11 +285,12 @@ import MacleanKit
         #expect(start.a0 == o.startAngle && start.a1 == o.endAngle)
     }
     // b and its child vanish, shrinking to the angle where b's slot closes.
-    let vanishedB = try #require(plan.vanished.first { $0.segment.node == b })
+    #expect(plan.vanished.contains { $0.node == b })
+    let closeB = try #require(plan.closing[.node(b)])
     let aNew = try #require(new.segments.first { $0.node == tree.node(atPath: s.path + "/a") })
-    #expect(abs(vanishedB.angle - aNew.endAngle) < 1e-9)
-    let child = try #require(plan.vanished.first { $0.segment.parent == b })
-    #expect(child.angle == vanishedB.angle)
+    #expect(abs(closeB - aNew.endAngle) < 1e-9)
+    let child = try #require(plan.vanished.first { $0.parent == b })
+    #expect(plan.closing[SunburstChartView.MorphKey(child)] == closeB)
 
     // The reverse (uncollect): b grows from zero width at that same angle.
     let back = SunburstChartView.morphPlan(from: new, to: old)

@@ -106,7 +106,7 @@ extension SunburstChartView {
             }
         case .morph(let plan):
             // Vanished segments shrink to zero width at their collapse angle.
-            drawSegments(plan.vanished.map(\.segment), in: ctx, geometry: g) { s in
+            drawSegments(plan.vanished, in: ctx, geometry: g) { s in
                 let c = plan.closing[MorphKey(s)] ?? s.startAngle
                 return (Double(s.ring), lerp(s.startAngle, c), lerp(s.endAngle, c))
             }
@@ -138,7 +138,7 @@ extension SunburstChartView {
         /// drawn before, else zero width where its slot opens.
         let start: [MorphKey: (a0: Double, a1: Double)]
         /// Old segments missing from the new layout, in drawing order.
-        let vanished: [(segment: Segment, angle: Double)]
+        let vanished: [Segment]
         /// The angle each vanished segment shrinks to (where its slot closes).
         let closing: [MorphKey: Double]
     }
@@ -192,7 +192,7 @@ extension SunburstChartView {
                 start[key] = (a, a)
             }
         }
-        let vanished = old.segments.compactMap { s in closing[MorphKey(s)].map { (segment: s, angle: $0) } }
+        let vanished = old.segments.filter { closing[MorphKey($0)] != nil }
         return MorphPlan(start: start, vanished: vanished, closing: closing)
     }
 }

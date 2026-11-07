@@ -341,6 +341,7 @@ import Observation
     /// collector; never the current folder. Over a "smaller objects" segment
     /// it refuses instead.
     func toggleCollected() {
+        guard !session.isDeleting else { return }
         if hovered == nil, hoveredSmallerObjects != nil {
             collectorRefusal = Notice(text: Self.smallerObjectsRefusal)
             return
@@ -350,8 +351,10 @@ import Observation
     }
 
     /// Collects `id` if it is visible, else puts it back if it is collected.
-    /// A refusal is reported through `collectorRefusal`.
+    /// A refusal is reported through `collectorRefusal`. A no-op while a
+    /// delete is running.
     func toggleCollected(_ id: NodeID) {
+        guard !session.isDeleting else { return }
         let view = self.view
         if view.collected.contains(id) {
             session.uncollect([id])
@@ -371,10 +374,12 @@ import Observation
         guard view.generation != lastView.generation || view.tree !== lastView.tree else { return }
         lastView = view
         if view.isHidden(currentNode) {
-            // Navigates through didSet → syncToHistory (which resolves to a visible node).
-            history.replaceCurrent(nearestSurvivingAncestor(of: tree.path(of: currentNode)))
+            // A visit (not a replace), so Back returns once it's uncollected;
+            // didSet → syncToHistory navigates.
+            history.visit(nearestSurvivingAncestor(of: tree.path(of: currentNode)))
             return
         }
+        hoveredSmallerObjects = nil
         if let h = hovered, view.isHidden(h) { hovered = nil }
         if let s = selected, view.isHidden(s) { selected = nil }
         if let e = expandedTarget, view.isHidden(e) { expandedTarget = nil }
@@ -502,6 +507,7 @@ import Observation
         previousFolder = currentNode
         currentNode = node
         hovered = nil
+        hoveredSmallerObjects = nil
         hoverSource = .chart
         selected = nil
         expandedTarget = nil

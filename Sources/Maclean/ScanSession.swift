@@ -30,7 +30,8 @@ import Observation
     /// The collector overlay on the finished tree; nil while scanning, after a
     /// failure, or before the first scan. Windows keep their last copy meanwhile.
     private(set) var view: TreeView?
-    /// True while a delete counts down or runs; collecting is refused then.
+    /// True while a delete counts down or runs; collect and uncollect are
+    /// no-ops then (`markRemoved` stays allowed: the delete run calls it).
     var isDeleting = false
     /// Collected paths the last rescan couldn't find; the result window shows
     /// a note and clears it.
@@ -144,16 +145,19 @@ import Observation
     }
 
     /// A fresh overlay on `tree` with the previously collected paths that
-    /// still exist collected again (re-keyed to the new nodes); removed marks
-    /// are dropped, since the new tree reflects the disk.
+    /// still exist (and aren't refused by `ProtectionRules`) collected again,
+    /// re-keyed to the new nodes; removed marks are dropped, since the new
+    /// tree reflects the disk.
     private func carriedOver(to tree: FileTree) -> TreeView {
         var view = TreeView(tree: tree)
         defer { carryOver = nil }
         carryOverDropped = nil
         guard let paths = carryOver, !paths.isEmpty else { return view }
-        let ids = paths.compactMap { tree.node(atPath: $0) }
-        view.collect(ids)
-        let dropped = paths.count - ids.count
+        let env = protection
+        let ids = paths.compactMap { path in
+            ProtectionRules.refusal(for: path, in: env) == nil ? tree.node(atPath: path) : nil
+        }
+        let dropped = paths.count - view.collect(ids).count
         carryOverDropped = dropped > 0 ? dropped : nil
         return view
     }
@@ -180,9 +184,17 @@ import Observation
         return refusals
     }
 
-    func uncollect(_ ids: [NodeID]) { mutateView { $0.uncollect(ids) } }
+    /// A no-op while a delete is running.
+    func uncollect(_ ids: [NodeID]) {
+        guard !isDeleting else { return }
+        mutateView { $0.uncollect(ids) }
+    }
 
-    func uncollectAll() { mutateView { $0.uncollectAll() } }
+    /// A no-op while a delete is running.
+    func uncollectAll() {
+        guard !isDeleting else { return }
+        mutateView { $0.uncollectAll() }
+    }
 
     /// Moves deleted items from the collector to the removed set.
     func markRemoved(_ ids: [NodeID]) { mutateView { $0.markRemoved(ids) } }
