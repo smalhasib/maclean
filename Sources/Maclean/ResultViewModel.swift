@@ -58,10 +58,26 @@ import Observation
 
     /// Whether the collector panel is open over the chart (this window only).
     var collectorPanelOpen = false {
-        didSet { if !collectorPanelOpen { panelHovered = nil } }
+        didSet {
+            if !collectorPanelOpen {
+                panelHovered = nil
+                pointerInPanel = false
+            }
+        }
     }
-    /// The collector panel row under the pointer (⌘⌫ removes it).
+    /// The collector panel row under the pointer (the action target while
+    /// the panel is open: Space previews it, ⌘⌫ removes it).
     var panelHovered: NodeID?
+    /// Whether the pointer is over the collector panel. The chart under the
+    /// panel keeps reporting hovers; they are ignored meanwhile, so no action
+    /// lands on a segment hidden by the panel.
+    var pointerInPanel = false {
+        didSet {
+            guard pointerInPanel, !oldValue else { return }
+            hoveredSmallerObjects = nil
+            if hoverSource == .chart { hovered = nil }
+        }
+    }
 
     var expandSmallerObjects: Bool {
         didSet { defaults.set(expandSmallerObjects, forKey: Self.alwaysExpandKey) }
@@ -88,7 +104,11 @@ import Observation
     }
 
     /// What keyboard actions apply to: under the pointer first, else the selection.
-    var actionTarget: NodeID? { hovered ?? selected }
+    /// With the collector panel open, the panel row under the pointer comes first.
+    var actionTarget: NodeID? {
+        if collectorPanelOpen, let row = panelHovered { return row }
+        return hovered ?? selected
+    }
 
     /// The session's overlay on this tree. While the session rescans (or
     /// after a failed rescan) it has none for this tree, so the last one seen
@@ -160,7 +180,7 @@ import Observation
 
     /// Drills into a folder (or a package, for Show Package Contents).
     func open(_ node: NodeID) {
-        guard tree.flags(of: node).contains(.directory), node != currentNode else { return }
+        guard tree.flags(of: node).contains(.directory), node != currentNode, !view.isHidden(node) else { return }
         pendingNode = node
         history.visit(tree.path(of: node))
     }
@@ -451,11 +471,6 @@ import Observation
         NodeDragPayload(sessionID: session.id, path: tree.path(of: node))
     }
 
-    /// Reports a collector refusal (shown by the collector bar).
-    func reportCollectorRefusal(_ text: String) {
-        collectorRefusal = Notice(text: text)
-    }
-
     /// The session's overlay changed (called on each `session.view`
     /// generation change): re-lays out the same folder, or, if the current
     /// folder is now hidden, goes to its nearest visible ancestor. Hover,
@@ -491,6 +506,8 @@ import Observation
     /// `smallerObjectsOf`: the parent of the "smaller objects" chart segment
     /// under the pointer (with a nil `node`).
     func hover(_ node: NodeID?, from source: HoverSource, smallerObjectsOf group: NodeID? = nil) {
+        // The chart reports segments under the collector panel; ignore them.
+        if source == .chart, pointerInPanel { return }
         if source == .chart, hoveredSmallerObjects != group { hoveredSmallerObjects = group }
         if node == nil {
             // Only clear a hover this source owns.

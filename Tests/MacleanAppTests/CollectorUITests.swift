@@ -126,3 +126,43 @@ import MacleanKit
     actions.collectorItems(for: a).last?.action()
     #expect(m.view.collected.isEmpty)
 }
+
+@Test @MainActor func panelRowIsActionTargetAndChartHoverIgnoredInPanel() async throws {
+    let s = Scratch()
+    s.file("a/x.bin", bytes: 8192)
+    s.file("b/y.bin", bytes: 4096)
+    s.file("c/z.bin", bytes: 4096)
+    let session = await scannedSession(s)
+    let m = model(session)
+    let tree = try #require(session.tree)
+    let a = try #require(tree.node(atPath: s.path + "/a"))
+    let b = try #require(tree.node(atPath: s.path + "/b"))
+    m.collect([a])
+    m.viewDidChange()
+    m.collectorPanelOpen = true
+
+    // Entering the panel drops the chart hover; chart hovers are ignored meanwhile.
+    m.hover(b, from: .chart)
+    m.pointerInPanel = true
+    #expect(m.hovered == nil)
+    m.hover(b, from: .chart)
+    #expect(m.hovered == nil)
+    #expect(m.actionTarget == nil)
+
+    m.panelHovered = a
+    #expect(m.actionTarget == a)
+    // Entering a collected (hidden) folder from the panel does nothing.
+    m.open(a)
+    #expect(m.currentNode == tree.root)
+
+    m.panelHovered = nil
+    m.pointerInPanel = false
+    m.hover(b, from: .chart)
+    #expect(m.actionTarget == b)
+
+    // Closing the panel resets the panel pointer state.
+    m.pointerInPanel = true
+    m.panelHovered = a
+    m.collectorPanelOpen = false
+    #expect(!m.pointerInPanel && m.panelHovered == nil)
+}

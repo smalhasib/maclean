@@ -42,14 +42,30 @@ struct NodeDragPayload: Codable, Equatable, Sendable {
     /// only `org.maclean.node` data, no file URL.
     static func provider(for payload: NodeDragPayload) -> NSItemProvider {
         current = payload
+        installEndMonitor()
         let provider = NSItemProvider()
         let data = payload.data
         provider.registerDataRepresentation(forTypeIdentifier: UTType.macleanNode.identifier,
-                                            visibility: .all) { completion in
+                                            visibility: .ownProcess) { completion in
             completion(data, nil)
             return nil
         }
         return provider
+    }
+
+    @MainActor private static var endMonitor: Any?
+
+    /// SwiftUI's `.onDrag` reports no end, so `current` is cleared by the
+    /// first ordinary event after the drag (the drag loop swallows events
+    /// while it runs; a new drag starts after its own mouse-down).
+    private static func installEndMonitor() {
+        guard endMonitor == nil else { return }
+        endMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.mouseMoved, .leftMouseDown, .rightMouseDown, .keyDown, .scrollWheel]
+        ) { event in
+            MainActor.assumeIsolated { current = nil }
+            return event
+        }
     }
 
     /// Loads the payloads and file URLs of a drop's providers, on the main actor.
@@ -67,7 +83,8 @@ struct NodeDragPayload: Codable, Equatable, Sendable {
             } else if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
                 group.enter()
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                    if let url, url.isFileURL { box.add(file: url.path) }
+                    // A file-reference URL (/.file/id=…) becomes a path URL first.
+                    if let url, let path = (url as NSURL).filePathURL?.path { box.add(file: path) }
                     group.leave()
                 }
             }
@@ -111,6 +128,7 @@ struct CollectorDropDelegate: DropDelegate {
 
     func performDrop(info: DropInfo) -> Bool {
         targeted.wrappedValue = false
+        NodeDrag.current = nil
         let model = self.model
         let maclean = info.itemProviders(for: [.macleanNode])
         let providers = maclean.isEmpty ? info.itemProviders(for: [.fileURL]) : maclean
@@ -141,6 +159,7 @@ struct ChartDropDelegate: DropDelegate {
 
     func performDrop(info: DropInfo) -> Bool {
         targeted.wrappedValue = false
+        NodeDrag.current = nil
         let model = self.model
         NodeDrag.load(info.itemProviders(for: [.macleanNode])) { nodes, _ in
             let ids = nodes.compactMap { model.isCollected($0) ? model.node(for: $0) : nil }

@@ -32,6 +32,8 @@ struct CollectorPanel: View {
             .frame(height: height)
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        // While the pointer is over the panel, chart hovers underneath are ignored.
+        .onHover { model.pointerInPanel = $0 }
         .shadow(color: .black.opacity(0.12), radius: 8, y: -2)
         // Dropping a row on its own panel does nothing (the chart behind would put it back).
         .onDrop(of: [.macleanNode], delegate: RejectDropDelegate())
