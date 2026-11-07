@@ -21,6 +21,8 @@ Scans `<path>`, prints the total size, file count, number of restricted (unreada
 elapsed time and the `--top` largest children (default 10) to stdout. Live progress goes to stderr.
 `--out` writes the scan tree as an archive.
 
+The scan doesn't cross into other disks, disk images or network mounts, but does descend into the other APFS volumes of the root's container (Preboot, VM, Update, Recovery) as DaisyDisk does, skipping /System/Volumes/Data (reached via firmlinks), Preboot's cryptex grafts, and APFS snapshot mounts.
+
 Run it from a terminal with Full Disk Access for complete results: without it, macOS (TCC)
 blocks folders such as `~/Pictures` and parts of `~/Library`, which are then reported as restricted
 and counted as empty, so totals come out lower than tools that have access (e.g. DaisyDisk).

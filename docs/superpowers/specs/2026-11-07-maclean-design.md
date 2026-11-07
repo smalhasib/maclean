@@ -175,7 +175,7 @@ Most act on the item **under the pointer**, falling back to the selected list it
 ### 6.2 Scanner
 - Parallel traversal with a work-stealing pool of directory jobs (about the core count). Each job reads entries in bulk with `getattrlistbulk` (name, type, inode, link count, allocated size, device, flags).
 - Size metric: **allocated size on disk** (what is actually freed), not logical size.
-- Don't cross mount points (compare device ids). On the APFS startup disk, handle the System/Data firmlink layout so nothing is counted twice and the root view looks like Finder's `/`.
+- The scan doesn't cross into other disks, disk images or network mounts, but does descend into the other APFS volumes of the root's container (Preboot, VM, Update, Recovery) as DaisyDisk does, skipping /System/Volumes/Data (reached via firmlinks), Preboot's cryptex grafts, and APFS snapshot mounts. On the APFS startup disk, handle the System/Data firmlink layout so nothing is counted twice and the root view looks like Finder's `/`.
 - Hard links: count each inode once; later links count as zero. APFS clones: shared blocks count once, the same way (detect with the clone-id attributes available on macOS 14+).
 - Several scans may run at once; scans of the same spinning hard disk are queued.
 - If a single file system call hangs for more than about 60 s, show a "file system not responding" error for that path and continue.
