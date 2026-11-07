@@ -6,7 +6,7 @@ import Testing
     private func nameBytes(_ tree: FileTree, _ id: NodeID) -> [UInt8] {
         let i = Int(id.index)
         let start = Int(tree.nameOffset[i])
-        return Array(tree.names[start ..< start + Int(tree.nameLength[i])])
+        return Array(tree.names[start ..< Int(tree.nameOffset[i + 1])])
     }
 
     @Test func roundTripPreservesEverything() async throws {
@@ -61,7 +61,7 @@ import Testing
     @Test func rejectsHugeCountWithoutAllocating() throws {
         let t = TempDir(); defer { withExtendedLifetime(t) {} }
         var d = Data("MCLN".utf8)
-        d.append(contentsOf: [1, 0, 0, 0])
+        d.append(contentsOf: [2, 0, 0, 0])
         d.append(contentsOf: [UInt8](repeating: 0xFF, count: 8)) // absurd node count
         d.append(Data(count: 32))
         let url = URL(fileURLWithPath: t.url("huge"))
@@ -78,15 +78,26 @@ import Testing
         #expect(throws: ArchiveError.unsupportedVersion(9)) { try TreeArchive.read(from: url) }
     }
 
-    /// Writes a valid archive for a small tree, then patches one Int32 in `array` (0 = parents,
-    /// 1 = firstChild, 2 = childCount) at node `index`.
-    private func corrupted(_ t: TempDir, array: Int, index: Int, value: Int32) async throws -> URL {
+    /// Archive v2 column order after the header.
+    private enum Column: Int { case parents, firstChild, childCount, sizes, flagBits, inodes, devices, nameOffset }
+
+    private func columnOffset(_ tree: FileTree, _ column: Column) -> Int {
+        let n = tree.count
+        let sizes: [Int] = [4 * n, 4 * n, 4 * n, 8 * n, 2 * n, 8 * n, 4 * n, 4 * (n + 1)]
+        return 28 + tree.rootPath.utf8.count + sizes[..<column.rawValue].reduce(0, +)
+    }
+
+    /// Writes a valid archive for a small tree, then patches one 32-bit value in `column`
+    /// at node `index` (counted from the end when `fromEnd` is set).
+    private func corrupted(_ t: TempDir, column: Column, index: Int, value: Int32,
+                           fromEnd: Bool = false) async throws -> URL {
         t.file("a/x", bytes: 10); t.file("b", bytes: 10)
         let tree = try await Scanner.scan(path: t.path)
         let url = URL(fileURLWithPath: t.url("tree.mcln"))
         try TreeArchive.write(tree, to: url)
         var d = try Data(contentsOf: url)
-        let off = 28 + tree.rootPath.utf8.count + array * 4 * tree.count + index * 4
+        let slot = fromEnd ? tree.nameOffset.count - 1 - index : index
+        let off = columnOffset(tree, column) + slot * 4
         withUnsafeBytes(of: value.littleEndian) { d.replaceSubrange(off ..< off + 4, with: $0) }
         try d.write(to: url)
         return url
@@ -94,30 +105,58 @@ import Testing
 
     @Test func rejectsParentCycle() async throws {
         let t = TempDir(); defer { withExtendedLifetime(t) {} }
-        let url = try await corrupted(t, array: 0, index: 1, value: 2)
+        let url = try await corrupted(t, column: .parents, index: 1, value: 2)
         #expect(throws: ArchiveError.truncated) { try TreeArchive.read(from: url) }
     }
 
     @Test func rejectsSelfParent() async throws {
         let t = TempDir(); defer { withExtendedLifetime(t) {} }
-        let url = try await corrupted(t, array: 0, index: 1, value: 1)
+        let url = try await corrupted(t, column: .parents, index: 1, value: 1)
         #expect(throws: ArchiveError.truncated) { try TreeArchive.read(from: url) }
     }
 
     @Test func rejectsBackwardsChildRange() async throws {
         let t = TempDir(); defer { withExtendedLifetime(t) {} }
-        let url = try await corrupted(t, array: 1, index: 0, value: 0)
+        let url = try await corrupted(t, column: .firstChild, index: 0, value: 0)
         #expect(throws: ArchiveError.truncated) { try TreeArchive.read(from: url) }
     }
 
     @Test func rejectsEmptyTree() throws {
         let t = TempDir(); defer { withExtendedLifetime(t) {} }
         var d = Data("MCLN".utf8)
-        d.append(contentsOf: [1, 0, 0, 0])
+        d.append(contentsOf: [2, 0, 0, 0])
         d.append(Data(count: 8 + 8 + 4)) // n = 0, date, rootLen = 0
         d.append(Data(count: 8))         // names count = 0
         let url = URL(fileURLWithPath: t.url("empty"))
         try d.write(to: url)
         #expect(throws: ArchiveError.truncated) { try TreeArchive.read(from: url) }
+    }
+
+    @Test func rejectsNonZeroFirstNameOffset() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        let url = try await corrupted(t, column: .nameOffset, index: 0, value: 1)
+        #expect(throws: ArchiveError.truncated) { try TreeArchive.read(from: url) }
+    }
+
+    @Test func rejectsDecreasingNameOffset() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        // nameOffset[n - 1] past the sentinel nameOffset[n] == names.count.
+        let url = try await corrupted(t, column: .nameOffset, index: 1, value: 1_000, fromEnd: true)
+        #expect(throws: ArchiveError.truncated) { try TreeArchive.read(from: url) }
+    }
+
+    @Test func rejectsNameSentinelMismatch() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        let url = try await corrupted(t, column: .nameOffset, index: 0, value: 0, fromEnd: true)
+        #expect(throws: ArchiveError.truncated) { try TreeArchive.read(from: url) }
+    }
+
+    @Test func archiveV1IsRejected() throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        var d = Data("MCLN".utf8)
+        d.append(contentsOf: [1, 0, 0, 0]); d.append(Data(count: 40))
+        let url = URL(fileURLWithPath: t.url("v1"))
+        try d.write(to: url)
+        #expect(throws: ArchiveError.unsupportedVersion(1)) { try TreeArchive.read(from: url) }
     }
 }

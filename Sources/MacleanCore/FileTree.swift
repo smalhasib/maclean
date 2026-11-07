@@ -27,6 +27,9 @@ public struct NodeFlags: OptionSet, Sendable {
 /// Immutable, compact (struct-of-arrays) tree of a scanned directory.
 /// Nodes are numbered in BFS order, so each node's children are the contiguous,
 /// already-sorted range `firstChild ..< firstChild + childCount`.
+///
+/// Storage is 38 B/node plus name bytes: `nameOffset` has a sentinel at index `count`, so
+/// node `i`'s name is `names[nameOffset[i] ..< nameOffset[i + 1]]` (names are in BFS order).
 public final class FileTree: Sendable {
     public let rootPath: String
     public let scanDate: Date
@@ -35,40 +38,41 @@ public final class FileTree: Sendable {
     let firstChild: [Int32]
     let childCount: [Int32]
     let sizes: [Int64]
-    let fileCounts: [Int64]
     let flagBits: [UInt16]
     let inodes: [UInt64]
     let devices: [Int32]
     let nameOffset: [UInt32]
-    let nameLength: [UInt16]
     let names: [UInt8]
 
     init(rootPath: String, scanDate: Date, parents: [Int32], firstChild: [Int32],
-         childCount: [Int32], sizes: [Int64], fileCounts: [Int64], flagBits: [UInt16],
-         inodes: [UInt64], devices: [Int32], nameOffset: [UInt32], nameLength: [UInt16],
-         names: [UInt8]) {
+         childCount: [Int32], sizes: [Int64], flagBits: [UInt16], inodes: [UInt64],
+         devices: [Int32], nameOffset: [UInt32], names: [UInt8]) {
         self.rootPath = rootPath
         self.scanDate = scanDate
         self.parents = parents
         self.firstChild = firstChild
         self.childCount = childCount
         self.sizes = sizes
-        self.fileCounts = fileCounts
         self.flagBits = flagBits
         self.inodes = inodes
         self.devices = devices
         self.nameOffset = nameOffset
-        self.nameLength = nameLength
         self.names = names
     }
 
     public var root: NodeID { NodeID(index: 0) }
     public var count: Int { sizes.count }
 
+    /// Bytes held by the node columns and the names (element counts, not capacities).
+    var storageBytes: Int {
+        func bytes<T>(_ a: [T]) -> Int { a.count * MemoryLayout<T>.stride }
+        return bytes(parents) + bytes(firstChild) + bytes(childCount) + bytes(sizes)
+            + bytes(flagBits) + bytes(inodes) + bytes(devices) + bytes(nameOffset) + bytes(names)
+    }
+
     public func name(of id: NodeID) -> String {
         let i = Int(id.index)
-        let start = Int(nameOffset[i])
-        return String(decoding: names[start ..< start + Int(nameLength[i])], as: UTF8.self)
+        return String(decoding: names[Int(nameOffset[i]) ..< Int(nameOffset[i + 1])], as: UTF8.self)
     }
 
     public func path(of id: NodeID) -> String {
@@ -87,7 +91,24 @@ public final class FileTree: Sendable {
     public func flags(of id: NodeID) -> NodeFlags { NodeFlags(rawValue: flagBits[Int(id.index)]) }
     public func inode(of id: NodeID) -> UInt64 { inodes[Int(id.index)] }
     public func device(of id: NodeID) -> Int32 { devices[Int(id.index)] }
-    public func fileCount(of id: NodeID) -> Int64 { fileCounts[Int(id.index)] }
+
+    /// Number of non-directory nodes in the subtree rooted at `id` (1 for a file itself).
+    /// Not stored: computed by walking the subtree, so it is O(subtree size).
+    public func fileCount(of id: NodeID) -> Int64 {
+        let dir = NodeFlags.directory.rawValue
+        if id == root {
+            // The whole tree: a linear scan, no stack needed.
+            return flagBits.reduce(into: Int64(0)) { $0 += $1 & dir == 0 ? 1 : 0 }
+        }
+        var files: Int64 = 0
+        var stack: [Int32] = [id.index]
+        while let i = stack.popLast().map(Int.init) {
+            if flagBits[i] & dir == 0 { files += 1 }
+            let first = firstChild[i]
+            if childCount[i] > 0 { stack.append(contentsOf: first ..< first + childCount[i]) }
+        }
+        return files
+    }
 
     public func parent(of id: NodeID) -> NodeID? {
         let p = parents[Int(id.index)]
