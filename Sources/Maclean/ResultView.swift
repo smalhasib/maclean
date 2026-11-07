@@ -132,6 +132,11 @@ private struct ResultBanners: View {
         model = new
         return new
     }
+
+    /// Releases the cached model (and its tree) if it belongs to `session`.
+    func drop(session: ScanSession) {
+        if model?.session === session { model = nil }
+    }
 }
 
 /// Grows the hosting window (animated, top-left fixed) to at least `minimum`

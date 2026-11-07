@@ -23,6 +23,8 @@ import Observation
     @ObservationIgnored private var resume: ScanSession?
     /// Called when a user-started fresh scan begins.
     @ObservationIgnored var onUserScan: (() -> Void)?
+    /// Called after a session is forgotten, so views holding its result let go.
+    @ObservationIgnored var onForget: ((ScanSession) -> Void)?
 
     /// This session's scans, oldest first.
     var all: [ScanSession] { order.compactMap { sessions[$0] } }
@@ -91,6 +93,7 @@ import Observation
         if latest === session { latest = nil }
         if resume === session { resume = nil }
         newWindowSessions.remove(ObjectIdentifier(session))
+        onForget?(session)
     }
 
     private func finished(_ session: ScanSession) {

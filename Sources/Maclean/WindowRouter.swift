@@ -28,14 +28,22 @@ import SwiftUI
     /// Opens (or re-opens) the SwiftUI main window; set by the main window's root view.
     @ObservationIgnored var openMainWindow: (() -> Void)?
     @ObservationIgnored weak var mainWindow: NSWindow?
+    /// The main window's result model. Owned here (not by the view) so
+    /// Forget Scan Result can release the tree.
+    @ObservationIgnored let mainResults = ResultModelCache()
 
     private struct Entry {
         weak var window: NSWindow?
         let model: ResultViewModel
     }
     @ObservationIgnored private var entries: [ObjectIdentifier: Entry] = [:]
-    /// Result windows the router created (kept alive until closed).
-    @ObservationIgnored private var owned: [ObjectIdentifier: NSWindow] = [:]
+    /// Result windows the router created (kept alive until closed), with
+    /// the session each shows.
+    private struct Owned {
+        let window: NSWindow
+        let session: ScanSession
+    }
+    @ObservationIgnored private var owned: [ObjectIdentifier: Owned] = [:]
     @ObservationIgnored private var observers: [any NSObjectProtocol] = []
     @ObservationIgnored private let defaults: UserDefaults
 
@@ -51,6 +59,7 @@ import SwiftUI
         })
         registry.onFinish = { [weak self] session, newWindow in self?.presentFinished(session, newWindow: newWindow) }
         registry.onUserScan = { [weak self] in self?.userScanStarted() }
+        registry.onForget = { [weak self] session in self?.forgotten(session) }
     }
 
     var opensOwnWindows: Bool { defaults.bool(forKey: Self.ownWindowKey) }
@@ -62,6 +71,7 @@ import SwiftUI
     /// own window (brought forward if one already shows it).
     func show(session: ScanSession, at path: String?, forceNewWindow: Bool) {
         guard let tree = session.tree else { return }
+        let requested = path
         let path = path ?? tree.rootPath
         if !forceNewWindow && !opensOwnWindows {
             registry.presented = session
@@ -71,11 +81,20 @@ import SwiftUI
             showLauncher()
             return
         }
-        if let window = window(showing: session, at: path) {
+        if let window = window(showing: session, at: path, anyFolder: requested == nil) {
             bringForward(window)
             return
         }
         openWindow(session: session, at: path)
+    }
+
+    /// Forget Scan Result: the main window lets go of the session's model,
+    /// and the windows showing it close (their result is gone).
+    private func forgotten(_ session: ScanSession) {
+        mainResults.drop(session: session)
+        for item in owned.values where item.session === session {
+            item.window.close()
+        }
     }
 
     /// A scan finished: a window already showing the session (now remapped to
@@ -192,11 +211,12 @@ import SwiftUI
     }
 
     /// A window showing `session` at `path` now (minimized or a background
-    /// tab included): one window per (tree, node).
-    private func window(showing session: ScanSession, at path: String) -> NSWindow? {
-        entries.values.first { entry in
-            entry.model.session === session && entry.model.history.current == path && entry.window != nil
-        }?.window
+    /// tab included): one window per (tree, node). With `anyFolder` (View),
+    /// a window on the session in another folder is used when none is at `path`.
+    private func window(showing session: ScanSession, at path: String, anyFolder: Bool = false) -> NSWindow? {
+        let onSession = entries.values.filter { $0.model.session === session && $0.window != nil }
+        if let exact = onSession.first(where: { $0.model.history.current == path }) { return exact.window }
+        return anyFolder ? onSession.first?.window : nil
     }
 
     private func openWindow(session: ScanSession, at path: String) {
@@ -217,13 +237,13 @@ import SwiftUI
             window.center()
         }
         let id = ObjectIdentifier(window)
-        owned[id] = window
+        owned[id] = Owned(window: window, session: session)
         window.makeKeyAndOrderFront(nil)
     }
 
     private func windowWillClose(_ id: ObjectIdentifier) {
         entries[id] = nil
-        if let window = owned.removeValue(forKey: id) {
+        if let window = owned.removeValue(forKey: id)?.window {
             // Release the SwiftUI content (and its tree) with the window.
             DispatchQueue.main.async { window.contentViewController = nil }
         }

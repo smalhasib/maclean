@@ -63,12 +63,11 @@ struct RootView: View {
     @Environment(\.openWindow) private var openWindow
     // `State` used as a type: the `@State` macro's plugin ships only with Xcode.
     private let dropTargeted = State(initialValue: false)
-    private let results = State(initialValue: ResultModelCache())
 
     var body: some View {
         Group {
             if let session = registry.presented, let tree = session.tree,
-               let result = results.wrappedValue.model(for: session, tree: tree) {
+               let result = router.mainResults.model(for: session, tree: tree) {
                 ResultView(model: result, router: router) { router.backToDisks(from: result) }
                     .id(ObjectIdentifier(result))
             } else {
