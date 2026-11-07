@@ -26,7 +26,8 @@ blocks folders such as `~/Pictures` and parts of `~/Library`, which are then rep
 and counted as empty, so totals come out lower than tools that have access (e.g. DaisyDisk).
 File names are printed with control characters escaped (`\u{1B}`).
 
-Exit codes: `0` ok, `1` root unreadable, `2` usage error.
+Exit codes: `0` ok, `1` root unreadable, `2` usage error, `3` output (`--out`) write failed.
+Progress is shown on stderr only when stderr is a terminal.
 
 ## License
 

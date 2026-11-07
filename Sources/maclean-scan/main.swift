@@ -2,10 +2,14 @@ import Foundation
 import MacleanCore
 
 // maclean-scan <path> [--out <file>] [--top <n>]
-// Exit codes: 0 ok, 1 root unreadable, 2 usage error. Progress -> stderr, summary -> stdout.
+// Exit codes: 0 ok, 1 root unreadable, 2 usage error, 3 output write failed. Progress -> stderr, summary -> stdout.
 
 func usage() -> Never {
-    fputs("usage: maclean-scan <path> [--out <file>] [--top <n>]\n", stderr)
+    fputs("""
+        usage: maclean-scan <path> [--out <file>] [--top <n>]
+        exit codes: 0 ok, 1 root unreadable, 2 usage error, 3 output write failed
+
+        """, stderr)
     exit(2)
 }
 
@@ -26,6 +30,16 @@ func sanitized(_ text: String) -> String {
         }
     }
     return out
+}
+
+/// Short, path-free reason for a failed archive write.
+func writeFailureReason(_ error: Error) -> String {
+    let ns = error as NSError
+    if ns.domain == NSPOSIXErrorDomain { return String(cString: strerror(Int32(ns.code))) }
+    if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError, underlying.domain == NSPOSIXErrorDomain {
+        return String(cString: strerror(Int32(underlying.code)))
+    }
+    return "write failed"
 }
 
 var path: String?
@@ -49,18 +63,21 @@ while let arg = args.next() {
 }
 guard let path else { usage() }
 
+let showProgress = isatty(2) != 0
 let started = Date()
 let tree: FileTree
 do {
     tree = try await Scanner.scan(path: path) { p in
+        guard showProgress else { return }
         let gb = Double(p.bytes) / 1_000_000_000
         fputs(String(format: "\r\u{1B}[K%.1f GB scanned, %lld items", gb, p.items), stderr)
     }
 } catch {
-    fputs("\nmaclean-scan: cannot scan \(sanitized(path)): \(error)\n", stderr)
+    if showProgress { fputs("\r\u{1B}[K", stderr) }
+    fputs("maclean-scan: cannot scan \(sanitized(path)): \(sanitized(String(describing: error)))\n", stderr)
     exit(1)
 }
-fputs("\r\u{1B}[K", stderr)
+if showProgress { fputs("\r\u{1B}[K", stderr) }
 let elapsed = Date().timeIntervalSince(started)
 
 var restricted = 0
@@ -86,7 +103,7 @@ if let outPath {
         try TreeArchive.write(tree, to: URL(fileURLWithPath: outPath))
         print("Archive:     \(sanitized(outPath))")
     } catch {
-        fputs("maclean-scan: cannot write \(sanitized(outPath)): \(error)\n", stderr)
-        exit(1)
+        fputs("maclean-scan: cannot write \(sanitized(outPath)): \(writeFailureReason(error))\n", stderr)
+        exit(3)
     }
 }
