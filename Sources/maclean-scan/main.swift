@@ -43,14 +43,7 @@ func writeFailureReason(_ error: Error) -> String {
 }
 
 // Raise the soft fd limit so the scanner's fd budget (half of it) is large.
-var fdLimit = rlimit()
-if getrlimit(RLIMIT_NOFILE, &fdLimit) == 0 {
-    let wanted = min(fdLimit.rlim_max, 10240)
-    if wanted > fdLimit.rlim_cur {
-        fdLimit.rlim_cur = wanted
-        _ = setrlimit(RLIMIT_NOFILE, &fdLimit)
-    }
-}
+ProcessLimits.raiseOpenFileLimit()
 
 var path: String?
 var outPath: String?

@@ -167,3 +167,31 @@ import Testing
         })
     }
 }
+
+@Test func childrenIsRangeBacked() {
+    let b = FileTreeBuilder(rootPath: "/r", rootInode: 1, rootDevice: 1)
+    let a = b.add(parent: b.root, name: "a", size: 0, flags: .directory, inode: 2, device: 1)
+    b.add(parent: a, name: "small", size: 10, flags: [], inode: 3, device: 1)
+    b.add(parent: a, name: "big", size: 300, flags: [], inode: 4, device: 1)
+    b.add(parent: b.root, name: "f", size: 50, flags: [], inode: 5, device: 1)
+    let t = b.finish()
+    let kids = t.children(of: t.root)
+    #expect(kids.count == 2 && kids[0] == t.children(of: t.root).first!)
+    #expect(Array(kids).map { t.name(of: $0) } == ["a", "f"])
+    #expect(t.children(of: kids[1]).isEmpty)
+}
+
+@Test func bulkFileCountsMatchPerNode() {
+    let b = FileTreeBuilder(rootPath: "/r", rootInode: 1, rootDevice: 1)
+    let a = b.add(parent: b.root, name: "a", size: 0, flags: .directory, inode: 2, device: 1)
+    let c = b.add(parent: a, name: "c", size: 0, flags: .directory, inode: 3, device: 1)
+    b.add(parent: c, name: "x", size: 5, flags: [], inode: 4, device: 1)
+    b.add(parent: c, name: "y", size: 0, flags: .hardLinkExtra, inode: 4, device: 1)
+    b.add(parent: a, name: "z", size: 7, flags: [], inode: 5, device: 1)
+    b.add(parent: b.root, name: "m", size: 0, flags: [.directory, .mountPoint], inode: 6, device: 2)
+    b.add(parent: b.root, name: "f", size: 50, flags: [], inode: 7, device: 1)
+    let t = b.finish()
+    let counts = t.fileCounts()
+    #expect(counts.count == t.count)
+    for i in 0..<t.count { #expect(counts[i] == t.fileCount(of: NodeID(index: Int32(i)))) }
+}

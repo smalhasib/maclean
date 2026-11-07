@@ -481,3 +481,22 @@ private final class Counter: @unchecked Sendable {
     func record(_ p: ScanProgress) { lock.withLock { values.append(p) } }
     var last: ScanProgress? { lock.withLock { values.last } }
 }
+
+@Test func forRootWithFakeMounts() {
+    let mounts = [MountInfo(path: "/", device: 1, source: "/dev/disk3s1s1", fsType: "apfs"),
+                  MountInfo(path: "/System/Volumes/Preboot", device: 2, source: "/dev/disk3s2", fsType: "apfs"),
+                  MountInfo(path: "/Volumes/USB", device: 9, source: "/dev/disk5s1", fsType: "apfs"),
+                  MountInfo(path: "/System/Volumes/Update/mnt1", device: 4, source: "/dev/disk3s4s1", fsType: "apfs")]
+    let b = ScanBoundary.forRoot("/", mounts: mounts)
+    #expect(b.descendableMounts == ["/System/Volumes/Preboot"])
+    #expect(!b.allowedDevices.contains(9))
+}
+
+@Test func cancelDuringFinishThrows() async throws {
+    let t = TempDir(); defer { withExtendedLifetime(t) {} }
+    let path = t.path  // empty root: its read is the last (and first) directory
+    let task = Task {
+        try await Scanner.scan(path: path) { _ in withUnsafeCurrentTask { $0?.cancel() } }
+    }
+    await #expect(throws: CancellationError.self) { _ = try await task.value }
+}

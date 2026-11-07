@@ -29,9 +29,10 @@ public struct ScanProgress: Sendable {
 public enum Scanner {
     /// Scans `path` with `ScanBoundary.forRoot` of its canonical path.
     public static func scan(path: String,
+                            qos: DispatchQoS.QoSClass = .userInitiated,
                             progress: @Sendable (ScanProgress) -> Void = { _ in }) async throws -> FileTree {
         let rootPath = try canonicalRoot(path)
-        return try await scan(path: rootPath, boundary: .forRoot(rootPath), progress: progress)
+        return try await scan(path: rootPath, boundary: .forRoot(rootPath), qos: qos, progress: progress)
     }
 
     /// Scans `path` (canonicalized with `realpath`; the tree's `rootPath` is
@@ -44,8 +45,9 @@ public enum Scanner {
     /// become `.restricted` nodes. Throws `CancellationError` when the calling
     /// task is cancelled.
     public static func scan(path: String, boundary: ScanBoundary,
+                            qos: DispatchQoS.QoSClass = .userInitiated,
                             progress: @Sendable (ScanProgress) -> Void = { _ in }) async throws -> FileTree {
-        try await scan(path: path, boundary: boundary, budget: .shared, progress: progress)
+        try await scan(path: path, boundary: boundary, budget: .shared, qos: qos, progress: progress)
     }
 
     /// Reads in flight a scan asks its budget for.
@@ -56,6 +58,7 @@ public enum Scanner {
     /// `scan(path:boundary:progress:)` drawing its fd allowance from `budget`;
     /// the grant is returned when the scan ends (success, throw or cancel).
     static func scan(path: String, boundary: ScanBoundary, budget: FDBudget,
+                     qos: DispatchQoS.QoSClass = .userInitiated,
                      progress: @Sendable (ScanProgress) -> Void) async throws -> FileTree {
         try Task.checkCancellation()
         let rootPath = try canonicalRoot(path)
@@ -80,7 +83,7 @@ public enum Scanner {
                 var clock = ProgressClock()
 
                 group.addTask {
-                    (Walk.rootToken, await readOffPool(anchor: rootHandle, path: [], allowed: nil, cancel: cancel))
+                    (Walk.rootToken, await readOffPool(anchor: rootHandle, path: [], allowed: nil, cancel: cancel, qos: qos))
                 }
                 var inFlight = 1
 
@@ -94,12 +97,14 @@ public enum Scanner {
                     while inFlight < walk.maxInFlight, let job = walk.nextJob() {
                         group.addTask {
                             (job.token, await readOffPool(anchor: job.anchor, path: job.path,
-                                                          allowed: allowed, cancel: cancel))
+                                                          allowed: allowed, cancel: cancel, qos: qos))
                         }
                         inFlight += 1
                     }
                 }
-                return walk.builder.finish()
+                let tree = walk.builder.finish()
+                if Task.isCancelled { throw CancellationError() }
+                return tree
             }
         } onCancel: {
             cancel.set()
@@ -116,17 +121,18 @@ public enum Scanner {
 
     /// Blocking reads run here rather than on the cooperative pool. In-flight
     /// reads are bounded by the scan's fd grant, so GCD cannot over-spawn.
-    private static let ioQueue = DispatchQueue(label: "maclean.scan.io", qos: .utility,
-                                               attributes: .concurrent)
+    private static let ioQueue = DispatchQueue(label: "maclean.scan.io", attributes: .concurrent)
 
-    /// Runs `read` on `ioQueue`. The continuation is resumed exactly once by
+    /// Runs `read` on `ioQueue` at `qos`. The continuation is resumed exactly once by
     /// the queued closure, which returns at once if `cancel` is set by then.
     static func readOffPool(anchor: DirectoryHandle, path: [String], allowed: Set<Int32>?,
-                            cancel: CancelFlag) async -> Outcome {
+                            cancel: CancelFlag,
+                            qos: DispatchQoS.QoSClass = .userInitiated) async -> Outcome {
         await withCheckedContinuation { continuation in
-            ioQueue.async {
+            // The queue has no fixed QoS; each read carries the scan's.
+            ioQueue.async(execute: DispatchWorkItem(qos: DispatchQoS(qosClass: qos, relativePriority: 0)) {
                 continuation.resume(returning: read(anchor: anchor, path: path, allowed: allowed, cancel: cancel))
-            }
+            })
         }
     }
 

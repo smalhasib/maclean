@@ -44,6 +44,12 @@ public struct ScanBoundary: Sendable {
     /// Preboot's `Cryptexes` graft directory lies strictly inside the root
     /// (the root is Preboot or contains it), it is skipped.
     public static func forRoot(_ path: String) -> ScanBoundary {
+        forRoot(path, mounts: mounts())
+    }
+
+    /// `forRoot(_:)` against an explicit mount list (the seam for tests and
+    /// callers that already hold a snapshot of the mount table).
+    public static func forRoot(_ path: String, mounts: [MountInfo]) -> ScanBoundary {
         let root = canonicalPath(path) ?? path
         var boundary = ScanBoundary(allowedDevices: [])
         let rootDevice = device(of: root)
@@ -54,7 +60,6 @@ public struct ScanBoundary: Sendable {
         if rootsContainingDataVolume.contains(root) {
             boundary.skippedPaths.insert(dataVolume)
         }
-        let mounts = mounts()
         if let own = mounts.filter({ isInside($0.path, orEqualTo: root) })
                 .max(by: { $0.path.count < $1.path.count }),
            own.fsType == "apfs", let container = apfsContainer(ofSource: own.source) {
@@ -95,11 +100,18 @@ public struct ScanBoundary: Sendable {
     }
 }
 
-struct MountInfo: Sendable {
-    let path: String
-    let device: Int32
-    let source: String
-    let fsType: String
+public struct MountInfo: Sendable, Equatable {
+    public let path: String
+    public let device: Int32
+    public let source: String
+    public let fsType: String
+
+    public init(path: String, device: Int32, source: String, fsType: String) {
+        self.path = path
+        self.device = device
+        self.source = source
+        self.fsType = fsType
+    }
 }
 
 extension ScanBoundary {

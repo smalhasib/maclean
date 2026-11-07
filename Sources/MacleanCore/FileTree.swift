@@ -115,9 +115,32 @@ public final class FileTree: Sendable {
         return p < 0 ? nil : NodeID(index: p)
     }
 
-    public func children(of id: NodeID) -> [NodeID] {
+    public func children(of id: NodeID) -> NodeChildren {
         let i = Int(id.index)
-        let first = firstChild[i]
-        return (first ..< first + childCount[i]).map { NodeID(index: $0) }
+        return NodeChildren(first: Int(firstChild[i]), length: Int(childCount[i]))
     }
+
+    /// File counts (non-directory nodes in each subtree) for every node, indexed by
+    /// `NodeID.index`, in O(n): BFS numbering puts children after parents, so one
+    /// reverse pass accumulates into parents. Agrees with `fileCount(of:)`.
+    public func fileCounts() -> [Int64] {
+        let dir = NodeFlags.directory.rawValue
+        var counts = [Int64](repeating: 0, count: count)
+        for i in stride(from: count - 1, through: 0, by: -1) {
+            if flagBits[i] & dir == 0 { counts[i] += 1 }
+            let p = parents[i]
+            if p >= 0 { counts[Int(p)] += counts[i] }
+        }
+        return counts
+    }
+}
+
+/// A node's children: the contiguous range of BFS-numbered ids, with no allocation.
+public struct NodeChildren: RandomAccessCollection, Sendable, Equatable {
+    let first: Int
+    let length: Int
+
+    public var startIndex: Int { 0 }
+    public var endIndex: Int { length }
+    public subscript(i: Int) -> NodeID { NodeID(index: Int32(first + i)) }
 }
