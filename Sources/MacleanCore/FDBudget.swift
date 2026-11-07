@@ -7,7 +7,13 @@ import os
 /// chain) plus one per retained directory, so a grant costs
 /// `2 × inFlight + retained`. Grants never drop below 2 in flight and 4
 /// retained: when the budget is exhausted a scan overshoots slightly rather
-/// than refusing to run.
+/// than refusing to run. The floor overshoot can add up to 8 fds
+/// (2 × 2 + 4) per extra concurrent scan.
+///
+/// A single grant's cost is also capped at `limit / 2` (but never below the
+/// floor), so a second concurrent scan always gets a fair share instead of
+/// the first one taking everything. `maclean-scan` raises its soft
+/// `RLIMIT_NOFILE` to `min(hard, 10240)` at launch so the budget is sizeable.
 final class FDBudget: Sendable {
     struct Grant: Sendable {
         let inFlight: Int
@@ -44,7 +50,7 @@ final class FDBudget: Sendable {
         let wantRetained = max(Self.minRetained, desiredRetained)
         let wantCost = 2 * wantInFlight + wantRetained
         return state.withLock { s in
-            let available = max(0, limit - s.outstanding)
+            let available = min(max(0, limit - s.outstanding), limit / 2)
             let grant: Grant
             if wantCost <= available {
                 grant = Grant(inFlight: wantInFlight, retained: wantRetained)
