@@ -525,3 +525,32 @@ extension Notification.Name { static let macleanDidDelete: Notification.Name }
 - [ ] **Step 1:** Run the full test suite and `scripts/build-app.sh`, and record the pass counts.
 - [ ] **Step 2:** Update the README. Append the outcome, plus the follow-ups for Plan 3b (Smart Clean reuses `Deleter`, `AdminDelete`, `ProtectionRules`, and adds `.smartClean`).
 - [ ] **Step 3: Commit.**
+
+---
+
+## Outcome and follow-ups (recorded after execution)
+
+Built on branch `plan-03a-collector-delete`, 14 commits from main; 193 tests (43 MacleanKit + 109 MacleanCore + 41 MacleanApp), all passing, and `scripts/build-app.sh` builds and signs the bundle. Shipped: `TreeView` overlay and angle-morph relayout, `node(atPath:)` and the chart-file split, collector protection rules with an own dangerous-path corpus (146 paths), the fd-based `Deleter` (permanent or Trash), `AdminDelete` with the bundled `maclean-scan --delete` run as root behind an osascript password prompt, the collector bar, panel and drag and drop (chart, list, Finder), ⌘⌫, context and Action menu items, the `DeleteController` (5-second countdown, Cancel, summary with "changed since the scan" and Delete Anyway), and the Settings Trash toggle.
+
+**Rulings worth remembering**
+- **Licence correction:** mole is GPL-3.0, not MIT as the spec said. Nothing was copied; Maclean's own corpus covers the same categories. The spec and plan were corrected.
+- **Collector protection:** ancestors of the home folder and of Maclean's bundle are refused (collecting them would delete the protected item); `/usr/local` itself is collectable; other users' home folders stay collectable (OS permissions and the admin prompt guard them).
+- **Deleter strictness:** an item that turned into a symlink or file before removal is `.replaced` and nothing is unlinked; identity is re-checked after the re-walk; no crossing devices.
+- **Delete-lifecycle guards:** Forget cancels a counting-down delete and is refused while one runs; closing the last window cancels the countdown; Rescan is blocked during a delete; collect and uncollect are blocked during a delete; Delete Anyway runs without a new countdown.
+- **Root fd check:** the root CLI opens the parent fd, resolves it with `F_GETPATH` and re-runs `ProtectionRules` on the resolved parent and name, so a tampered request cannot reach a protected item through a symlinked ancestor.
+
+**Manual checks still pending with the owner (before merge)**
+- GUI pass: drag segment, row and Finder item to the bar; ⌘⌫; panel ×; drag row to chart; Move All; Remove All; refusal on `/System`; angle morph; Space over a panel row; chart drill after the split (Task 1).
+- The sudo/admin step: delete a root-owned item in a scratch folder through the real password prompt.
+
+**Deferred minors**
+- Tree and collector: forget after a failed rescan skips the confirm; forget during a scan does not clear the collector; reordered siblings may briefly overlap in the morph; reordered entries inside a collected folder are never evicted; untested edge paths (absorb with removed beneath, uncollect of a non-collected node, generation); history fallback `replaceCurrent` can leave a duplicate back entry; `batchCollectIsFast` uses a 100 ms wall-clock bound that may flake under load.
+- Protection: `ProtectionEnvironment.current()` does `fileExists` per mount and may block on a stale network mount (call per batch); home reports `.macleanItself` when the app is inside it; dev builds under `~/Library` make `~/Library` refuse.
+- Deleter: `.otherDisk` found mid-removal with force loses the started flag; errno is not reset before each `readdir`; recursion runs outside `FDBudget` (EMFILE on very deep trees); parent ENOTDIR/ELOOP map to a generic failure; the Trash path race is undocumented; `trashWorks()` uses `try!`; test gaps (device mismatch, file size change).
+- Delete flow and admin: `isDeleting` stays true while the summary is up, so Rescan silently no-ops until Done; `AdminDelete.resolvedRefusal` uses the default context while `Deleter` uses `.collector` (confirm they are equal); AdminRunner pipe threads may leak on timeout; the summary sheet shows in every window of the session; menu observers attach to every menu.
+- Drag and drop: the NodeDrag end monitor relies on the drag loop swallowing events (unverified at runtime); mixed Finder drops give a single refusal message; Finder clipping on row drag-out is unverified.
+
+**Before Plan 3b**
+- Smart Clean reuses `Deleter`, `AdminDelete` and `ProtectionRules`; add a `.smartClean` context to `ProtectionRules` (the collector's §5.8 rules do not fit cleanup targets) and decide the `resolvedRefusal` context question above first.
+- System-wide rows reuse the admin batch (one password prompt for all items) rather than prompting per row.
+- Move the Trash-setting key and the summary's "changed since the scan" handling behind something both flows can share, and settle the `isDeleting`-during-summary behaviour before a second flow depends on it.

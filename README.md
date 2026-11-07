@@ -2,7 +2,7 @@
 
 Maclean is an open-source, native macOS disk analyzer in the spirit of DaisyDisk.
 
-**Status: in development.** The scanner core, a command-line scanner and the start of the app exist so far.
+**Status: in development.** The scanner core, a command-line scanner, the app and the collector with delete exist so far.
 
 ## Build and test
 
@@ -44,6 +44,18 @@ File names are printed with control characters escaped (`\u{1B}`).
 
 Exit codes: `0` ok, `1` root unreadable, `2` usage error, `3` output (`--out`) write failed.
 Progress is shown on stderr only when stderr is a terminal.
+
+## Collector and Delete
+
+Collect the items you want gone, then delete them in one go.
+
+**Collecting.** Drag a chart segment, a list row or an item from Finder onto the collector bar at the bottom of the window. You can also press ⌘⌫ (on the hovered or selected item), choose Move to Collector from the context menu, or use the Action menu (Move to Collector, Move All Items from Current Folder to Collector, Remove All Items from Collector). Collected items vanish from the chart and list and their folders shrink to match. The bar shows the running total; open the panel to see each item, remove one with ×, or drag a row back to the chart.
+
+**Deleting.** Delete starts a 5-second countdown with a Cancel button, then deletes the items permanently. Items that need administrator rights (for example, ones owned by root) are deleted in one batch after the standard macOS administrator password prompt. When it finishes, a summary lists what was deleted, what failed and why, and anything that changed since the scan, which you can delete anyway or leave. Collect and uncollect are disabled while a delete runs, and Forget or Rescan wait for it.
+
+**Trash instead.** Settings › "Move to Trash instead of deleting permanently" moves items to the Trash instead.
+
+**What the collector refuses.** System locations (such as `/System`, `/usr` apart from `/usr/local`, and `/Library` essentials), your home folder and the folders that contain it, Maclean itself and the folders that contain it, and other protected paths. It tells you why when you try. Deletion also re-checks each item right before removing it and never crosses onto another disk.
 
 ## License
 
