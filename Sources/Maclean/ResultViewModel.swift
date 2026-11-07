@@ -438,7 +438,7 @@ import Observation
 
     private static func computeLayout(tree: FileTree, root: NodeID) -> SunburstLayout {
         let t0 = Timings.now
-        let layout = SunburstLayout(tree: tree, root: root)
+        let layout = SunburstLayout(view: TreeView(tree: tree), root: root)
         Timings.mark("layout", (Timings.now - t0) * 1000)
         return layout
     }

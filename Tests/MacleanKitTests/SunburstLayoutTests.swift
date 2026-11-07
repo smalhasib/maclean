@@ -20,7 +20,7 @@ private func add(_ b: FileTreeBuilder, _ parent: NodeID, _ name: String, _ size:
         add(b, b.root, "a", 300)
         add(b, b.root, "b", 100)
         let t = b.finish()
-        let l = SunburstLayout(tree: t, root: t.root)
+        let l = SunburstLayout(view: TreeView(tree: t), root: t.root)
         #expect(l.segments.count == 2)
         #expect(l.segments[0].startAngle == 0)
         #expect(abs(l.segments[0].endAngle - 3 * .pi / 2) < 1e-9)
@@ -38,7 +38,7 @@ private func add(_ b: FileTreeBuilder, _ parent: NodeID, _ name: String, _ size:
         add(b, f2, "y", 1000)
         for i in 0..<3 { add(b, b.root, "s\(i)", 1) }
         let t = b.finish()
-        let l = SunburstLayout(tree: t, root: t.root)
+        let l = SunburstLayout(view: TreeView(tree: t), root: t.root)
         let ring1 = l.segments.filter { $0.ring == 1 }
         #expect(ring1.filter { $0.kind == .folder }.count == 2)
         let merged = ring1.filter { $0.kind == .smallerObjects }
@@ -56,7 +56,7 @@ private func add(_ b: FileTreeBuilder, _ parent: NodeID, _ name: String, _ size:
         for i in 0..<100_000 { add(b, d, "f\(i)", 1) }
         add(b, d, "big", 10_000_000)
         let t = b.finish()
-        let l = SunburstLayout(tree: t, root: t.root)
+        let l = SunburstLayout(view: TreeView(tree: t), root: t.root)
         #expect(l.segments.count < 2_000)
         #expect(l.segments.contains { $0.kind == .smallerObjects && $0.ring == 2 })
     }
@@ -70,7 +70,7 @@ private func add(_ b: FileTreeBuilder, _ parent: NodeID, _ name: String, _ size:
         let m = add(b, b.root, "m", 0, [.directory, .mountPoint])
         add(b, m, "inM", 50)
         let t = b.finish()
-        let l = SunburstLayout(tree: t, root: t.root)
+        let l = SunburstLayout(view: TreeView(tree: t), root: t.root)
         #expect(l.segments.allSatisfy { $0.ring == 1 })
         #expect(Set(l.segments.map { $0.kind }) == [.package, .restricted, .mountPoint])
     }
@@ -80,7 +80,7 @@ private func add(_ b: FileTreeBuilder, _ parent: NodeID, _ name: String, _ size:
         add(b, b.root, "z1", 0)
         add(b, b.root, "z2", 0)
         let t = b.finish()
-        let l = SunburstLayout(tree: t, root: t.root)
+        let l = SunburstLayout(view: TreeView(tree: t), root: t.root)
         #expect(l.isEmpty)
         #expect(l.segments.allSatisfy { !$0.startAngle.isNaN && !$0.endAngle.isNaN })
     }
@@ -91,7 +91,7 @@ private func add(_ b: FileTreeBuilder, _ parent: NodeID, _ name: String, _ size:
         for i in 0..<7 { parent = add(b, parent, "d\(i)", 0, .directory) }
         add(b, parent, "leaf", 10)
         let t = b.finish()
-        let l = SunburstLayout(tree: t, root: t.root)
+        let l = SunburstLayout(view: TreeView(tree: t), root: t.root)
         #expect(l.segments.map { $0.ring }.max() == 5)
         #expect(l.segments.count == 5)
     }
@@ -103,7 +103,7 @@ private func add(_ b: FileTreeBuilder, _ parent: NodeID, _ name: String, _ size:
         add(b, a, "a2", 100)
         add(b, b.root, "b", 100)
         let t = b.finish()
-        let l = SunburstLayout(tree: t, root: t.root)
+        let l = SunburstLayout(view: TreeView(tree: t), root: t.root)
         let hit = l.segment(atRadius: 100 + 1.5 * 40, angle: .pi / 2, innerRadius: 100, ringWidth: 40)
         #expect(hit?.node.map { t.name(of: $0) } == "a1")
         #expect(hit?.ring == 2)
@@ -127,7 +127,7 @@ private func add(_ b: FileTreeBuilder, _ parent: NodeID, _ name: String, _ size:
         add(b, b.root, "a", 10)
         let t = b.finish()
         for rings in [0, -3] {
-            let l = SunburstLayout(tree: t, root: t.root, rings: rings)
+            let l = SunburstLayout(view: TreeView(tree: t), root: t.root, rings: rings)
             #expect(l.segments.isEmpty)
             #expect(l.isEmpty)
             #expect(l.segment(atRadius: 110, angle: 1, innerRadius: 100, ringWidth: 40) == nil)
@@ -139,7 +139,7 @@ private func add(_ b: FileTreeBuilder, _ parent: NodeID, _ name: String, _ size:
         add(b, b.root, "a", 300)
         add(b, b.root, "b", 100)
         let t = b.finish()
-        let l = SunburstLayout(tree: t, root: t.root)
+        let l = SunburstLayout(view: TreeView(tree: t), root: t.root)
         #expect(l.segment(atRadius: 1e300, angle: 1, innerRadius: 100, ringWidth: 40) == nil)
         #expect(l.segment(atRadius: 1e300, angle: 1, innerRadius: 100, ringWidth: 1e-300) == nil)
         for angle in [2 * Double.pi, -1e-20, 0] {
@@ -157,7 +157,7 @@ private func add(_ b: FileTreeBuilder, _ parent: NodeID, _ name: String, _ size:
         let t = b.finish()
         let clock = ContinuousClock()
         var l: SunburstLayout?
-        let elapsed = clock.measure { l = SunburstLayout(tree: t, root: t.root) }
+        let elapsed = clock.measure { l = SunburstLayout(view: TreeView(tree: t), root: t.root) }
         print("layoutIsFast: \(elapsed) for \(t.count) nodes, \(l?.segments.count ?? 0) segments")
         #expect(elapsed < .milliseconds(200))
     }

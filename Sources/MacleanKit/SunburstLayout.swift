@@ -46,9 +46,10 @@ public struct SunburstLayout: Sendable {
 
     public var isEmpty: Bool { isEmptyLayout }
 
-    public init(tree: FileTree, root: NodeID, rings: Int = maxRings, minAngle: Double = minAngle) {
+    public init(view: TreeView, root: NodeID, rings: Int = maxRings, minAngle: Double = minAngle) {
         self.root = root
-        let rootSize = tree.size(of: root)
+        let tree = view.tree
+        let rootSize = view.size(of: root)
         var out: [Segment] = []
         var starts: [Int] = [0]
 
@@ -59,9 +60,9 @@ public struct SunburstLayout: Sendable {
             guard !frontier.isEmpty else { break }
             var next: [Open] = []
             for open in frontier {
-                let parentSize = tree.size(of: open.node)
+                let parentSize = view.size(of: open.node)
                 guard parentSize > 0 else { continue }
-                let kids = tree.children(of: open.node)
+                let kids = view.children(of: open.node)
                 guard !kids.isEmpty else { continue }
                 let span = open.end - open.start
                 let scale = span / Double(parentSize)
@@ -70,7 +71,7 @@ public struct SunburstLayout: Sendable {
                 var lo = 0, hi = kids.count
                 while lo < hi {
                     let mid = (lo + hi) / 2
-                    let size = tree.size(of: kids[mid])
+                    let size = view.size(of: kids[mid])
                     if size > 0 && Double(size) * scale >= minAngle { lo = mid + 1 } else { hi = mid }
                 }
                 let visible = lo
@@ -78,7 +79,7 @@ public struct SunburstLayout: Sendable {
                 var cumulative: Int64 = 0
                 for i in 0 ..< visible {
                     let id = kids[i]
-                    let size = tree.size(of: id)
+                    let size = view.size(of: id)
                     let a0 = open.start + Double(cumulative) * scale
                     cumulative += size
                     let a1 = open.start + Double(cumulative) * scale
