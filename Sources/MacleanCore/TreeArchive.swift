@@ -69,6 +69,7 @@ public enum TreeArchive {
         let perNode = 4 * 3 + 8 * 2 + 2 + 8 + 4 + 4 + 2
         guard n64 <= UInt64(r.remaining / perNode) else { throw ArchiveError.truncated }
         let n = Int(n64)
+        guard n > 0 else { throw ArchiveError.truncated }
 
         let parents: [Int32] = try r.array(n)
         let firstChild: [Int32] = try r.array(n)
@@ -84,12 +85,19 @@ public enum TreeArchive {
         guard namesCount <= UInt64(r.remaining) else { throw ArchiveError.truncated }
         let names = [UInt8](try r.bytes(Int(namesCount)))
 
-        // Reject garbled contents that would trap in FileTree accessors.
+        // Reject garbled contents that would trap or loop forever in FileTree accessors:
+        // enforce the BFS invariant (parents precede children, ranges are consistent).
+        guard parents[0] == -1 else { throw ArchiveError.truncated }
         for i in 0 ..< n {
             guard Int(nameOffset[i]) + Int(nameLength[i]) <= names.count,
-                  parents[i] < Int32(n), childCount[i] >= 0, firstChild[i] >= 0,
-                  Int(firstChild[i]) + Int(childCount[i]) <= n
+                  i == 0 || (parents[i] >= 0 && Int(parents[i]) < i),
+                  childCount[i] >= 0
             else { throw ArchiveError.truncated }
+            if childCount[i] > 0 {
+                let first = Int(firstChild[i]), end = first + Int(childCount[i])
+                guard first > i, end <= n else { throw ArchiveError.truncated }
+                for c in first ..< end where Int(parents[c]) != i { throw ArchiveError.truncated }
+            }
         }
 
         return FileTree(

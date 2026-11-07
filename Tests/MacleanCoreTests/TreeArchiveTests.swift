@@ -20,7 +20,7 @@ import Testing
         let back = try TreeArchive.read(from: out)
 
         #expect(back.rootPath == tree.rootPath)
-        #expect(back.scanDate == tree.scanDate)
+        #expect(abs(back.scanDate.timeIntervalSince(tree.scanDate)) < 1e-3) // 1970-epoch Float64 may differ by an ulp
         #expect(back.count == tree.count)
         for i in 0 ..< tree.count {
             let id = NodeID(index: Int32(i))
@@ -76,5 +76,48 @@ import Testing
         let url = URL(fileURLWithPath: t.url("v9"))
         try d.write(to: url)
         #expect(throws: ArchiveError.unsupportedVersion(9)) { try TreeArchive.read(from: url) }
+    }
+
+    /// Writes a valid archive for a small tree, then patches one Int32 in `array` (0 = parents,
+    /// 1 = firstChild, 2 = childCount) at node `index`.
+    private func corrupted(_ t: TempDir, array: Int, index: Int, value: Int32) async throws -> URL {
+        t.file("a/x", bytes: 10); t.file("b", bytes: 10)
+        let tree = try await Scanner.scan(path: t.path)
+        let url = URL(fileURLWithPath: t.url("tree.mcln"))
+        try TreeArchive.write(tree, to: url)
+        var d = try Data(contentsOf: url)
+        let off = 28 + tree.rootPath.utf8.count + array * 4 * tree.count + index * 4
+        withUnsafeBytes(of: value.littleEndian) { d.replaceSubrange(off ..< off + 4, with: $0) }
+        try d.write(to: url)
+        return url
+    }
+
+    @Test func rejectsParentCycle() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        let url = try await corrupted(t, array: 0, index: 1, value: 2)
+        #expect(throws: ArchiveError.truncated) { try TreeArchive.read(from: url) }
+    }
+
+    @Test func rejectsSelfParent() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        let url = try await corrupted(t, array: 0, index: 1, value: 1)
+        #expect(throws: ArchiveError.truncated) { try TreeArchive.read(from: url) }
+    }
+
+    @Test func rejectsBackwardsChildRange() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        let url = try await corrupted(t, array: 1, index: 0, value: 0)
+        #expect(throws: ArchiveError.truncated) { try TreeArchive.read(from: url) }
+    }
+
+    @Test func rejectsEmptyTree() throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        var d = Data("MCLN".utf8)
+        d.append(contentsOf: [1, 0, 0, 0])
+        d.append(Data(count: 8 + 8 + 4)) // n = 0, date, rootLen = 0
+        d.append(Data(count: 8))         // names count = 0
+        let url = URL(fileURLWithPath: t.url("empty"))
+        try d.write(to: url)
+        #expect(throws: ArchiveError.truncated) { try TreeArchive.read(from: url) }
     }
 }
