@@ -151,6 +151,52 @@ private final class URLBox: @unchecked Sendable {
         #expect(exists(t.url("d/b/y")))
     }
 
+    @Test func restrictedSubfolderNeedsVerifiedAdmin() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        t.file("d/a", bytes: 4096); t.file("d/locked/secret", bytes: 4096)
+        t.chmod("d/locked", 0o000)
+        // Scanned with the restricted folder in place, as the collector sees it.
+        let r = try await request(t.url("d"))
+        #expect(await deleter.delete(r) == .needsAdmin(started: false, verified: true))
+        #expect(exists(t.url("d/a")))
+    }
+
+    @Test func restrictedSubfolderThatChangedIsChanged() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        t.file("d/a", bytes: 4096); t.dir("d/locked")
+        t.chmod("d/locked", 0o000)
+        let r = try await request(t.url("d"))
+        t.file("d/b", bytes: 4096)
+        guard case .changedSinceScan = await deleter.delete(r) else { Issue.record("expected changedSinceScan"); return }
+        #expect(exists(t.url("d/a")))
+    }
+
+    @Test func unreadableItemNeedsVerifiedAdmin() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        t.file("d/a", bytes: 4096)
+        t.chmod("d", 0o000)
+        let r = try await request(t.url("d"))
+        #expect(await deleter.delete(r) == .needsAdmin(started: false, verified: true))
+    }
+
+    @Test(.enabled(if: trashWorks(), "FileManager.trashItem is unavailable in this environment"))
+    func trashModeMovesFolderWithRestrictedContents() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        let name = "maclean-trash-test-\(UUID().uuidString)"
+        t.file("\(name)/a", bytes: 4096); t.file("\(name)/locked/secret", bytes: 10)
+        t.chmod("\(name)/locked", 0o000)
+        let r = try await request(t.url(name))
+        let box = URLBox()
+        let trasher = Deleter(mode: .trash, environment: env, trashed: { box.url = $0 })
+        let outcome = await trasher.delete(r)
+        if let url = box.url {
+            _ = Darwin.chmod(url.appending(path: "locked").path, 0o700)
+            try? FileManager.default.removeItem(at: url)
+        }
+        #expect(outcome == .deleted(freed: r.size))
+        #expect(!exists(t.url(name)))
+    }
+
     @Test(.enabled(if: trashWorks(), "FileManager.trashItem is unavailable in this environment"))
     func trashModeMovesToTrash() async throws {
         let t = TempDir(); defer { withExtendedLifetime(t) {} }
@@ -186,7 +232,20 @@ private final class URLBox: @unchecked Sendable {
         let c = FileTreeBuilder(rootPath: "/r", rootInode: 1, rootDevice: 1)
         let locked = c.add(parent: c.root, name: "locked", size: 0, flags: .directory, inode: 3, device: 1)
         c.markRestricted(locked)
-        #expect(Deleter.rewalkVerdict(r, tree: c.finish()) == .needsAdmin(started: false))
+        let restricted = c.finish()
+        // The readable part matches the scan: verified, root may delete it forced.
+        #expect(Deleter.rewalkVerdict(r, tree: restricted) == .needsAdmin(started: false, verified: true))
+        // Moving to the Trash needs no read access inside the item.
+        #expect(Deleter.rewalkVerdict(r, tree: restricted, mode: .trash) == nil)
+
+        // A real change in the readable part is reported, restricted or not.
+        let e = FileTreeBuilder(rootPath: "/r", rootInode: 1, rootDevice: 1)
+        let locked2 = e.add(parent: e.root, name: "locked", size: 0, flags: .directory, inode: 3, device: 1)
+        e.markRestricted(locked2)
+        e.add(parent: e.root, name: "new", size: 4096, flags: [], inode: 4, device: 1)
+        let grown = e.finish()
+        #expect(Deleter.rewalkVerdict(r, tree: grown) == .changedSinceScan(size: 4096, fileCount: 1))
+        #expect(Deleter.rewalkVerdict(r, tree: grown, mode: .trash) == .changedSinceScan(size: 4096, fileCount: 1))
 
         let d = FileTreeBuilder(rootPath: "/r", rootInode: 1, rootDevice: 1)
         #expect(Deleter.rewalkVerdict(r, tree: d.finish()) == nil)

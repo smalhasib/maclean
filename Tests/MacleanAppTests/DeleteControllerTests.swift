@@ -31,18 +31,26 @@ private final class FakeDeleter: DeleterProtocol, @unchecked Sendable {
 
 private final class FakeAdmin: AdminRunning, @unchecked Sendable {
     private let lock = NSLock()
-    private var _received: [[String]] = []
+    private var _received: [[AdminDelete.Item]] = []
+    private var _itemsFiles: [String] = []
     private let answer: @Sendable ([AdminDelete.Item]) throws -> String
 
     init(_ answer: @escaping @Sendable ([AdminDelete.Item]) throws -> String) { self.answer = answer }
 
-    var received: [[AdminDelete.Item]] {
-        lock.withLock { _received }.map { (try? AdminDelete.parse($0).items) ?? [] }
-    }
+    var received: [[AdminDelete.Item]] { lock.withLock { _received } }
+    /// The `--items-file` paths passed (the files exist only during `run`).
+    var itemsFiles: [String] { lock.withLock { _itemsFiles } }
 
     func run(_ arguments: [String]) async throws -> String {
-        lock.withLock { _received.append(arguments) }
-        return try answer((try? AdminDelete.parse(arguments).items) ?? [])
+        // Parsed now: the controller removes the items file after the run.
+        let items = (try? AdminDelete.parse(arguments).items) ?? []
+        lock.withLock {
+            _received.append(items)
+            if let i = arguments.firstIndex(of: "--items-file"), i + 1 < arguments.count {
+                _itemsFiles.append(arguments[i + 1])
+            }
+        }
+        return try answer(items)
     }
 }
 
@@ -221,6 +229,70 @@ private struct Fixture {
     #expect(report.deleted.sorted() == f.paths.sorted())
     #expect(f.session.view?.collected.isEmpty == true)
     #expect(report.freed == f.paths.indices.reduce(0) { $0 + f.session.view!.tree.size(of: f.session.view!.tree.node(atPath: f.paths[$1])!) })
+}
+
+@Test @MainActor func verifiedRestrictedItemsEscalateForced() async throws {
+    let f = try await fixture(2)
+    let deleter = FakeDeleter { r, _ in
+        r.path.hasSuffix("f0.bin") ? .needsAdmin(started: false, verified: true) : .needsAdmin(started: false)
+    }
+    let admin = FakeAdmin { items in
+        items.map { AdminDelete.encode(path: $0.request.path, outcome: .deleted(freed: $0.request.size)) }
+            .joined(separator: "\n")
+    }
+    let clock = TestClock()
+    let c = controller(f, deleter, admin: admin, clock: clock)
+    c.start()
+    let report = try #require(await runToSummary(c, clock))
+    let sent = try #require(admin.received.first)
+    #expect(sent.map(\.request.path) == [f.paths[0], f.paths[1]])
+    #expect(sent.map(\.force) == [true, false])
+    #expect(report.deleted.sorted() == f.paths.sorted())
+    #expect(report.changed.isEmpty)
+    // The items file is gone once the run is over.
+    let file = try #require(admin.itemsFiles.first)
+    #expect(!FileManager.default.fileExists(atPath: file))
+    #expect(!FileManager.default.fileExists(atPath: (file as NSString).deletingLastPathComponent))
+}
+
+@Test @MainActor func realRestrictedFolderEscalatesForcedWithoutDeleting() async throws {
+    let s = Scratch()
+    s.file("d/a.bin", bytes: 4096)
+    s.file("d/locked/secret.bin", bytes: 4096)
+    let locked = s.path + "/d/locked"
+    #expect(chmod(locked, 0o000) == 0)
+    defer { _ = chmod(locked, 0o700) }
+    let session = await scannedSession(s)
+    let tree = try #require(session.tree)
+    session.collect([try #require(tree.node(atPath: s.path + "/d"))])
+    let admin = FakeAdmin { _ in throw AdminRunnerError.cancelled }
+    let clock = TestClock()
+    let env = ProtectionEnvironment(home: "/Users/maclean-test-nobody", appBundle: "/Applications/Maclean.app",
+                                    mountPoints: [], timeMachineMounts: [])
+    let defaults = UserDefaults(suiteName: "maclean-tests-\(UUID().uuidString)")!
+    let c = DeleteController(session: session, deleter: { Deleter(mode: $0, environment: env) }, admin: admin,
+                             clock: clock, defaults: defaults)
+    c.start()
+    let report = try #require(await runToSummary(c, clock))
+    let sent = try #require(admin.received.first)
+    #expect(sent.map(\.request.path) == [s.path + "/d"])
+    #expect(sent.map(\.force) == [true])
+    #expect(report.changed.isEmpty)
+    #expect(report.failed[s.path + "/d"] == DeleteController.adminNotGiven)
+    // Nothing was touched as the user: a cancelled prompt leaves the folder whole.
+    #expect(FileManager.default.fileExists(atPath: s.path + "/d/a.bin"))
+}
+
+@Test @MainActor func adminFailureSaysItMayStillBeRunning() async throws {
+    let f = try await fixture(2)
+    let deleter = FakeDeleter { r, _ in r.path.hasSuffix("f0.bin") ? .needsAdmin(started: false) : .deleted(freed: r.size) }
+    let admin = FakeAdmin { _ in throw AdminRunnerError.failed("osascript went away") }
+    let clock = TestClock()
+    let c = controller(f, deleter, admin: admin, clock: clock)
+    c.start()
+    let report = try #require(await runToSummary(c, clock))
+    #expect(report.failed[f.paths[0]] == DeleteController.adminNoReport)
+    #expect(collectedPaths(f) == [f.paths[0]])
 }
 
 @Test @MainActor func trashModeDoesNotEscalate() async throws {

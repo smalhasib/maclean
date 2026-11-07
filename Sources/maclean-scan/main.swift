@@ -4,7 +4,7 @@ import MacleanCore
 // maclean-scan <path> [--out <file>] [--top <n>]
 // Exit codes: 0 ok, 1 root unreadable, 2 usage error, 3 output write failed. Progress -> stderr, summary -> stdout.
 //
-// maclean-scan --delete --env <json> --items <json>
+// maclean-scan --delete --env <json> --items-file <path>
 // The app's administrator helper (see AdminDelete): runs only as root,
 // deletes each item permanently and prints one JSON outcome line per item.
 // Exit codes: 0 ok (per-item outcomes on stdout), 2 usage error, 4 not root.

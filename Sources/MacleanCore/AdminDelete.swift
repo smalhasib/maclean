@@ -5,12 +5,16 @@ import Foundation
 /// app runs as root (through an administrator prompt) for items it couldn't
 /// delete itself.
 ///
-/// Arguments: `--delete --env <JSON environment> --items <JSON items>`.
+/// Arguments: `--delete --env <JSON environment> --items-file <path>`. The
+/// items travel in a file (`writeItemsFile`) so a large batch can't exceed
+/// the argument size limit; the app removes it after the run
+/// (`removeItemsFile`).
 /// Output: one JSON line per item (`encode`), read back with `decode`.
 public enum AdminDelete {
     public struct Item: Codable, Sendable, Equatable {
         public let request: DeleteRequest
-        /// Skip the changed-since-scan re-walk (the item was partly deleted already).
+        /// Skip the changed-since-scan re-walk (the item was partly deleted
+        /// already, or verified as far as the user could read it).
         public let force: Bool
 
         public init(request: DeleteRequest, force: Bool) {
@@ -21,18 +25,50 @@ public enum AdminDelete {
 
     public enum ParseError: Error, Equatable { case usage, malformed(String) }
 
-    public static func arguments(items: [Item], environment: ProtectionEnvironment) -> [String] {
-        ["--delete", "--env", json(environment), "--items", json(items)]
+    public static func arguments(itemsFile: String, environment: ProtectionEnvironment) -> [String] {
+        ["--delete", "--env", json(environment), "--items-file", itemsFile]
+    }
+
+    /// Writes `items` as JSON to a new file (mode 0600) in a fresh private
+    /// temporary directory (mode 0700) and returns the file's URL.
+    public static func writeItemsFile(_ items: [Item]) throws -> URL {
+        var template = Array((NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("maclean-admin-XXXXXX").utf8CString)
+        guard let dir = mkdtemp(&template) else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        let directory = URL(fileURLWithPath: String(cString: dir), isDirectory: true)
+        let file = directory.appending(path: "items.json")
+        let fd = open(file.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fd >= 0 else {
+            let e = errno
+            removeItemsFile(file)
+            throw POSIXError(POSIXErrorCode(rawValue: e) ?? .EIO)
+        }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        do {
+            try handle.write(contentsOf: Data(json(items).utf8))
+            try handle.close()
+        } catch {
+            removeItemsFile(file)
+            throw error
+        }
+        return file
+    }
+
+    /// Removes an items file written by `writeItemsFile` and its directory.
+    public static func removeItemsFile(_ file: URL) {
+        try? FileManager.default.removeItem(at: file.deletingLastPathComponent())
     }
 
     public static func parse(_ arguments: [String]) throws -> (items: [Item], environment: ProtectionEnvironment) {
-        guard arguments.count == 5, arguments[0] == "--delete", arguments[1] == "--env", arguments[3] == "--items" else {
+        guard arguments.count == 5, arguments[0] == "--delete", arguments[1] == "--env",
+              arguments[3] == "--items-file" else {
             throw ParseError.usage
         }
         let decoder = JSONDecoder()
         do {
             let env = try decoder.decode(ProtectionEnvironment.self, from: Data(arguments[2].utf8))
-            let items = try decoder.decode([Item].self, from: Data(arguments[4].utf8))
+            let data = try Data(contentsOf: URL(fileURLWithPath: arguments[4]))
+            let items = try decoder.decode([Item].self, from: data)
             return (items, env)
         } catch {
             throw ParseError.malformed(String(describing: error))

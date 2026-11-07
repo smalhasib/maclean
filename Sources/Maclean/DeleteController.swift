@@ -51,6 +51,7 @@ struct DeleteReport: Equatable {
         + "Turn off “Move to Trash” in Settings to delete it."
     static let adminNotGiven = "Administrator password not given."
     static let stoppedBeforeAdmin = "Stopped before the administrator step."
+    static let adminNoReport = "The administrator step didn't report back. It may still be running — rescan to check."
 
     private(set) var phase: Phase = .idle
     /// The mode of the current (or last) run, read from Settings at `start()`.
@@ -212,8 +213,10 @@ struct DeleteReport: Equatable {
         for (i, entry) in items.enumerated() {
             if stopRequested { break }
             let outcome = await deleter.delete(entry.request, force: force)
-            if case .needsAdmin(let started) = outcome {
-                queue.append((entry, force || started))
+            if case .needsAdmin(let started, let verified) = outcome {
+                // Started or verified items skip root's re-walk: it would see
+                // the formerly unreadable contents and call them changed.
+                queue.append((entry, force || started || verified))
             } else {
                 removedAny = apply(outcome, to: entry) || removedAny
             }
@@ -241,14 +244,13 @@ struct DeleteReport: Equatable {
         awaitingAdmin = true
         defer { awaitingAdmin = false }
         do {
-            output = try await admin.run(AdminDelete.arguments(items: items, environment: .current()))
+            let file = try AdminDelete.writeItemsFile(items)
+            defer { AdminDelete.removeItemsFile(file) }
+            output = try await admin.run(AdminDelete.arguments(itemsFile: file.path, environment: .current()))
         } catch {
-            let reason = switch error as? AdminRunnerError {
-            case .cancelled: Self.adminNotGiven
-            case .timedOut: "The administrator helper took too long."
-            case .failed(let message): message
-            case nil: error.localizedDescription
-            }
+            // Anything but a cancelled prompt: root may have started, or may
+            // still be deleting. Keep the items and say so.
+            let reason = error as? AdminRunnerError == .cancelled ? Self.adminNotGiven : Self.adminNoReport
             for (entry, _) in queue { report.failed[entry.request.path] = reason }
             return false
         }

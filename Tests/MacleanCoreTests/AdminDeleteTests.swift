@@ -9,7 +9,7 @@ private func req(_ path: String, dir: Bool = false) -> DeleteRequest {
     DeleteRequest(path: path, inode: 42, device: 7, size: 4096, fileCount: 1, isDirectory: dir)
 }
 
-@Test func argumentsRoundTrip() throws {
+@Test func argumentsRoundTripThroughItemsFile() throws {
     let items = [
         AdminDelete.Item(request: req("/Users/me/with space/a b"), force: false),
         AdminDelete.Item(request: req("/Users/me/\"quoted\" 'single'", dir: true), force: true),
@@ -17,29 +17,58 @@ private func req(_ path: String, dir: Bool = false) -> DeleteRequest {
         AdminDelete.Item(request: req("/Users/me/--delete"), force: true),
         AdminDelete.Item(request: req("/Users/me/$(rm -rf ~); `x` \\ é"), force: false),
     ]
-    let args = AdminDelete.arguments(items: items, environment: env)
-    #expect(args.first == "--delete")
-    #expect(args.count == 5)
+    let file = try AdminDelete.writeItemsFile(items)
+    defer { AdminDelete.removeItemsFile(file) }
+    // Private: the file is the owner's only, in a fresh directory of its own.
+    let attrs = try FileManager.default.attributesOfItem(atPath: file.path)
+    #expect((attrs[.posixPermissions] as? Int) == 0o600)
+    let dirAttrs = try FileManager.default.attributesOfItem(atPath: file.deletingLastPathComponent().path)
+    #expect((dirAttrs[.posixPermissions] as? Int) == 0o700)
+
+    let args = AdminDelete.arguments(itemsFile: file.path, environment: env)
+    #expect(args == ["--delete", "--env", args[2], "--items-file", file.path])
     let parsed = try AdminDelete.parse(args)
     #expect(parsed.items == items)
     #expect(parsed.environment == env)
+
+    AdminDelete.removeItemsFile(file)
+    #expect(!FileManager.default.fileExists(atPath: file.deletingLastPathComponent().path))
 }
 
-@Test func parseRejectsMalformedArguments() {
-    let good = AdminDelete.arguments(items: [AdminDelete.Item(request: req("/Users/me/x"), force: false)],
-                                     environment: env)
+@Test func manyItemsStayOutOfArgv() throws {
+    let long = String(repeating: "x", count: 200)
+    let items = (0..<5_000).map { AdminDelete.Item(request: req("/Users/me/\(long)/\($0)"), force: false) }
+    let file = try AdminDelete.writeItemsFile(items)
+    defer { AdminDelete.removeItemsFile(file) }
+    let args = AdminDelete.arguments(itemsFile: file.path, environment: env)
+    #expect(args.joined().utf8.count < 4096)
+    #expect(try AdminDelete.parse(args).items.count == 5_000)
+}
+
+@Test func parseRejectsMalformedArguments() throws {
+    let file = try AdminDelete.writeItemsFile([AdminDelete.Item(request: req("/Users/me/x"), force: false)])
+    defer { AdminDelete.removeItemsFile(file) }
+    let good = AdminDelete.arguments(itemsFile: file.path, environment: env)
     #expect(throws: (any Error).self) { try AdminDelete.parse([]) }
     #expect(throws: (any Error).self) { try AdminDelete.parse(Array(good.dropFirst())) }
     #expect(throws: (any Error).self) { try AdminDelete.parse(good + ["extra"]) }
     var garbled = good
-    garbled[4] = "not json"
+    garbled[2] = "not json"
     #expect(throws: (any Error).self) { try AdminDelete.parse(garbled) }
+    var missing = good
+    missing[4] = file.path + "-missing"
+    #expect(throws: (any Error).self) { try AdminDelete.parse(missing) }
+    var notJSON = good
+    let junk = file.deletingLastPathComponent().appending(path: "junk.json")
+    try Data("not json".utf8).write(to: junk)
+    notJSON[4] = junk.path
+    #expect(throws: (any Error).self) { try AdminDelete.parse(notJSON) }
 }
 
 @Test func outcomeLinesRoundTrip() {
     let outcomes: [DeleteOutcome] = [
         .deleted(freed: 123), .changedSinceScan(size: 9, fileCount: 3), .replaced, .missing,
-        .refused(.homeItself), .needsAdmin(started: true), .failed("Bad\nthing \"x\""),
+        .refused(.homeItself), .needsAdmin(started: true), .needsAdmin(started: false, verified: true), .failed("Bad\nthing \"x\""),
     ]
     var lines: [String] = []
     var expected: [String: DeleteOutcome] = [:]

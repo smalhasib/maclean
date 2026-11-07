@@ -64,7 +64,9 @@ struct CollectorBar: View {
         switch controller.phase {
         case .countdown(let remaining):
             let items = controller.pendingCount == 1 ? "1 item" : "\(controller.pendingCount.formatted()) items"
-            Text("Deleting \(items), \(SizeText.string(controller.pendingSize)) in \(remaining)…")
+            let size = SizeText.string(controller.pendingSize)
+            Text(controller.mode == .trash ? "Moving \(items), \(size) to the Trash in \(remaining)…"
+                 : "Deleting \(items), \(size) in \(remaining)…")
                 .monospacedDigit()
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -79,7 +81,8 @@ struct CollectorBar: View {
                     .lineLimit(1)
                 Spacer(minLength: 8)
             } else {
-                Text("Deleting \(done.formatted()) of \(total.formatted())…")
+                Text(controller.mode == .trash ? "Moving \(done.formatted()) of \(total.formatted()) to the Trash…"
+                     : "Deleting \(done.formatted()) of \(total.formatted())…")
                     .monospacedDigit()
                     .lineLimit(1)
                 ProgressView(value: Double(done), total: Double(max(total, 1)))

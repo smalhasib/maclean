@@ -35,7 +35,11 @@ public enum DeleteOutcome: Sendable, Equatable, Codable {
     case missing
     case refused(Refusal)
     /// `EACCES`/`EPERM`; `started` is true when part of the item was already removed.
-    case needsAdmin(started: Bool)
+    /// `verified` is true when the item couldn't be read in full but all that
+    /// could be read matches the scan (or nothing inside it was readable,
+    /// then or now): the administrator step may then skip its own re-walk,
+    /// which would see the formerly unreadable contents and call it changed.
+    case needsAdmin(started: Bool, verified: Bool = false)
     case failed(String)
 }
 
@@ -102,10 +106,14 @@ public struct Deleter: Sendable {
         var freed = request.size
         if !force {
             if Self.isDirectory(st) {
-                let tree: FileTree
-                do { tree = try await Scanner.scan(path: request.path) } catch { return Self.outcome(scanError: error) }
-                if let verdict = Self.rewalkVerdict(request, tree: tree) { return verdict }
-                freed = tree.size(of: tree.root)
+                switch await Self.scanForRewalk(request.path, mode: mode) {
+                case .failure(let early): return early.outcome
+                case .success(nil):
+                    break  // Unreadable item, trash mode: moving it needs no read access.
+                case .success(let tree?):
+                    if let verdict = Self.rewalkVerdict(request, tree: tree, mode: mode) { return verdict }
+                    freed = tree.size(of: tree.root)
+                }
             } else {
                 let size = Int64(st.st_blocks) * 512
                 if Self.changed(request, size: size, fileCount: 1) { return .changedSinceScan(size: size, fileCount: 1) }
@@ -149,16 +157,40 @@ public struct Deleter: Sendable {
 
     /// What the re-walk `tree` of a directory item says about deleting it,
     /// or nil when it may be deleted.
-    static func rewalkVerdict(_ request: DeleteRequest, tree: FileTree) -> DeleteOutcome? {
+    ///
+    /// The scan recorded unreadable folders as empty, so the readable part is
+    /// compared first: a change there is a real change. Unchanged but with
+    /// unreadable folders, a permanent delete needs administrator rights and
+    /// is `verified` (root may skip its re-walk). Moving to the Trash needs
+    /// only write access on the parent, so trash mode ignores unreadable
+    /// folders.
+    static func rewalkVerdict(_ request: DeleteRequest, tree: FileTree,
+                              mode: DeleteMode = .permanent) -> DeleteOutcome? {
         if tree.inode(of: tree.root) != request.inode || tree.device(of: tree.root) != request.device {
             return .replaced
         }
         if let disk = otherDisk(in: tree) { return .failed("Contains another disk: \(disk)") }
-        if (0..<tree.count).contains(where: { tree.flags(of: NodeID(index: Int32($0))).contains(.restricted) }) {
-            return .needsAdmin(started: false)
-        }
         let size = tree.size(of: tree.root), files = tree.fileCount(of: tree.root)
-        return changed(request, size: size, fileCount: files) ? .changedSinceScan(size: size, fileCount: files) : nil
+        if changed(request, size: size, fileCount: files) { return .changedSinceScan(size: size, fileCount: files) }
+        if mode == .permanent,
+           (0..<tree.count).contains(where: { tree.flags(of: NodeID(index: Int32($0))).contains(.restricted) }) {
+            return .needsAdmin(started: false, verified: true)
+        }
+        return nil
+    }
+
+    /// The re-walk of directory item `path`, nil when the item itself can't
+    /// be read in trash mode, or the outcome to report. An item unreadable at
+    /// its top level has nothing to verify as the user: in permanent mode it
+    /// needs administrator rights, `verified`.
+    private static func scanForRewalk(_ path: String, mode: DeleteMode) async -> Result<FileTree?, Early> {
+        do {
+            return .success(try await Scanner.scan(path: path))
+        } catch ReadError.permissionDenied {
+            return mode == .trash ? .success(nil) : .failure(Early(outcome: .needsAdmin(started: false, verified: true)))
+        } catch {
+            return .failure(Early(outcome: outcome(scanError: error)))
+        }
     }
 
     /// Name of the first mount point inside `tree` (its root excluded): a disk

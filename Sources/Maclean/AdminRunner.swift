@@ -9,13 +9,15 @@ protocol AdminRunning: Sendable {
 
 enum AdminRunnerError: Error, Equatable {
     case cancelled
-    case timedOut
     case failed(String)
 }
 
 /// Runs `Contents/MacOS/maclean-scan` with administrator privileges through
 /// `osascript`. Every argument travels in argv and is quoted by AppleScript's
 /// `quoted form of`: nothing is interpolated into the script text.
+///
+/// There is no timeout: the wait includes the password prompt, and killing
+/// `osascript` wouldn't stop the root helper mid-delete anyway.
 struct AdminRunner: AdminRunning {
     static let script = """
         on run argv
@@ -28,20 +30,21 @@ struct AdminRunner: AdminRunning {
         """
 
     var helper: URL = Bundle.main.bundleURL.appending(path: "Contents/MacOS/maclean-scan")
-    var timeout: Duration = .seconds(600)
+    /// How long to keep reading the pipes after `osascript` exits (a stray
+    /// process still holding them open must not block the result forever).
+    static let drainGrace: Double = 2
 
     func run(_ arguments: [String]) async throws -> String {
-        let helper = helper.path, timeout = timeout
+        let helper = helper.path
         let result = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                continuation.resume(returning: Self.runBlocking(helper: helper, arguments: arguments, timeout: timeout))
+                continuation.resume(returning: Self.runBlocking(helper: helper, arguments: arguments))
             }
         }
         return try result.get()
     }
 
-    private static func runBlocking(helper: String, arguments: [String],
-                                    timeout: Duration) -> Result<String, AdminRunnerError> {
+    private static func runBlocking(helper: String, arguments: [String]) -> Result<String, AdminRunnerError> {
         guard FileManager.default.isExecutableFile(atPath: helper) else {
             return .failure(.failed("The administrator helper is missing from Maclean."))
         }
@@ -56,17 +59,12 @@ struct AdminRunner: AdminRunning {
         process.standardInput = FileHandle.nullDevice
         let exited = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in exited.signal() }
-        do { try process.run() } catch { return .failure(.failed(error.localizedDescription)) }
-
         // Drain both pipes concurrently so a full pipe can't stall the helper.
         let output = Drain(out.fileHandleForReading), errors = Drain(err.fileHandleForReading)
-        let seconds = Double(timeout.components.seconds)
-        if exited.wait(timeout: .now() + seconds) == .timedOut {
-            process.terminate()
-            exited.wait()
-            return .failure(.timedOut)
-        }
-        let stdout = output.text(), stderr = errors.text()
+        do { try process.run() } catch { return .failure(.failed(error.localizedDescription)) }
+
+        exited.wait()
+        let stdout = output.text(grace: drainGrace), stderr = errors.text(grace: drainGrace)
         guard process.terminationStatus == 0 else {
             if process.terminationStatus == 1 && stderr.contains("-128") { return .failure(.cancelled) }
             let message = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -75,21 +73,28 @@ struct AdminRunner: AdminRunning {
         return .success(stdout)
     }
 
-    /// Reads a pipe to its end on a background thread.
+    /// Collects a pipe's data as it arrives, on a background queue.
     private final class Drain: @unchecked Sendable {
+        private let lock = NSLock()
         private var data = Data()
         private let done = DispatchSemaphore(value: 0)
 
         init(_ handle: FileHandle) {
-            DispatchQueue.global(qos: .userInitiated).async { [self] in
-                data = handle.readDataToEndOfFile()
-                done.signal()
+            handle.readabilityHandler = { [self] h in
+                let chunk = h.availableData
+                if chunk.isEmpty {
+                    h.readabilityHandler = nil
+                    done.signal()
+                } else {
+                    lock.withLock { data.append(chunk) }
+                }
             }
         }
 
-        func text() -> String {
-            done.wait()
-            return String(decoding: data, as: UTF8.self)
+        /// What was read, once the pipe hit its end or after `grace` seconds.
+        func text(grace: Double) -> String {
+            _ = done.wait(timeout: .now() + grace)
+            return lock.withLock { String(decoding: data, as: UTF8.self) }
         }
     }
 }
