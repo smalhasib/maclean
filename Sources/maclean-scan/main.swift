@@ -49,10 +49,10 @@ var args = CommandLine.arguments.dropFirst().makeIterator()
 while let arg = args.next() {
     switch arg {
     case "--out":
-        guard let value = args.next() else { usage() }
+        guard let value = args.next(), !value.hasPrefix("--") else { usage() }
         outPath = value
     case "--top":
-        guard let value = args.next(), let n = Int(value), n >= 0 else { usage() }
+        guard let value = args.next(), !value.hasPrefix("--"), let n = Int(value), n >= 0 else { usage() }
         top = n
     case _ where arg.hasPrefix("-") && arg != "-":
         usage()
