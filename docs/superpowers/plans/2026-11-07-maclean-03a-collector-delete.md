@@ -172,7 +172,7 @@ public enum ViewChildren: RandomAccessCollection, Sendable { case raw(NodeChildr
 - Create:
   - `Sources/MacleanCore/ProtectionRules.swift`
   - `Tests/MacleanCoreTests/ProtectionRulesTests.swift`
-  - `Tests/MacleanCoreTests/Resources/dangerous_paths.txt`: copy of mole's `tests/fuzz_corpus/dangerous_paths.txt`, with mole's MIT copyright notice as a `#` header. Mole is cloned at `https://github.com/tw93/mole`.
+  - `Tests/MacleanCoreTests/Resources/dangerous_paths.txt`: Maclean's own corpus of at least 100 paths, covering the categories in design §6.4. Mole is GPL-3.0, so nothing is copied from it.
 - Modify: `Package.swift`, so `MacleanCoreTests` gets `resources: [.copy("Resources")]`.
 
 **Interfaces:**

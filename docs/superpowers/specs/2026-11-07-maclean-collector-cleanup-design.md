@@ -3,7 +3,7 @@
 Date: 2026-11-07
 Status: awaiting owner approval
 Builds on: `2026-11-07-maclean-design.md` (product spec; §5.7 Collector, §5.8 Delete, §6.6 Delete engine), `2026-11-07-maclean-app-shell-design.md` (Plan 2 UI), and the "Before Plan 3" list in `docs/superpowers/plans/2026-11-07-maclean-02-app-shell.md`.
-Research: mole (github.com/tw93/mole), studied 2026-11-07. Notes are inline below; mole is MIT licensed, and Maclean reimplements its ideas in Swift without copying code.
+Research: mole (github.com/tw93/mole), studied 2026-11-07. Notes are inline below; mole is GPL-3.0 licensed, while Maclean is MIT, so Maclean reimplements mole's ideas in its own Swift code and its own data files. Nothing from mole's repository (code, lists, test files) is copied.
 
 ## 1. Intent
 
@@ -243,11 +243,11 @@ In the Smart Clean context, a path is refused if any of the following hold:
 - **Personal data:** Keychains, Accounts, Mail (except Mail Downloads), Messages (Attachments), Calendars, Contacts, Photos libraries, `Mobile Documents` (iCloud Drive), Safari history/bookmarks, browser profile data other than cache folders.
 - **Never-clean list:** the path is on it, or is an ancestor or descendant of an entry (§5.5).
 - **Smart Clean only:**
-  - bundle ids in a protected list, ported from mole's `DATA_PROTECTED_BUNDLES` and `SYSTEM_CRITICAL_BUNDLES` (password managers, input methods, VPNs, `com.apple.*` except the specific caches in §6.2);
+  - bundle ids in a protected list, compiled by Maclean, covering the same kinds of apps as mole's protected lists, which aren't copied because of the licence (password managers, input methods, VPNs, `com.apple.*` except the specific caches in §6.2);
   - SQLite files that are open;
   - EDR/MDM vendor folders.
 
-Port mole's `tests/fuzz_corpus/dangerous_paths.txt` (127 paths) as a Swift test. Every entry must be refused in the Smart Clean context. In the collector context, every entry that §5.8 rule 2 or path shape covers must be refused, such as system roots, traversal and control characters. Entries that are merely user data, such as Keychains, are collectable as in DaisyDisk, and the test lists them explicitly. *Note:* the corpus is MIT licensed; keep its licence notice in the test resource.
+Maclean writes its own dangerous-path corpus, covering the same categories as mole's fuzz corpus without copying it: system roots and shallow system files, traversal variants, control characters, case aliases, empty components, Keychains and similar personal data, and `/private/var/db` entries. It's a Swift test. Every entry must be refused in the Smart Clean context. In the collector context, every entry that §5.8 rule 2 or path shape covers must be refused, such as system roots, traversal and control characters. Entries that are merely user data, such as Keychains, are collectable as in DaisyDisk, and the test lists them explicitly.
 
 ### 6.5 Project leftovers (mole's `purge`)
 - **Search roots:**
