@@ -271,6 +271,15 @@ private func node(_ tree: FileTree, _ relative: String) -> NodeID? {
     }
 
     @Test(.enabled(if: FileManager.default.fileExists(atPath: "/System/Volumes/Preboot")))
+    func prebootRootSkipsCryptexGraftsButCryptexRootDoesNot() {
+        let cryptexes = "/System/Volumes/Preboot/Cryptexes"
+        #expect(ScanBoundary.forRoot("/System/Volumes/Preboot").skippedPaths.contains(cryptexes))
+        if FileManager.default.fileExists(atPath: cryptexes) {
+            #expect(!ScanBoundary.forRoot(cryptexes).skippedPaths.contains(cryptexes))
+        }
+    }
+
+    @Test(.enabled(if: FileManager.default.fileExists(atPath: "/System/Volumes/Preboot")))
     func mountPointRootScansNormally() async throws {
         let root = "/System/Volumes/Preboot"
         let b = ScanBoundary.forRoot(root)
@@ -383,7 +392,7 @@ private func node(_ tree: FileTree, _ relative: String) -> NodeID? {
         let t = TempDir(); defer { withExtendedLifetime(t) {} }
         for i in 0..<2_000 { t.dir("d\(i / 50)/e\(i)") }
         let (inFlight, retained) = (Scanner.desiredInFlight, Scanner.desiredRetained)
-        let budget = FDBudget(limit: 2 * inFlight + retained)
+        let budget = FDBudget(limit: 2 * (2 * inFlight + retained))
         let path = t.path
         let task = Task {
             try await Scanner.scan(path: path, boundary: .forRoot(path), budget: budget) { _ in
@@ -397,18 +406,30 @@ private func node(_ tree: FileTree, _ relative: String) -> NodeID? {
     }
 
     @Test func budgetGrantsScaleDownToFloor() {
-        let budget = FDBudget(limit: 100)
+        let budget = FDBudget(limit: 130)  // a single grant is capped at 65
         let full = budget.acquire(desiredInFlight: 10, desiredRetained: 40)  // costs 60
         #expect(full.inFlight == 10 && full.retained == 40)
-        let scaled = budget.acquire(desiredInFlight: 10, desiredRetained: 40)  // 40 left
+        let second = budget.acquire(desiredInFlight: 10, desiredRetained: 40)  // fits the cap
+        #expect(second.cost == 60)
+        let scaled = budget.acquire(desiredInFlight: 10, desiredRetained: 40)  // 10 left
         #expect(scaled.inFlight < 10 && scaled.retained < 40)
-        #expect(2 * scaled.inFlight + scaled.retained <= 40)
-        let floor = budget.acquire(desiredInFlight: 10, desiredRetained: 40)  // nothing left
+        #expect(scaled.cost <= 10 + 8)
+        let big = budget.acquire(desiredInFlight: 100, desiredRetained: 400)
+        #expect(big.inFlight == 2 && big.retained == 4)
+        let starved = FDBudget(limit: 4)
+        let floor = starved.acquire(desiredInFlight: 10, desiredRetained: 40)
         #expect(floor.inFlight == 2 && floor.retained == 4)
-        #expect(budget.highWater == 60 + 2 * scaled.inFlight + scaled.retained + 8)
-        for g in [full, scaled, floor] { budget.release(g) }
+        for g in [full, second, scaled, big] { budget.release(g) }
         let again = budget.acquire(desiredInFlight: 10, desiredRetained: 40)
         #expect(again.inFlight == 10 && again.retained == 40)
+    }
+
+    @Test func singleGrantIsCappedSoSecondScanGetsAShare() {
+        let budget = FDBudget(limit: 64)
+        let first = budget.acquire(desiredInFlight: 100, desiredRetained: 500)
+        #expect(first.cost <= 32)
+        let second = budget.acquire(desiredInFlight: 100, desiredRetained: 500)
+        #expect(second.cost > 2 * FDBudget.minInFlight + FDBudget.minRetained)
     }
 
     private func restrictedCount(_ tree: FileTree) -> Int {

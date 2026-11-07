@@ -40,8 +40,9 @@ public struct ScanBoundary: Sendable {
     /// When the root lies on an APFS volume, the other mounted volumes of the
     /// same APFS container whose mount points lie strictly inside the root
     /// (Preboot, VM, Update, Recovery for `/`) are made descendable, as
-    /// DaisyDisk counts them; the Data volume is excluded (see above). When
-    /// Preboot is descendable, its `Cryptexes` graft directory is skipped.
+    /// DaisyDisk counts them; the Data volume is excluded (see above). Whenever
+    /// Preboot's `Cryptexes` graft directory lies strictly inside the root
+    /// (the root is Preboot or contains it), it is skipped.
     public static func forRoot(_ path: String) -> ScanBoundary {
         let root = canonicalPath(path) ?? path
         var boundary = ScanBoundary(allowedDevices: [])
@@ -68,7 +69,7 @@ public struct ScanBoundary: Sendable {
                 boundary.allowedDevices.insert(m.device)
             }
         }
-        if boundary.descendableMounts.contains(prebootVolume) {
+        if root != prebootCryptexes && isInside(root, orEqualTo: prebootCryptexes) {
             boundary.skippedPaths.insert(prebootCryptexes)
         }
         return boundary
@@ -126,7 +127,7 @@ extension ScanBoundary {
         let digits = rest.prefix(while: { $0.isASCII && $0.isNumber })
         let after = rest.dropFirst(digits.count)
         guard !digits.isEmpty, after.first == "s",
-              after.dropFirst().first?.isNumber == true else { return nil }
+              after.dropFirst().first.map({ $0.isASCII && $0.isNumber }) == true else { return nil }
         return "disk" + digits
     }
 
