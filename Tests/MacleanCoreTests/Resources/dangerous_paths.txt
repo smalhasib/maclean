@@ -1,0 +1,177 @@
+# Maclean's own adversarial path corpus for ProtectionRules.
+# One path per line. Blank lines and lines starting with # are ignored.
+# `\u{XX}` is decoded to that scalar so control characters stay readable.
+# In collector context every entry is refused except those listed
+# explicitly (with reasons) in ProtectionRulesTests.swift.
+
+# ---- not absolute ----
+relative/path
+./foo
+foo/bar
+~/Documents
+just-a-name
+Library/Caches/com.example.app
+.Trash
+.cache/foo
+../escape
+
+# ---- roots and top-level system directories ----
+/
+/bin
+/sbin
+/usr
+/usr/bin
+/usr/sbin
+/usr/lib
+/usr/libexec
+/usr/share
+/dev
+/dev/null
+/System
+/Library/Extensions
+/private
+/etc
+/private/etc
+/var
+/private/var
+/private/var/db
+/private/tmp
+/tmp
+/cores
+/Users
+/Volumes
+/Applications
+/opt
+
+# ---- case aliases (APFS is case-insensitive) ----
+/SYSTEM
+/system/library
+/DEV
+/Usr/Bin
+/PRIVATE/TMP
+/PRIVATE/VAR/FOLDERS
+/USERS
+/users/ME
+/LIBRARY
+/library/apple/System
+
+# ---- shallow system files ----
+/bin/bash
+/bin/sh
+/sbin/init
+/usr/bin/ls
+/usr/lib/dyld
+/System/Library/CoreServices/Finder.app
+/etc/passwd
+/etc/sudoers
+/etc/hosts
+/private/etc/passwd
+/private/etc/master.passwd
+/var/db/dslocal
+/private/var/db/dslocal/nodes/Default/users/root.plist
+
+# ---- /var, /etc, /tmp vs /private forms ----
+/var/db
+/var/db/sudo
+/var/db/SystemPolicy
+/var/db/uuidtext
+/private/var/db/sudo
+/private/var/db/SystemPolicy
+/private/var/audit
+/var/audit
+/private/var/root
+/var/root
+/var/root/Library
+/private/var/folders
+/var/folders
+
+# ---- traversal ----
+/../etc/passwd
+/Users/../etc/passwd
+/Users/me/../../etc
+/private/var/db/../../../etc/passwd
+/var/../etc/passwd
+/Users/me/Documents/../../../etc
+/../../../../../etc
+/Users/me/Library/Caches/..
+/private/var/folders/..
+/tmp/..
+
+# ---- dot components and empty components ----
+//etc/passwd
+///System
+/etc/./passwd
+/etc/.
+/etc/..
+/System/.
+/Users/me//Documents
+/Users/me/
+/Users/me/Documents/
+
+# ---- control characters ----
+/Users/me/foo\u{1B}bar
+/Users/me/foo\u{00}bar
+/Users/me/foo\u{0A}bar
+/Users/me/foo\u{09}bar
+/Users/me/foo\u{7F}bar
+/Users/me/foo\u{85}bar
+/Users/me/foo\u{9B}bar
+/Users/me/Documents\u{0D}
+
+# ---- protected system caches and namespaces ----
+/System/Library/Caches
+/System/Library/Caches/com.apple.kext.caches
+/System/Library/PrivateFrameworks
+/System/Applications/Mail.app
+/System/Applications/Utilities/Keychain Access.app
+/Library/Apple
+/Library/Apple/System
+/Library/Apple/usr/share
+
+# ---- Data volume aliases ----
+/System/Volumes/Data
+/System/Volumes/Data/.Spotlight-V100
+/System/Volumes/Data/.fseventsd
+/System/Volumes/Data/Users
+/System/Volumes/Data/Users/me
+/System/Volumes/Data/Library
+/System/Volumes/Data/System
+/System/Volumes/Data/private/etc/sudoers
+/System/Volumes/Data/private/var/db
+/System/Volumes/VM
+/System/Volumes/Preboot
+
+# ---- Maclean itself and Time Machine ----
+/Applications/Maclean.app
+/Applications/Maclean.app/Contents
+/Applications/maclean.app/Contents/MacOS/Maclean
+/Volumes/TM
+/Volumes/TM/Backups.backupdb
+/Volumes/.timemachine/ABCD/2026-01-01-000000.backup
+
+# ---- whole disks, home and Library ----
+/Volumes/Ext
+/Library
+/Users/me
+/users/me
+/Users/Shared
+
+# ---- personal data and user-level paths (collectable, see the test) ----
+/Users/me/Library
+/Users/me/Library/Keychains
+/Users/me/Library/Keychains/login.keychain-db
+/users/me/library/KEYCHAINS
+/Library/Keychains
+/Library/Keychains/System.keychain
+/Users/Guest
+/Users/other
+/Users/me/Pictures/Photos Library.photoslibrary
+/Library/Application Support
+/Library/Caches
+/usr/local/lib
+/usr/local/bin/brew
+/opt/homebrew
+/Volumes/Ext/Movies
+/private/var/folders/zz/abc/T
+/tmp/scratch
+/var/tmp/scratch

@@ -15,7 +15,7 @@ let package = Package(
         .target(name: "MacleanKit", dependencies: ["MacleanCore"]),
         .executableTarget(name: "maclean-scan", dependencies: ["MacleanCore"]),
         .executableTarget(name: "Maclean", dependencies: ["MacleanKit", "MacleanCore"]),
-        .testTarget(name: "MacleanCoreTests", dependencies: ["MacleanCore"]),
+        .testTarget(name: "MacleanCoreTests", dependencies: ["MacleanCore"], resources: [.copy("Resources")]),
         .testTarget(name: "MacleanKitTests", dependencies: ["MacleanKit", "MacleanCore"]),
         .testTarget(name: "MacleanAppTests", dependencies: ["Maclean", "MacleanKit", "MacleanCore"]),
     ]
