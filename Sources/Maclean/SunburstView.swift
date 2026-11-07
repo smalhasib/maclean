@@ -61,6 +61,10 @@ private struct SunburstRepresentable: NSViewRepresentable {
             if back { model?.back() } else { model?.forward() }
         }
         view.canSwipe = { [weak model] in (model?.history.canGoBack ?? false, model?.history.canGoForward ?? false) }
+        view.onKey = { [weak model] event in
+            guard let model else { return false }
+            return ResultActions(model: model, router: router).handleKey(event, chart: true)
+        }
         view.onCentreClick = { [weak model] in model?.goUp() }
         view.onFirstFrame = { [weak model] in model?.chartDidDrawFirstFrame() }
         apply(to: view, animated: false)
@@ -192,6 +196,44 @@ final class SunburstChartView: NSView {
     override var isOpaque: Bool { false }
     override var wantsUpdateLayer: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    // MARK: Keyboard focus
+
+    /// Keys while the chart has focus (arrow traversal, Return, Space);
+    /// returns false for keys it doesn't handle.
+    var onKey: ((NSEvent) -> Bool)?
+
+    override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { true }
+
+    override func becomeFirstResponder() -> Bool {
+        noteFocusRingMaskChanged()
+        return true
+    }
+
+    override func resignFirstResponder() -> Bool {
+        noteFocusRingMaskChanged()
+        return true
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if onKey?(event) == true { return }
+        let mods = event.modifierFlags.intersection([.command, .option, .control])
+        if Int(event.keyCode) == KeyCode.tab, mods.isEmpty {
+            // Tab from the chart gives focus back to the list (the content view).
+            window?.makeFirstResponder(window?.contentView)
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    override var focusRingMaskBounds: NSRect { bounds }
+
+    override func drawFocusRingMask() {
+        let g = geometry
+        NSBezierPath(ovalIn: CGRect(x: g.center.x - g.outer, y: g.center.y - g.outer,
+                                    width: 2 * g.outer, height: 2 * g.outer)).fill()
+    }
 
     override func layout() {
         super.layout()
@@ -349,12 +391,30 @@ final class SunburstChartView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        // Control-click is a context-menu click, never a drill.
+        if event.modifierFlags.contains(.control) {
+            pressedHit = nil
+            showContextMenu(for: event)
+            return
+        }
         pressedHit = hit(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        pressedHit = nil
+        showContextMenu(for: event)
+    }
+
+    private func showContextMenu(for event: NSEvent) {
+        guard let menu = menu(for: event) else { return }
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
 
     override func mouseUp(with event: NSEvent) {
         let h = hit(at: convert(event.locationInWindow, from: nil))
         defer { pressedHit = nil }
+        guard pressedHit != nil, !event.modifierFlags.contains(.control) else { return }
         guard h == pressedHit, transition == nil, let chartLayout else { return }
         let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
         switch h {

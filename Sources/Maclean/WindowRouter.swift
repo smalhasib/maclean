@@ -16,16 +16,14 @@ import SwiftUI
 ///   window, reusing the tree.
 ///
 /// A window is identified by (session, node): a request for a path that a
-/// window shows, or was opened at, brings that window forward instead.
+/// window shows now (even minimized or in a background tab) brings that
+/// window forward instead of opening another.
 @MainActor @Observable final class WindowRouter {
     static let ownWindowKey = "openEachScanInOwnWindow"
     static let tabbingIdentifier = "org.maclean.result"
 
     let registry: SessionRegistry
     let startModel: StartModel
-    /// The result in the main (front document) window, nil on the start
-    /// screen; what the menu bar acts on.
-    private(set) var activeModel: ResultViewModel?
 
     /// Opens (or re-opens) the SwiftUI main window; set by the main window's root view.
     @ObservationIgnored var openMainWindow: (() -> Void)?
@@ -34,13 +32,10 @@ import SwiftUI
     private struct Entry {
         weak var window: NSWindow?
         let model: ResultViewModel
-        /// The path the window was opened at (its tree root for the main window).
-        let origin: String
     }
     @ObservationIgnored private var entries: [ObjectIdentifier: Entry] = [:]
     /// Result windows the router created (kept alive until closed).
     @ObservationIgnored private var owned: [ObjectIdentifier: NSWindow] = [:]
-    @ObservationIgnored private var origins: [ObjectIdentifier: String] = [:]
     @ObservationIgnored private var observers: [any NSObjectProtocol] = []
     @ObservationIgnored private let defaults: UserDefaults
 
@@ -49,11 +44,6 @@ import SwiftUI
         self.startModel = startModel
         self.defaults = defaults
         let center = NotificationCenter.default
-        for name in [NSWindow.didBecomeMainNotification, NSWindow.didResignMainNotification] {
-            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.updateActive() }
-            })
-        }
         observers.append(center.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) {
             [weak self] note in
             let id = (note.object as? NSWindow).map(ObjectIdentifier.init)
@@ -82,7 +72,7 @@ import SwiftUI
             return
         }
         if let window = window(showing: session, at: path) {
-            window.makeKeyAndOrderFront(nil)
+            bringForward(window)
             return
         }
         openWindow(session: session, at: path)
@@ -97,7 +87,7 @@ import SwiftUI
             return
         }
         if let entry = entries.values.first(where: { $0.model.session === session }), let window = entry.window {
-            window.makeKeyAndOrderFront(nil)
+            bringForward(window)
             return
         }
         if newWindow || opensOwnWindows {
@@ -116,8 +106,8 @@ import SwiftUI
 
     /// Brings the main window (start screen or launcher) forward, re-opening it if closed.
     func showLauncher() {
-        if let mainWindow, mainWindow.isVisible {
-            mainWindow.makeKeyAndOrderFront(nil)
+        if let mainWindow, mainWindow.isVisible || mainWindow.isMiniaturized {
+            bringForward(mainWindow)
         } else {
             openMainWindow?()
         }
@@ -163,29 +153,34 @@ import SwiftUI
 
     func register(model: ResultViewModel, window: NSWindow) {
         let id = ObjectIdentifier(window)
-        let origin = origins[id] ?? model.tree.rootPath
         if let existing = entries[id], existing.model === model { return }
-        entries[id] = Entry(window: window, model: model, origin: origin)
-        updateActive()
+        entries[id] = Entry(window: window, model: model)
     }
 
     func unregister(model: ResultViewModel, window: NSWindow?) {
         guard let window else {
             entries = entries.filter { $0.value.model !== model }
-            updateActive()
             return
         }
         let id = ObjectIdentifier(window)
         if entries[id]?.model === model { entries[id] = nil }
-        updateActive()
+    }
+
+    /// The result in the front document window (the main window, which stays
+    /// put while the Quick Look panel is key), looked up when a menu item is
+    /// chosen; nil on the start screen.
+    var frontModel: ResultViewModel? {
+        guard let window = NSApp.mainWindow ?? NSApp.keyWindow else { return nil }
+        return entries[ObjectIdentifier(window)]?.model
     }
 
     // MARK: Private
 
-    private func updateActive() {
-        let main = NSApp.mainWindow
-        let model = main.flatMap { entries[ObjectIdentifier($0)]?.model }
-        if activeModel !== model { activeModel = model }
+    /// Brings `window` forward even when it is minimized or a background tab.
+    private func bringForward(_ window: NSWindow) {
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        if let group = window.tabGroup, group.selectedWindow !== window { group.selectedWindow = window }
+        window.makeKeyAndOrderFront(nil)
     }
 
     private func activeModelInMainWindow() -> ResultViewModel? {
@@ -196,10 +191,11 @@ import SwiftUI
         entries.values.first { $0.model === model }
     }
 
+    /// A window showing `session` at `path` now (minimized or a background
+    /// tab included): one window per (tree, node).
     private func window(showing session: ScanSession, at path: String) -> NSWindow? {
         entries.values.first { entry in
-            entry.model.session === session && entry.window?.isVisible == true
-                && (entry.model.history.current == path || entry.origin == path)
+            entry.model.session === session && entry.model.history.current == path && entry.window != nil
         }?.window
     }
 
@@ -222,18 +218,15 @@ import SwiftUI
         }
         let id = ObjectIdentifier(window)
         owned[id] = window
-        origins[id] = path
         window.makeKeyAndOrderFront(nil)
     }
 
     private func windowWillClose(_ id: ObjectIdentifier) {
         entries[id] = nil
-        origins[id] = nil
         if let window = owned.removeValue(forKey: id) {
             // Release the SwiftUI content (and its tree) with the window.
             DispatchQueue.main.async { window.contentViewController = nil }
         }
-        updateActive()
     }
 
     static func title(for path: String) -> String {
@@ -306,10 +299,14 @@ struct ResultWindowBridge: NSViewRepresentable {
     }
 
     final class BridgeView: NSView {
+        /// Invisible helper: never the target of clicks (it spans the whole
+        /// result and would otherwise take right-clicks from SwiftUI's context menus).
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
         var model: ResultViewModel?
         weak var router: WindowRouter?
         private weak var attachedWindow: NSWindow?
-        private let preview = PreviewResponder()
+        private let preview = ResultResponder()
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -318,6 +315,9 @@ struct ResultWindowBridge: NSViewRepresentable {
 
         func attach() {
             guard let window, let model else { return }
+            preview.model = model
+            preview.router = router
+            preview.hostWindow = window
             if attachedWindow !== window {
                 detach()
                 attachedWindow = window
@@ -362,6 +362,10 @@ struct MainWindowAccessor: NSViewRepresentable {
     func updateNSView(_ view: AccessorView, context: Context) {}
 
     final class AccessorView: NSView {
+        /// Invisible helper: never the target of clicks (it spans the whole
+        /// result and would otherwise take right-clicks from SwiftUI's context menus).
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
         weak var router: WindowRouter?
 
         override func viewDidMoveToWindow() {

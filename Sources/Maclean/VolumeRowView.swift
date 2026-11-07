@@ -147,7 +147,10 @@ struct VolumeRowView: View {
                 .disabled(session?.isScanning ?? false)
                 Divider()
                 Button("Show in Finder") { report(Actions.showInFinder(path)) }
-                Button("Get Info") { report(Actions.getInfo(path)) }
+                Button("Get Info") {
+                    let start = router?.startModel
+                    report(Actions.getInfo(path) { start?.report(Actions.finderPermissionMessage) })
+                }
                 Divider()
                 Button("Forget Scan Result") { registry.forget(path: path) }
                     .disabled(session.map(\.isScanning) ?? true)

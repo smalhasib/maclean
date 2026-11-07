@@ -72,7 +72,12 @@ import UniformTypeIdentifiers
     }
 
     func reportMissing(_ name: String) {
-        notice = (UUID(), "“\(name)” no longer exists")
+        report("“\(name)” no longer exists")
+    }
+
+    /// Shows an inline message on the start screen.
+    func report(_ text: String) {
+        notice = (UUID(), text)
     }
 
     func dismissNotice(_ id: UUID? = nil) {

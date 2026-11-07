@@ -169,8 +169,14 @@ private struct RowBlock: View {
         }
         .onTapGesture(coordinateSpace: .local) { point in
             guard let node = node(at: point.y, kids: kids) else { return }
-            // ⌘-click: Show in Finder; ⌥-click a folder: Open in New Window.
             let flags = NSEvent.modifierFlags.intersection([.command, .option, .shift, .control])
+            // Control-click opens the context menu; it never drills.
+            if flags.contains(.control) { return }
+            // Clicking the list gives it keyboard focus back from the chart.
+            if let window = NSApp.keyWindow, window.firstResponder is SunburstChartView {
+                window.makeFirstResponder(window.contentView)
+            }
+            // ⌘-click: Show in Finder; ⌥-click a folder: Open in New Window.
             if ResultActions(model: model, router: router).modifiedClick(node, flags: flags) { return }
             model.activate(node)
         }

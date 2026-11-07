@@ -6,29 +6,19 @@ import SwiftUI
 /// A scan result: breadcrumbs on top, the ring chart and side list, and the
 /// collector bar at the bottom.
 ///
-/// Keyboard (spec §6): the list holds focus by default and Tab moves between
-/// the toolbar, the list and the chart. Keys not taken by the menu bar are
-/// handled here for whichever of the list and chart has focus; actions apply
-/// to the item under the pointer first, else the selection.
+/// Keyboard (spec §6) is handled in AppKit, so no SwiftUI focus wrapper sits
+/// over the rows and chart (it would swallow their context menus): the chart
+/// is its own first responder (arrow-key traversal), and every other key
+/// reaches the window's `ResultResponder` (list selection, Return, Space).
+/// The list "holds focus" whenever the chart doesn't; Tab toggles between them.
 struct ResultView: View {
-    enum Focus: Hashable { case list, chart }
-
     let model: ResultViewModel
     let router: WindowRouter?
     let onDisks: () -> Void
     // `State` used as a type: the `@State` macro's plugin ships only with Xcode.
     private let grown = State(initialValue: false)
-    @FocusState private var focus: Focus?
 
     static let minimumSize = CGSize(width: 760, height: 520)
-
-    init(model: ResultViewModel, router: WindowRouter?, onDisks: @escaping () -> Void) {
-        self.model = model
-        self.router = router
-        self.onDisks = onDisks
-    }
-
-    private var actions: ResultActions { ResultActions(model: model, router: router) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -39,17 +29,10 @@ struct ResultView: View {
                 SunburstView(model: model)
                     .frame(minWidth: 220, maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityLabel("Ring chart")
-                    .focusable()
-                    .focusEffectDisabled()
-                    .focused($focus, equals: .chart)
                 Divider()
                 SideListView(model: model)
                     .frame(width: 280)
-                    .focusable()
-                    .focusEffectDisabled()
-                    .focused($focus, equals: .list)
             }
-            .onKeyPress(phases: [.down, .repeat]) { press in handleKey(press) }
             Divider()
             CollectorBar()
         }
@@ -60,54 +43,10 @@ struct ResultView: View {
         .background(WindowGrower(minimum: Self.minimumSize) { grown.wrappedValue = true })
         .background(ResultWindowBridge(model: model, router: router, title: model.name(of: model.currentNode)))
         .environment(\.windowRouter, router)
-        .defaultFocus($focus, .list)
-        .onAppear { DispatchQueue.main.async { if focus == nil { focus = .list } } }
         .onChange(of: model.selected) { _, node in
             // Quick Look follows the keyboard selection while it's open.
             if let node, model.hovered == nil { QuickLookBridge.follow(path: model.tree.path(of: node)) }
         }
-    }
-
-    private func handleKey(_ press: KeyPress) -> KeyPress.Result {
-        let mods = press.modifiers.intersection([.command, .shift, .option, .control])
-        let target = model.actionTarget
-        switch (press.key, mods) {
-        case (.return, []):
-            if let target { actions.enter(target) }
-            return .handled
-        case (.downArrow, .command):
-            if let target { actions.enter(target) }
-            return .handled
-        case (.space, []):
-            if let target { actions.preview(target) }
-            return .handled
-        case (KeyEquivalent("n"), [.command, .shift]), (KeyEquivalent("N"), [.command, .shift]):
-            if let target { actions.openInNewWindow(target) }
-            return .handled
-        default:
-            break
-        }
-        guard mods.isEmpty else { return .ignored }
-        if focus == .chart {
-            switch press.key {
-            case .leftArrow: model.traverse(.previous)
-            case .rightArrow: model.traverse(.next)
-            case .upArrow: model.traverse(.out)
-            case .downArrow: model.traverse(.into)
-            default: return .ignored
-            }
-            return .handled
-        }
-        switch press.key {
-        case .upArrow: model.moveSelection(.up)
-        case .downArrow: model.moveSelection(.down)
-        case .pageUp: model.moveSelection(.pageUp)
-        case .pageDown: model.moveSelection(.pageDown)
-        case .home: model.moveSelection(.home)
-        case .end: model.moveSelection(.end)
-        default: return .ignored
-        }
-        return .handled
     }
 }
 
@@ -212,6 +151,10 @@ private struct WindowGrower: NSViewRepresentable {
     func updateNSView(_ view: GrowerView, context: Context) {}
 
     final class GrowerView: NSView {
+        /// Invisible helper: never the target of clicks (it spans the whole
+        /// result and would otherwise take right-clicks from SwiftUI's context menus).
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
         var minimum: CGSize = .zero
         var done: (() -> Void)?
         private var grew = false

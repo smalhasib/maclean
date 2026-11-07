@@ -4,7 +4,7 @@ import Quartz
 /// Quick Look for the item under the pointer or the selection.
 ///
 /// `QLPreviewPanel` looks for its controller in the key window's responder
-/// chain, so every result window inserts a `PreviewResponder` right after the
+/// chain, so every result window inserts a `ResultResponder` right after the
 /// window (see `ResultWindowBridge`). The previewed URL is app-wide: there is
 /// only one panel.
 @MainActor enum QuickLookBridge {
@@ -35,8 +35,31 @@ import Quartz
     }
 }
 
-/// The panel's controller, inserted into a result window's responder chain.
-final class PreviewResponder: NSResponder, QLPreviewPanelDataSource, QLPreviewPanelDelegate {
+/// Sits right after a result window in its responder chain: the Quick Look
+/// panel's controller, and the handler of the list's keys (↑/↓, Page Up/Down,
+/// Home/End, Return, Space) when no view before it took them.
+final class ResultResponder: NSResponder, QLPreviewPanelDataSource, QLPreviewPanelDelegate {
+    weak var model: ResultViewModel?
+    weak var router: WindowRouter?
+    /// The window whose chain this responder sits in.
+    weak var hostWindow: NSWindow?
+
+    override func keyDown(with event: NSEvent) {
+        if let model, ResultActions(model: model, router: router).handleKey(event, chart: false) { return }
+        if Int(event.keyCode) == KeyCode.tab, let chart = hostWindow?.contentView.flatMap(Self.chart(in:)) {
+            // Tab from the list moves focus to the chart.
+            chart.window?.makeFirstResponder(chart)
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    static func chart(in view: NSView) -> SunburstChartView? {
+        if let chart = view as? SunburstChartView { return chart }
+        for sub in view.subviews { if let chart = chart(in: sub) { return chart } }
+        return nil
+    }
+
     override nonisolated func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { true }
 
     override nonisolated func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {

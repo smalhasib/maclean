@@ -30,21 +30,49 @@ enum ActionResult: Equatable { case ok, missing }
         return .ok
     }
 
-    /// Opens Finder's Get Info window for `path` (an Apple Event to Finder;
-    /// macOS asks once for the Automation permission).
-    static func getInfo(_ path: String) -> ActionResult {
+    /// Opens Finder's Get Info window for `path`: `osascript` sends Finder an
+    /// Apple Event, off the main thread, with the path passed in argv (no
+    /// escaping). macOS asks once for the Automation permission; if it was
+    /// denied, `onDenied` runs on the main actor.
+    static func getInfo(_ path: String, onDenied: (@MainActor () -> Void)? = nil) -> ActionResult {
         guard exists(path) else { return .missing }
-        let escaped = path.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
-        let source = """
-            tell application "Finder"
-                activate
-                open information window of (POSIX file "\(escaped)" as alias)
-            end tell
-            """
-        var error: NSDictionary?
-        NSAppleScript(source: source)?.executeAndReturnError(&error)
-        if let error { NSLog("Maclean: Get Info failed: %@", error) }
+        Task.detached(priority: .userInitiated) {
+            let denied = runGetInfoScript(path)
+            if denied, let onDenied { await MainActor.run { onDenied() } }
+        }
         return .ok
+    }
+
+    /// Message shown when the Automation permission for Finder is denied.
+    static let finderPermissionMessage = "Maclean needs permission to control Finder for Get Info"
+
+    /// Runs the Get Info script; returns true when Automation was denied (-1743).
+    private nonisolated static func runGetInfoScript(_ path: String) -> Bool {
+        let lines = [
+            "on run argv",
+            "tell application \"Finder\"",
+            "activate",
+            "open information window of (POSIX file (item 1 of argv) as alias)",
+            "end tell",
+            "end run",
+        ]
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = lines.flatMap { ["-e", $0] } + [path]
+        let errors = Pipe()
+        process.standardError = errors
+        process.standardOutput = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            NSLog("Maclean: Get Info failed to start osascript: %@", String(describing: error))
+            return false
+        }
+        let message = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        guard process.terminationStatus != 0 else { return false }
+        NSLog("Maclean: Get Info failed: %@", message)
+        return message.contains("-1743") || message.localizedCaseInsensitiveContains("not authorized")
     }
 
     static func launchDiskUtility() {
@@ -53,6 +81,13 @@ enum ActionResult: Equatable { case ok, missing }
     }
 
     static func exists(_ path: String) -> Bool { FileManager.default.fileExists(atPath: path) }
+}
+
+/// Virtual key codes of the keys the result window handles itself.
+enum KeyCode {
+    static let `return` = 36, enter = 76, space = 49, tab = 48
+    static let left = 123, right = 124, down = 125, up = 126
+    static let pageUp = 116, pageDown = 121, home = 115, end = 119
 }
 
 /// One item of an item's context menu, rendered by SwiftUI (list rows) and
@@ -123,6 +158,29 @@ struct ContextItem {
         if flags.contains(.command) { showInFinder(node); return true }
         if flags.contains(.option), canOpenInNewWindow(node) { openInNewWindow(node); return true }
         return false
+    }
+
+    /// Keys not taken by the menu bar (spec §6), for the list (`chart` false)
+    /// or the chart. Returns false for keys it doesn't handle.
+    func handleKey(_ event: NSEvent, chart: Bool) -> Bool {
+        let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        guard mods.isEmpty else { return false }
+        switch Int(event.keyCode) {
+        case KeyCode.return, KeyCode.enter:
+            if let target = model.actionTarget { enter(target) }
+        case KeyCode.space:
+            if let target = model.actionTarget { preview(target) }
+        case KeyCode.left where chart: model.traverse(.previous)
+        case KeyCode.right where chart: model.traverse(.next)
+        case KeyCode.up: if chart { model.traverse(.out) } else { model.moveSelection(.up) }
+        case KeyCode.down: if chart { model.traverse(.into) } else { model.moveSelection(.down) }
+        case KeyCode.pageUp where !chart: model.moveSelection(.pageUp)
+        case KeyCode.pageDown where !chart: model.moveSelection(.pageDown)
+        case KeyCode.home where !chart: model.moveSelection(.home)
+        case KeyCode.end where !chart: model.moveSelection(.end)
+        default: return false
+        }
+        return true
     }
 
     /// Context menu of an item (spec §5.3).
