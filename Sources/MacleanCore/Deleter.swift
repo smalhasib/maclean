@@ -71,13 +71,27 @@ public struct Deleter: Sendable {
         if let refusal = ProtectionRules.refusal(for: request.path, context: .collector, in: environment) {
             return .refused(refusal)
         }
-        guard let (parent, name) = Self.split(request.path) else { return .refused(.unsafePath) }
-
-        // The parent fd pins the directory the identity check ran in: the
-        // removal happens relative to it even if an ancestor is swapped later.
-        let pfd = open(parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
-        guard pfd >= 0 else { return Self.outcome(errno: errno, started: false) }
+        let pfd: Int32
+        switch Self.openParent(of: request.path) {
+        case .failure(let early): return early.outcome
+        case .success(let fd): pfd = fd
+        }
         defer { close(pfd) }
+        return await delete(request, force: force, parentFD: pfd)
+    }
+
+    /// Deletes `request`'s item relative to `parentFD`, an open directory fd
+    /// for the item's parent (the caller keeps ownership and closes it). The
+    /// identity check and a permanent removal happen relative to this fd, so
+    /// a caller that checked the fd's real location (`F_GETPATH`) deletes
+    /// exactly there, even if an ancestor of the path is swapped meanwhile.
+    /// (The changed-since-scan re-walk and a trash-mode move still go by path;
+    /// the identity check guards both.)
+    public func delete(_ request: DeleteRequest, force: Bool = false, parentFD pfd: Int32) async -> DeleteOutcome {
+        if let refusal = ProtectionRules.refusal(for: request.path, context: .collector, in: environment) {
+            return .refused(refusal)
+        }
+        guard let (_, name) = Self.split(request.path) else { return .refused(.unsafePath) }
 
         var st: stat
         switch Self.identity(pfd, name, request) {
@@ -163,7 +177,17 @@ public struct Deleter: Sendable {
         fileCount != request.fileCount || abs(size - request.size) > max(request.size / 100, 1_048_576)
     }
 
-    private struct Early: Error { let outcome: DeleteOutcome }
+    struct Early: Error { let outcome: DeleteOutcome }
+
+    /// Opens `path`'s parent directory (following symlinks, as a path open
+    /// does), or the outcome to report when that fails. The parent fd pins
+    /// the directory the identity check runs in.
+    static func openParent(of path: String) -> Result<Int32, Early> {
+        guard let (parent, _) = split(path) else { return .failure(Early(outcome: .refused(.unsafePath))) }
+        let fd = open(parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard fd >= 0 else { return .failure(Early(outcome: outcome(errno: errno, started: false))) }
+        return .success(fd)
+    }
 
     private static func identity(_ pfd: Int32, _ name: [CChar], _ request: DeleteRequest) -> Result<stat, Early> {
         var st = stat()
@@ -298,7 +322,7 @@ public struct Deleter: Sendable {
     }
 
     /// The parent directory and the NUL-terminated last component of an absolute path.
-    private static func split(_ path: String) -> (String, [CChar])? {
+    static func split(_ path: String) -> (String, [CChar])? {
         guard let slash = path.lastIndex(of: "/") else { return nil }
         let name = path[path.index(after: slash)...]
         guard !name.isEmpty else { return nil }

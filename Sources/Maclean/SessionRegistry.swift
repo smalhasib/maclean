@@ -50,6 +50,8 @@ import Observation
     @discardableResult
     func startScan(path: String, expected: Int64? = nil, newWindow: Bool = false) -> ScanSession {
         let key = Self.canonical(path)
+        // A delete on this path's result must finish (or be cancelled) first.
+        if let existing = sessions[key], existing.isDeleting { return existing }
         presented = nil
         resume = nil
         defer { onUserScan?() }
@@ -73,7 +75,7 @@ import Observation
     /// only if it shows this session; other windows on it keep their result
     /// up with a "Rescanning…" banner and remap when it finishes.
     func rescan(canonical path: String) {
-        guard let session = sessions[path], !session.isScanning else { return }
+        guard let session = sessions[path], !session.isScanning, !session.isDeleting else { return }
         if presented === session {
             presented = nil
             resume = session
@@ -84,10 +86,18 @@ import Observation
     }
 
     /// Forgets the in-memory result for `path`, cancelling a scan in progress
-    /// and clearing its collector (the caller confirms a non-empty one).
-    func forget(path: String) {
+    /// and clearing its collector (the caller confirms a non-empty one). A
+    /// delete counting down is cancelled (nothing deleted) and a delete
+    /// summary dismissed; while a delete runs, nothing happens and false is
+    /// returned (the delete must finish where it can be seen).
+    @discardableResult
+    func forget(path: String) -> Bool {
         let key = sessions[path] != nil ? path : Self.canonical(path)
-        guard let session = sessions.removeValue(forKey: key) else { return }
+        guard let session = sessions[key] else { return true }
+        if session.isDeleting, let deletion = session.deletionController, !deletion.abandonForForget() {
+            return false
+        }
+        sessions[key] = nil
         order.removeAll { $0 == key }
         session.cancel()
         session.uncollectAll()
@@ -96,6 +106,7 @@ import Observation
         if resume === session { resume = nil }
         newWindowSessions.remove(ObjectIdentifier(session))
         onForget?(session)
+        return true
     }
 
     private func finished(_ session: ScanSession) {

@@ -168,7 +168,8 @@ struct VolumeRowView: View {
                         registry.startScan(path: path, expected: expected)
                     }
                 }
-                .disabled(session?.isScanning ?? false)
+                // A delete on the result must finish (or be cancelled) first.
+                .disabled(session.map { $0.isScanning || $0.isDeleting } ?? false)
                 Divider()
                 Button("Show in Finder") { report(Actions.showInFinder(path)) }
                 Button("Get Info") {
@@ -177,7 +178,7 @@ struct VolumeRowView: View {
                 }
                 Divider()
                 Button("Forget Scan Result") { forget(session) }
-                    .disabled(session.map(\.isScanning) ?? true)
+                    .disabled(session.map { $0.isScanning || $0.deletionController?.isRunning == true } ?? true)
             } label: {
                 Image(systemName: "chevron.down")
             }
@@ -192,7 +193,7 @@ struct VolumeRowView: View {
             get: { forgetCount.wrappedValue != nil },
             set: { if !$0 { forgetCount.wrappedValue = nil } }
         )) {
-            Button("Forget", role: .destructive) { registry.forget(path: path) }
+            Button("Forget", role: .destructive) { forgetNow() }
             Button("Cancel", role: .cancel) {}
         } message: {
             let n = forgetCount.wrappedValue ?? 0
@@ -207,9 +208,18 @@ struct VolumeRowView: View {
         if count > 0 {
             forgetCount.wrappedValue = count
         } else {
-            registry.forget(path: path)
+            forgetNow()
         }
     }
+
+    /// Forgets the result; refused while a delete on it runs.
+    private func forgetNow() {
+        if !registry.forget(path: path) {
+            router?.startModel.report(Self.forgetWhileDeleting)
+        }
+    }
+
+    static let forgetWhileDeleting = "Wait for the delete to finish before forgetting this scan."
 
     private func report(_ result: ActionResult) {
         if result == .missing { router?.startModel.reportMissing(title) }

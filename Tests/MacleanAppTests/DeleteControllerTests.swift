@@ -287,3 +287,111 @@ private struct Fixture {
     #expect(collectedPaths(f) == [f.paths[1]])
     #expect(report.freed == 0)
 }
+
+@MainActor private func registryFixture(_ count: Int) async throws -> (SessionRegistry, Fixture) {
+    let s = Scratch()
+    for i in 0..<count { s.file("f\(i).bin", bytes: 4096) }
+    let registry = SessionRegistry()
+    let session = registry.startScan(path: s.path)
+    while session.isScanning { try? await Task.sleep(for: .milliseconds(10)) }
+    let tree = try #require(session.tree)
+    let paths = (0..<count).map { s.path + "/f\($0).bin" }
+    session.collect(paths.compactMap { tree.node(atPath: $0) })
+    return (registry, Fixture(scratch: s, session: session, paths: paths))
+}
+
+@Test @MainActor func forgetDuringCountdownDeletesNothing() async throws {
+    let (registry, f) = try await registryFixture(2)
+    let deleter = FakeDeleter(), clock = TestClock()
+    let c = controller(f, deleter, clock: clock)
+    f.session.deletionController = c
+    c.start()
+    await until { clock.sleeperCount > 0 }
+    #expect(registry.forget(path: f.session.rootPath))
+    #expect(registry.session(canonical: f.session.rootPath) == nil)
+    #expect(c.phase == .idle)
+    for _ in 0..<6 { clock.advance(by: .seconds(1)) }
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(deleter.calls.isEmpty)
+}
+
+@Test @MainActor func forgetIsRefusedWhileRunning() async throws {
+    let (registry, f) = try await registryFixture(2)
+    let deleter = FakeDeleter(), clock = TestClock()
+    let c = controller(f, deleter, clock: clock)
+    f.session.deletionController = c
+    let root = f.session.rootPath
+    let refused = Flag()
+    deleter.after = { n in
+        if n == 1 { await MainActor.run { refused.value = !registry.forget(path: root) } }
+    }
+    c.start()
+    let report = try #require(await runToSummary(c, clock))
+    #expect(refused.value)
+    #expect(report.deleted.count == 2)
+    #expect(registry.session(canonical: f.session.rootPath) === f.session)
+}
+
+@Test @MainActor func lastWindowClosingDuringCountdownDeletesNothing() async throws {
+    let f = try await fixture(2)
+    let deleter = FakeDeleter(), clock = TestClock()
+    let c = controller(f, deleter, clock: clock)
+    c.start()
+    await until { clock.sleeperCount > 0 }
+    c.noWindowLeft()   // what WindowRouter calls once no window shows the session
+    #expect(c.phase == .idle)
+    #expect(!f.session.isDeleting)
+    for _ in 0..<6 { clock.advance(by: .seconds(1)) }
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(deleter.calls.isEmpty)
+    #expect(collectedPaths(f) == f.paths.sorted())
+}
+
+@Test @MainActor func lastWindowClosingWhileRunningStopsAfterCurrentItem() async throws {
+    let f = try await fixture(4)
+    let deleter = FakeDeleter(), clock = TestClock()
+    let c = controller(f, deleter, clock: clock)
+    deleter.after = { n in if n == 1 { await MainActor.run { c.noWindowLeft() } } }
+    c.start()
+    let report = try #require(await runToSummary(c, clock))
+    #expect(deleter.calls.count == 1)
+    #expect(report.deleted.count == 1)
+    #expect(f.session.view?.collected.count == 3)
+}
+
+@Test @MainActor func rescanIsBlockedWhileDeleting() async throws {
+    let (registry, f) = try await registryFixture(1)
+    let c = controller(f, FakeDeleter(), clock: TestClock())
+    f.session.deletionController = c
+    c.start()
+    #expect(f.session.isDeleting)
+    let tree = f.session.tree
+    f.session.rescan()
+    #expect(!f.session.isScanning)
+    registry.rescan(canonical: f.session.rootPath)
+    #expect(!f.session.isScanning)
+    #expect(registry.startScan(path: f.session.rootPath) === f.session)
+    #expect(!f.session.isScanning)
+    #expect(f.session.tree === tree)
+    c.cancel()
+}
+
+@Test @MainActor func stopReportsQueuedAdminItems() async throws {
+    let f = try await fixture(3)
+    let deleter = FakeDeleter { r, _ in r.path.hasSuffix("f0.bin") ? .needsAdmin(started: false) : .deleted(freed: r.size) }
+    let admin = FakeAdmin { _ in "" }
+    let clock = TestClock()
+    let c = controller(f, deleter, admin: admin, clock: clock)
+    deleter.after = { n in if n == 2 { await MainActor.run { c.cancel() } } }
+    c.start()
+    let report = try #require(await runToSummary(c, clock))
+    #expect(admin.received.isEmpty)
+    #expect(report.failed[f.paths[0]] == DeleteController.stoppedBeforeAdmin)
+    #expect(collectedPaths(f) == [f.paths[0], f.paths[2]])
+}
+
+@MainActor private final class Flag { var value = false }
+
+@Test @MainActor func trashSettingKey() {
+    #expect(DeleteController.trashKey == "MoveToTrashInsteadOfDeleting")
+}

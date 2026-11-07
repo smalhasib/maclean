@@ -106,9 +106,10 @@ import Observation
     }
 
     /// Rescans the root in full; the new tree replaces the old one and the
-    /// history is remapped by path.
+    /// history is remapped by path. A no-op while a delete is running (its
+    /// node ids belong to the current tree).
     func rescan() {
-        guard task == nil else { return }
+        guard task == nil, !isDeleting else { return }
         start()
     }
 

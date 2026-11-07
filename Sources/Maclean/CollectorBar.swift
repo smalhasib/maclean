@@ -73,16 +73,23 @@ struct CollectorBar: View {
                 .keyboardShortcut(.cancelAction)
                 .help("Cancel the delete; nothing is deleted")
         case .running(let done, let total):
-            Text("Deleting \(done.formatted()) of \(total.formatted())…")
-                .monospacedDigit()
-                .lineLimit(1)
-            ProgressView(value: Double(done), total: Double(max(total, 1)))
-                .frame(maxWidth: 220)
-                .accessibilityLabel("Delete progress")
-            Spacer(minLength: 8)
-            Button("Stop") { controller.cancel() }
-                .keyboardShortcut(.cancelAction)
-                .help("Stop after the current item; the rest stay collected")
+            if controller.awaitingAdmin {
+                ProgressView().controlSize(.small)
+                Text("Waiting for administrator password…")
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+            } else {
+                Text("Deleting \(done.formatted()) of \(total.formatted())…")
+                    .monospacedDigit()
+                    .lineLimit(1)
+                ProgressView(value: Double(done), total: Double(max(total, 1)))
+                    .frame(maxWidth: 220)
+                    .accessibilityLabel("Delete progress")
+                Spacer(minLength: 8)
+                Button("Stop") { controller.cancel() }
+                    .keyboardShortcut(.cancelAction)
+                    .help("Stop after the current item; the rest stay collected")
+            }
         case .idle, .summary:
             Text("\(SizeText.string(view.collectedSize)) collected")
                 .monospacedDigit()

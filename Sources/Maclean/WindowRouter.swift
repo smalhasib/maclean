@@ -191,13 +191,16 @@ import SwiftUI
 
     // MARK: Rescans
 
-    /// ⌘R: rescans the session root in full; every window on it remaps by path.
+    /// ⌘R: rescans the session root in full; every window on it remaps by
+    /// path. A no-op while the session deletes.
     func rescan(_ model: ResultViewModel) {
         registry.rescan(canonical: model.session.rootPath)
     }
 
-    /// ⇧⌘R: rescans the volume the result lives on.
+    /// ⇧⌘R: rescans the volume the result lives on. A no-op while the
+    /// result's session deletes.
     func rescanDisk(_ model: ResultViewModel) {
+        guard !model.session.isDeleting else { return }
         let root = model.tree.rootPath
         let volume = startModel.volumes
             .filter { PathUtil.isInside(root, orEqualTo: $0.entry.scanPath) }
@@ -219,12 +222,26 @@ import SwiftUI
     }
 
     func unregister(model: ResultViewModel, window: NSWindow?) {
+        defer { checkWindows(of: model.session) }
         guard let window else {
             entries = entries.filter { $0.value.model !== model }
             return
         }
         let id = ObjectIdentifier(window)
         if entries[id]?.model === model { entries[id] = nil }
+    }
+
+    /// A delete must stay visible: once no result window shows its session
+    /// (checked a turn later, so a view moving between windows doesn't
+    /// count), a countdown is cancelled and a run stops after the current item.
+    private func checkWindows(of session: ScanSession) {
+        guard session.isDeleting else { return }
+        DispatchQueue.main.async { [weak self, weak session] in
+            guard let self, let session, session.isDeleting,
+                  !self.entries.values.contains(where: { $0.model.session === session && $0.window != nil })
+            else { return }
+            session.deletionController?.noWindowLeft()
+        }
     }
 
     /// The result in the front document window (the main window, which stays
@@ -291,7 +308,7 @@ import SwiftUI
     }
 
     private func windowWillClose(_ id: ObjectIdentifier) {
-        entries[id] = nil
+        if let session = entries.removeValue(forKey: id)?.model.session { checkWindows(of: session) }
         if let window = owned.removeValue(forKey: id)?.window {
             // Release the SwiftUI content (and its tree) with the window.
             DispatchQueue.main.async { window.contentViewController = nil }

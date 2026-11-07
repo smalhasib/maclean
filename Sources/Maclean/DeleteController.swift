@@ -45,11 +45,12 @@ struct DeleteReport: Equatable {
     }
 
     /// UserDefaults key of Settings' "Move to Trash instead of deleting permanently".
-    static let trashKey = "moveToTrash"
+    static let trashKey = "MoveToTrashInsteadOfDeleting"
     static let countdownSeconds = 5
     static let trashNeedsAdmin = "Needs administrator rights, so it can't be moved to the Trash. "
         + "Turn off “Move to Trash” in Settings to delete it."
     static let adminNotGiven = "Administrator password not given."
+    static let stoppedBeforeAdmin = "Stopped before the administrator step."
 
     private(set) var phase: Phase = .idle
     /// The mode of the current (or last) run, read from Settings at `start()`.
@@ -57,6 +58,9 @@ struct DeleteReport: Equatable {
     /// The items and total size the countdown announces.
     private(set) var pendingCount = 0
     private(set) var pendingSize: Int64 = 0
+    /// True while the administrator prompt (and the helper) runs; Stop is
+    /// unavailable then.
+    private(set) var awaitingAdmin = false
 
     @ObservationIgnored private weak var session: ScanSession?
     @ObservationIgnored private let makeDeleter: (DeleteMode) -> any DeleterProtocol
@@ -86,6 +90,12 @@ struct DeleteReport: Equatable {
         self.admin = admin
         self.clock = clock
         self.defaults = defaults
+    }
+
+    /// Deleting (or waiting for the administrator step), past the countdown.
+    var isRunning: Bool {
+        if case .running = phase { return true }
+        return false
     }
 
     /// Counting down or running.
@@ -133,7 +143,8 @@ struct DeleteReport: Equatable {
     }
 
     /// During the countdown: back to idle, nothing deleted. While running:
-    /// stops after the current item (the administrator batch is skipped).
+    /// stops after the current item (queued administrator items are reported
+    /// as stopped). Not while the administrator prompt is up.
     func cancel() {
         switch phase {
         case .countdown:
@@ -141,9 +152,32 @@ struct DeleteReport: Equatable {
             task = nil
             reset()
         case .running:
-            stopRequested = true
+            if !awaitingAdmin { stopRequested = true }
         case .idle, .summary:
             break
+        }
+    }
+
+    /// The session is being forgotten. Returns whether that may go ahead:
+    /// a countdown is cancelled (nothing deleted) and a summary dismissed,
+    /// but a running delete refuses (it must finish where it can be seen).
+    func abandonForForget() -> Bool {
+        switch phase {
+        case .idle: return true
+        case .countdown: cancel(); return true
+        case .summary: dismissSummary(); return true
+        case .running: return false
+        }
+    }
+
+    /// No result window shows the session any more: a countdown is cancelled
+    /// (nothing deleted) and a run stops after the current item. A summary
+    /// waits for the next window on the session.
+    func noWindowLeft() {
+        switch phase {
+        case .countdown: cancel()
+        case .running: stopRequested = true
+        case .idle, .summary: break
         }
     }
 
@@ -185,7 +219,9 @@ struct DeleteReport: Equatable {
             }
             phase = .running(done: i + 1, total: items.count)
         }
-        if !queue.isEmpty && !stopRequested {
+        if stopRequested {
+            for (entry, _) in queue { report.failed[entry.request.path] = Self.stoppedBeforeAdmin }
+        } else if !queue.isEmpty {
             removedAny = await escalate(queue) || removedAny
         }
         task = nil
@@ -202,6 +238,8 @@ struct DeleteReport: Equatable {
         }
         let items = queue.map { AdminDelete.Item(request: $0.entry.request, force: $0.force) }
         let output: String
+        awaitingAdmin = true
+        defer { awaitingAdmin = false }
         do {
             output = try await admin.run(AdminDelete.arguments(items: items, environment: .current()))
         } catch {

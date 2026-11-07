@@ -56,26 +56,35 @@ public enum AdminDelete {
         return result
     }
 
-    /// The protection verdict for `path` with its parent resolved on disk.
-    ///
-    /// The requested path's own verdict comes first. Then the parent is
-    /// opened (following symlinks) and its real location read back with
-    /// `F_GETPATH`; `<resolved parent>/<name>` must not be refused either,
-    /// so a path through a symlinked ancestor can't reach a protected item.
-    /// A parent that can't be opened gives nil: the deleter then reports
-    /// the item missing (or fails) without touching anything.
-    public static func resolvedRefusal(for path: String, in env: ProtectionEnvironment) -> Refusal? {
-        if let refusal = ProtectionRules.refusal(for: path, in: env) { return refusal }
-        guard let slash = path.lastIndex(of: "/") else { return .unsafePath }
-        let name = String(path[path.index(after: slash)...])
-        guard !name.isEmpty else { return .unsafePath }
-        let parent = slash == path.startIndex ? "/" : String(path[..<slash])
-
-        let fd = open(parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
-        guard fd >= 0 else { return nil }
+    /// Deletes one item as the root helper does: the parent is opened once,
+    /// its real location is checked (`resolvedRefusal(for:parentFD:in:)`),
+    /// and the same fd is handed to the deleter, so nothing can be swapped
+    /// between the check and the removal.
+    public static func perform(_ item: Item, with deleter: Deleter) async -> DeleteOutcome {
+        let path = item.request.path
+        if let refusal = ProtectionRules.refusal(for: path, in: deleter.environment) { return .refused(refusal) }
+        let fd: Int32
+        switch Deleter.openParent(of: path) {
+        case .failure(let early): return early.outcome
+        case .success(let opened): fd = opened
+        }
         defer { close(fd) }
+        if let refusal = resolvedRefusal(for: path, parentFD: fd, in: deleter.environment) { return .refused(refusal) }
+        return await deleter.delete(item.request, force: item.force, parentFD: fd)
+    }
+
+    /// The protection verdict for `path` whose parent is open as `parentFD`.
+    ///
+    /// The requested path's own verdict comes first. Then the parent's real
+    /// location is read back with `F_GETPATH`, and `<resolved parent>/<name>`
+    /// must not be refused either, so a path through a symlinked ancestor
+    /// can't reach a protected item.
+    public static func resolvedRefusal(for path: String, parentFD: Int32, in env: ProtectionEnvironment) -> Refusal? {
+        if let refusal = ProtectionRules.refusal(for: path, in: env) { return refusal }
+        guard let (_, nameBytes) = Deleter.split(path) else { return .unsafePath }
+        let name = String(decoding: nameBytes.dropLast().map { UInt8(bitPattern: $0) }, as: UTF8.self)
         var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-        guard fcntl(fd, F_GETPATH, &buffer) != -1 else { return .unsafePath }
+        guard fcntl(parentFD, F_GETPATH, &buffer) != -1 else { return .unsafePath }
         let resolved = String(decoding: buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
         let full = resolved.hasSuffix("/") ? resolved + name : resolved + "/" + name
         return ProtectionRules.refusal(for: full, in: env)

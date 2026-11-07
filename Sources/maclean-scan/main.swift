@@ -48,8 +48,9 @@ func writeFailureReason(_ error: Error) -> String {
 }
 
 /// `--delete` mode. Only `home` and `appBundle` are taken from the app: the
-/// mount lists are rebuilt here, and each item's parent is resolved on disk
-/// and checked again, so a tampered request can't reach a protected item.
+/// mount lists are rebuilt here, and each item's parent is opened once,
+/// resolved on disk and checked again before the delete runs relative to
+/// that same fd, so a tampered request can't reach a protected item.
 func runAdminDelete(_ arguments: [String]) async -> Never {
     guard getuid() == 0 else {
         fputs("maclean-scan: --delete must run as root\n", stderr)
@@ -65,14 +66,9 @@ func runAdminDelete(_ arguments: [String]) async -> Never {
     env.appBundle = parsed.environment.appBundle
     let deleter = Deleter(mode: .permanent, environment: env)
     for item in parsed.items {
-        let path = item.request.path
-        let outcome: DeleteOutcome
-        if let refusal = AdminDelete.resolvedRefusal(for: path, in: env) {
-            outcome = .refused(refusal)
-        } else {
-            outcome = await deleter.delete(item.request, force: item.force)
-        }
-        print(AdminDelete.encode(path: path, outcome: outcome))
+        // Opens the parent once, checks its resolved location, deletes relative to that fd.
+        let outcome = await AdminDelete.perform(item, with: deleter)
+        print(AdminDelete.encode(path: item.request.path, outcome: outcome))
     }
     fflush(stdout)
     exit(0)
