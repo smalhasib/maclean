@@ -196,6 +196,9 @@ struct StartView: View {
                         .padding(.top, 12)
                     ForEach(folders) { folder in
                         folderRow(folder, icon: Self.folderIcon)
+                            .contextMenu {
+                                Button("Star Folder") { model.star(URL(fileURLWithPath: folder.path)) }
+                            }
                         Separator().padding(.leading, 64)
                     }
                 }
