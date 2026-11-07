@@ -31,6 +31,7 @@ struct MacleanApp: App {
     let registry = SessionRegistry()
     let startModel = StartModel()
     lazy var router = WindowRouter(registry: registry, startModel: startModel)
+    private lazy var deleteMenuItem = DeleteMenuItem(router: router)
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         _ = router   // takes over presenting finished scans before any starts
@@ -44,6 +45,8 @@ struct MacleanApp: App {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.activate()
+        // SwiftUI builds the menu bar during launch: add the item after it.
+        DispatchQueue.main.async { self.deleteMenuItem.install() }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

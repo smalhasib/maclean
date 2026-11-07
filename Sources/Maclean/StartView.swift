@@ -53,6 +53,11 @@ import UniformTypeIdentifiers
                 MainActor.assumeIsolated { self?.refresh() }
             })
         }
+        // Free space changed after a delete.
+        observers.append(NotificationCenter.default.addObserver(forName: .macleanDidDelete, object: nil,
+                                                                queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refresh() }
+        })
     }
 
     /// Re-reads volumes and re-resolves starred folders in the background,

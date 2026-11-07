@@ -103,9 +103,21 @@ On a segment at any depth, and on a list row:
 - [ ] Changing the setting applies to the next window opened.
 - [ ] Rescan moves every window on the old tree to the new one, keeping each window's folder, back/forward history and selection. A vanished path falls back to its nearest surviving ancestor.
 
+## Collector and delete
+
+Only ever delete inside a scratch folder you create, and remove it afterwards.
+
+- [ ] 1. Create `~/maclean-scratch` with folders and files, scan it, collect 3 items, press Delete, and let it finish. Check the summary and that Finder confirms they're gone.
+- [ ] 2. Press Delete, then Cancel within 5 s. Nothing is deleted.
+- [ ] 3. Collect a folder, add a file to it in Finder, then Delete. It appears under "Changed since the scan"; check both Keep and Delete Anyway.
+- [ ] 4. `sudo mkdir ~/maclean-scratch/rootdir` with a file inside it (the owner runs this). Collect it and Delete: the password prompt appears. Approve once, and cancel once.
+- [ ] 5. Turn on Trash mode, delete a file, and find it in the Trash.
+- [ ] 6. Delete Collected Items in the Action menu is disabled with an empty collector and during a run.
+- [ ] 7. Scan `/`, collect `/Library/Caches/<some folder>`, start Delete, and **Cancel during the countdown**. Only the prompt path is exercised; nothing outside the scratch folder is ever deleted.
+
 ## Settings
 
-- [ ] ⌘, opens Settings with a General tab only, holding "Open each scan in its own window".
+- [ ] ⌘, opens Settings with a General tab only, holding "Open each scan in its own window" and "Move to Trash instead of deleting permanently" (off by default).
 - [ ] The toggle persists across relaunches.
 
 ## Appearances

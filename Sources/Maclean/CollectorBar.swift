@@ -8,6 +8,8 @@ import SwiftUI
 /// - Empty: a dashed circle and a hint.
 /// - With items: a ring proportional to the collected share of the scan
 ///   with the total inside, "<size> collected", and a red Delete button.
+/// - Deleting: "Deleting <n> items, <size> in <s>…" with Cancel during the
+///   countdown, then "Deleting <done> of <total>…" with progress and Stop.
 ///   Clicking the circle (or Return / Space on it, see `ResultResponder`)
 ///   toggles the collector panel.
 /// - A drop target for Maclean items and Finder files.
@@ -30,24 +32,14 @@ struct CollectorBar: View {
         let count = view.collected.count
         HStack(spacing: 12) {
             circle(view: view, count: count)
-            if count == 0 {
+            if count == 0 && !model.session.deletion.isActive {
                 Text("Drag files here to collect them")
                     .secondaryText()
                     .lineLimit(1)
                     .accessibilityHidden(true)
                 Spacer(minLength: 0)
             } else {
-                Text("\(SizeText.string(view.collectedSize)) collected")
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .accessibilityHidden(true)
-                Spacer(minLength: 8)
-                // Task 7 wires this to the delete countdown.
-                Button("Delete") {}
-                    .buttonStyle(.borderedProminent)
-                    .tint(.red)
-                    .disabled(true)
-                    .help("Delete the collected items")
+                deletion(view: view)
             }
         }
         .padding(.horizontal, 16)
@@ -61,6 +53,47 @@ struct CollectorBar: View {
             NSAccessibility.post(element: NSApp.mainWindow ?? NSApp as Any, notification: .announcementRequested,
                                  userInfo: [.announcement: text,
                                             .priority: NSAccessibilityPriorityLevel.high.rawValue])
+        }
+    }
+
+    /// The bar's right side: the collected total and Delete, or the
+    /// countdown with Cancel, or the run's progress with Stop.
+    @ViewBuilder
+    private func deletion(view: TreeView) -> some View {
+        let controller = model.session.deletion
+        switch controller.phase {
+        case .countdown(let remaining):
+            let items = controller.pendingCount == 1 ? "1 item" : "\(controller.pendingCount.formatted()) items"
+            Text("Deleting \(items), \(SizeText.string(controller.pendingSize)) in \(remaining)…")
+                .monospacedDigit()
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 8)
+            Button("Cancel") { controller.cancel() }
+                .keyboardShortcut(.cancelAction)
+                .help("Cancel the delete; nothing is deleted")
+        case .running(let done, let total):
+            Text("Deleting \(done.formatted()) of \(total.formatted())…")
+                .monospacedDigit()
+                .lineLimit(1)
+            ProgressView(value: Double(done), total: Double(max(total, 1)))
+                .frame(maxWidth: 220)
+                .accessibilityLabel("Delete progress")
+            Spacer(minLength: 8)
+            Button("Stop") { controller.cancel() }
+                .keyboardShortcut(.cancelAction)
+                .help("Stop after the current item; the rest stay collected")
+        case .idle, .summary:
+            Text("\(SizeText.string(view.collectedSize)) collected")
+                .monospacedDigit()
+                .lineLimit(1)
+                .accessibilityHidden(true)
+            Spacer(minLength: 8)
+            Button("Delete") { controller.start() }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .disabled(controller.phase != .idle || model.session.isDeleting)
+                .help("Delete the collected items after a 5-second countdown")
         }
     }
 

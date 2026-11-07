@@ -163,7 +163,7 @@ import Observation
         if let selectedPath, let node = Self.visibleNode(atPath: selectedPath, in: view), node != currentNode {
             selected = node
         }
-        loadVolumeSpace()
+        refreshVolumeSpace()
     }
 
     /// A model for `tree` (a rescan of `old`'s session) that keeps `old`'s
@@ -666,8 +666,9 @@ import Observation
         return layout
     }
 
-    /// Reads free space off the main actor when the scan root is a volume root.
-    private func loadVolumeSpace() {
+    /// Reads free space off the main actor when the scan root is a volume
+    /// root (on open, and again after a delete).
+    func refreshVolumeSpace() {
         let path = tree.rootPath
         Task {
             let space = await Task.detached(priority: .utility) { () -> (Int64, Int64)? in

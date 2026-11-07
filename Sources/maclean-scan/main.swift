@@ -3,6 +3,11 @@ import MacleanCore
 
 // maclean-scan <path> [--out <file>] [--top <n>]
 // Exit codes: 0 ok, 1 root unreadable, 2 usage error, 3 output write failed. Progress -> stderr, summary -> stdout.
+//
+// maclean-scan --delete --env <json> --items <json>
+// The app's administrator helper (see AdminDelete): runs only as root,
+// deletes each item permanently and prints one JSON outcome line per item.
+// Exit codes: 0 ok (per-item outcomes on stdout), 2 usage error, 4 not root.
 
 func usage() -> Never {
     fputs("""
@@ -42,8 +47,43 @@ func writeFailureReason(_ error: Error) -> String {
     return "write failed"
 }
 
+/// `--delete` mode. Only `home` and `appBundle` are taken from the app: the
+/// mount lists are rebuilt here, and each item's parent is resolved on disk
+/// and checked again, so a tampered request can't reach a protected item.
+func runAdminDelete(_ arguments: [String]) async -> Never {
+    guard getuid() == 0 else {
+        fputs("maclean-scan: --delete must run as root\n", stderr)
+        exit(4)
+    }
+    let parsed: (items: [AdminDelete.Item], environment: ProtectionEnvironment)
+    do { parsed = try AdminDelete.parse(arguments) } catch {
+        fputs("maclean-scan: malformed --delete arguments\n", stderr)
+        exit(2)
+    }
+    var env = ProtectionEnvironment.current()
+    env.home = parsed.environment.home
+    env.appBundle = parsed.environment.appBundle
+    let deleter = Deleter(mode: .permanent, environment: env)
+    for item in parsed.items {
+        let path = item.request.path
+        let outcome: DeleteOutcome
+        if let refusal = AdminDelete.resolvedRefusal(for: path, in: env) {
+            outcome = .refused(refusal)
+        } else {
+            outcome = await deleter.delete(item.request, force: item.force)
+        }
+        print(AdminDelete.encode(path: path, outcome: outcome))
+    }
+    fflush(stdout)
+    exit(0)
+}
+
 // Raise the soft fd limit so the scanner's fd budget (half of it) is large.
 ProcessLimits.raiseOpenFileLimit()
+
+if CommandLine.arguments.dropFirst().first == "--delete" {
+    await runAdminDelete(Array(CommandLine.arguments.dropFirst()))
+}
 
 var path: String?
 var outPath: String?

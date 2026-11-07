@@ -73,10 +73,26 @@ struct ResultView: View {
         // The session's collector overlay changed (in this window or another on the session).
         .onChange(of: model.session.view?.generation) { _, _ in model.viewDidChange() }
         .onChange(of: model.session.carryOverDropped, initial: true) { _, _ in model.showCarryOverNote() }
+        .onReceive(NotificationCenter.default.publisher(for: .macleanDidDelete)) { _ in model.refreshVolumeSpace() }
+        .sheet(isPresented: summaryShown) {
+            if case .summary(let report) = model.session.deletion.phase {
+                DeleteSummaryView(controller: model.session.deletion, report: report)
+                    .interactiveDismissDisabled()
+            }
+        }
         .onChange(of: model.selected) { _, node in
             // Quick Look follows the keyboard selection while it's open.
             if let node, model.hovered == nil { QuickLookBridge.follow(path: model.tree.path(of: node)) }
         }
+    }
+}
+
+extension ResultView {
+    /// Whether the session's delete summary is up (Done dismisses it).
+    private var summaryShown: Binding<Bool> {
+        let controller = model.session.deletion
+        return Binding(get: { if case .summary = controller.phase { true } else { false } },
+                       set: { if !$0 { controller.dismissSummary() } })
     }
 }
 

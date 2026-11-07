@@ -52,6 +52,8 @@ import Observation
     /// across a failed rescan).
     @ObservationIgnored private var carryOver: [String]?
     @ObservationIgnored private var protectionOverride: ProtectionEnvironment?
+    /// Storage for `deletion` (DeleteController.swift), created on first use.
+    @ObservationIgnored var deletionController: DeleteController?
 
     init(rootPath: String, expected: Int64? = nil) {
         self.rootPath = rootPath
