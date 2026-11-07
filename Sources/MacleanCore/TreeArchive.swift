@@ -44,7 +44,7 @@ public enum TreeArchive {
             try writeArray(fd, tree.inodes)
             try writeArray(fd, tree.devices)
             try writeArray(fd, tree.nameOffset)
-            try writeArray(fd, [UInt64(tree.names.count)])
+            try writeArray(fd, [UInt64(tree.names.count).littleEndian])
             try writeArray(fd, tree.names)
             fdOpen = false
             guard close(fd) == 0 else { throw posixError() }
