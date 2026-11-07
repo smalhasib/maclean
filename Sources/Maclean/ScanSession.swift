@@ -21,7 +21,8 @@ import Observation
     private(set) var state: State = .cancelled
     /// True between `cancel()` and the scan task actually ending.
     private(set) var isStopping = false
-    private(set) var history: NavigationHistory
+    /// Written back by the result window so a rescan can remap where it was.
+    var history: NavigationHistory
     /// Called on the main actor each time a scan finishes successfully.
     var onFinish: ((ScanSession) -> Void)?
 
