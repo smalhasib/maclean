@@ -177,9 +177,11 @@ private func node(_ tree: FileTree, _ relative: String) -> NodeID? {
         #expect(b.skippedPaths.contains("/System/Volumes/Data"))
         // On some macOS releases the sealed system volume and the Data volume
         // report the same st_dev, so the set may hold one or two devices.
+        // Same-container volumes (Preboot, VM, ...) add their own devices.
         let expected: Set<Int32> = [device("/"), device("/System/Volumes/Data")]
-        #expect(b.allowedDevices == expected)
-        #expect((1...2).contains(b.allowedDevices.count))
+        let volumes = Set(b.descendableMounts.map(device))
+        #expect(b.allowedDevices == expected.union(volumes))
+        #expect((1...2).contains(b.allowedDevices.subtracting(volumes).count))
     }
 
     @Test(arguments: ["/System", "/System/Volumes", "/System/Volumes/", "//", "/./System/../System"])
@@ -221,6 +223,69 @@ private func node(_ tree: FileTree, _ relative: String) -> NodeID? {
         #expect(tree.flags(of: vm).isSuperset(of: [.directory, .mountPoint]))
         #expect(tree.children(of: vm).isEmpty)
         #expect(tree.size(of: vm) == 0)
+    }
+
+    @Test func containerParsing() {
+        #expect(ScanBoundary.apfsContainer(ofSource: "/dev/disk3s1s1") == "disk3")
+        #expect(ScanBoundary.apfsContainer(ofSource: "/dev/disk3s5") == "disk3")
+        #expect(ScanBoundary.apfsContainer(ofSource: "/dev/disk12s2") == "disk12")
+        #expect(ScanBoundary.apfsContainer(ofSource: "map auto_home") == nil)
+        #expect(ScanBoundary.apfsContainer(ofSource: "//user@server/share") == nil)
+    }
+
+    @Test(.enabled(if: FileManager.default.fileExists(atPath: "/System/Volumes/Preboot")))
+    func startupRootDescendsSameContainerVolumes() {
+        let b = ScanBoundary.forRoot("/")
+        let mounts = ScanBoundary.mounts()
+        #expect(b.descendableMounts.contains("/System/Volumes/Preboot"))
+        #expect(!b.descendableMounts.contains("/System/Volumes/Data"))
+        #expect(b.skippedPaths.contains("/System/Volumes/Data"))
+        #expect(b.descendableMounts.allSatisfy { path in mounts.first(where: { $0.path == path })?.fsType == "apfs" })
+        // Only the root's own container: every descendable mount shares it.
+        let rootContainer = mounts.first(where: { $0.path == "/" }).flatMap {
+            ScanBoundary.apfsContainer(ofSource: $0.source)
+        }
+        #expect(b.descendableMounts.allSatisfy { path in
+            mounts.first(where: { $0.path == path }).flatMap {
+                ScanBoundary.apfsContainer(ofSource: $0.source)
+            } == rootContainer
+        })
+        for path in b.descendableMounts { #expect(b.allowedDevices.contains(device(path))) }
+    }
+
+    @Test func tempRootHasNoDescendableMounts() {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        #expect(ScanBoundary.forRoot(t.path).descendableMounts.isEmpty)
+    }
+
+    @Test(.enabled(if: FileManager.default.fileExists(atPath: "/System/Volumes/Preboot")))
+    func mountPointRootScansNormally() async throws {
+        let root = "/System/Volumes/Preboot"
+        let b = ScanBoundary.forRoot(root)
+        #expect(b.allowedDevices.contains(device(root)))
+        #expect(b.descendableMounts.isEmpty)
+        let tree = try await Scanner.scan(path: root)
+        #expect(!tree.flags(of: tree.root).contains(.mountPoint))
+        #expect(!tree.children(of: tree.root).isEmpty)
+    }
+
+    @Test(.enabled(if: FileManager.default.fileExists(atPath: "/System/Volumes/VM")))
+    func descendableMountIsOpenedAndKeepsFlag() async throws {
+        // Allow only VM's device and mark it descendable: VM is read (it holds
+        // at least its own listing) yet keeps .mountPoint; Preboot, also a
+        // mount point but not descendable, stays closed.
+        let vmDevice = device("/System/Volumes/VM")
+        let boundary = ScanBoundary(allowedDevices: [vmDevice],
+                                    descendableMounts: ["/System/Volumes/VM"])
+        let tree = try await Scanner.scan(path: "/System/Volumes", boundary: boundary)
+        let vm = try #require(node(tree, "VM"))
+        #expect(tree.flags(of: vm).isSuperset(of: [.directory, .mountPoint]))
+        #expect(tree.device(of: vm) == vmDevice)
+        #expect(!tree.flags(of: vm).contains(.restricted))
+        if let preboot = node(tree, "Preboot") {
+            #expect(tree.flags(of: preboot).contains(.mountPoint))
+            #expect(tree.children(of: preboot).isEmpty)
+        }
     }
 
     @Test func boundaryForOrdinaryRoot() {

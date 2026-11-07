@@ -33,8 +33,10 @@ public enum Scanner {
     /// Scans `path` (canonicalized with `realpath`; the tree's `rootPath` is
     /// the canonical path), descending only into directories `boundary`
     /// allows. Directories that are mount points are recorded as empty
-    /// `.mountPoint` nodes and never opened. Only a root that cannot be
-    /// resolved or opened throws (a `ReadError`); unreadable subdirectories
+    /// `.mountPoint` nodes and never opened, unless their path is in
+    /// `boundary.descendableMounts`: those are read like any directory and
+    /// keep `.mountPoint`. The root is never treated as a mount point. Only a
+    /// root that cannot be resolved or opened throws (a `ReadError`); unreadable subdirectories
     /// become `.restricted` nodes. Throws `CancellationError` when the calling
     /// task is cancelled.
     public static func scan(path: String, boundary: ScanBoundary,
@@ -136,6 +138,8 @@ private final class DirRef {
 private struct Pending {
     let parent: DirRef
     let entry: RawEntry
+    /// Flags its node gets once read (`.mountPoint` for a descendable mount).
+    var flags: NodeFlags = []
 }
 
 private struct Job: Sendable {
@@ -158,8 +162,8 @@ private struct Walk {
     let maxInFlight: Int
     /// Directories other than the root that may keep an fd open.
     let maxRetained: Int
-    /// Deepest skipped path, in components below the root (paths are only
-    /// built for directories this shallow).
+    /// Deepest skipped path or descendable mount, in components below the
+    /// root (paths are only built for directories this shallow).
     let maxSkipDepth: Int
 
     private let rootRef: DirRef
@@ -187,7 +191,7 @@ private struct Walk {
         maxRetained = max(4, min(128, soft / 8))
 
         let rootComponents = rootPath.split(separator: "/").count
-        maxSkipDepth = boundary.skippedPaths
+        maxSkipDepth = boundary.skippedPaths.union(boundary.descendableMounts)
             .map { $0.split(separator: "/").count - rootComponents }
             .max() ?? 0
     }
@@ -196,11 +200,12 @@ private struct Walk {
     mutating func handle(token: Int, outcome: Scanner.Outcome) -> DirRef? {
         let parent: DirRef?
         let entry: RawEntry?
+        var flags: NodeFlags = []
         if token == Self.rootToken {
             (parent, entry) = (nil, nil)
         } else {
             let pending = inFlight.removeValue(forKey: token)!
-            (parent, entry) = (pending.parent, pending.entry)
+            (parent, entry, flags) = (pending.parent, pending.entry, pending.flags)
         }
 
         switch outcome {
@@ -208,7 +213,7 @@ private struct Walk {
             return nil  // vanished since its parent was listed
         case .failed:
             if let parent, let entry {
-                addDirectory(entry, in: parent, flags: .restricted)
+                addDirectory(entry, in: parent, flags: flags.union(.restricted))
             } else {
                 builder.markRestricted(builder.root)
             }
@@ -217,7 +222,7 @@ private struct Walk {
             if let parent, let entry {
                 var e = entry
                 (e.inode, e.device) = (inode, device)
-                addDirectory(e, in: parent, flags: [])
+                addDirectory(e, in: parent, flags: flags)
             }
             return nil
         case let .listed(handle, inode, device, entries):
@@ -225,7 +230,7 @@ private struct Walk {
             if let parent, let entry {
                 var e = entry
                 (e.inode, e.device) = (inode, device)
-                let node = addDirectory(e, in: parent, flags: [])
+                let node = addDirectory(e, in: parent, flags: flags)
                 ref = DirRef(parent: parent, name: e.name, node: node, depth: parent.depth + 1, handle: nil)
             } else {
                 ref = rootRef
@@ -269,10 +274,16 @@ private struct Walk {
             items += 1
             switch e.kind {
             case .directory:
-                // Mount points are never opened: crossing into another volume
+                // Mount points are only opened when the boundary lists them
+                // (same-container APFS volumes): crossing into another volume
                 // could trigger an automount or hang on a stale network mount.
                 if e.isMountPoint {
-                    addDirectory(e, in: ref, flags: .mountPoint)
+                    if checkSkips, boundary.descendableMounts.contains(join(base, e.name)) {
+                        stack.append(Pending(parent: ref, entry: e, flags: .mountPoint))
+                        ref.undispatched += 1
+                    } else {
+                        addDirectory(e, in: ref, flags: .mountPoint)
+                    }
                 } else if checkSkips, boundary.skippedPaths.contains(join(base, e.name)) {
                     addDirectory(e, in: ref, flags: [])
                 } else {
