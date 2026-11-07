@@ -397,3 +397,53 @@ enum ActionResult: Equatable { case ok, missing }                   // .missing 
   - Report any item that computer use can't drive.
 - [ ] **Step 3: Run** `swift test`. Expected: PASS.
 - [ ] **Step 4: Commit** `feat(app): accessibility pass and manual checklist`
+
+---
+
+## Outcome and follow-ups (recorded after execution)
+
+Built on branch `feat/app-shell`, 21 commits; 110 tests (34 MacleanKit + 76 MacleanCore). Every task was verified on screen through computer use, and the owner checked VoiceOver, Increase Contrast, Reduce Motion and a real right-click on the chart. On a full "/" scan (≈3.9M nodes): hover avg 2.93 / max 5.81 ms, side-list update avg 8.34 / max 15.18 ms, first frame 31.86 ms, drill ≈120 fps. The owner also asked for an app icon during the plan (Resources/AppIcon.icns, built by `swift scripts/make-icon.swift`).
+
+**Toolchain fact for every later plan:** with Command Line Tools only, SwiftUI's `@State` macro doesn't compile (its plugin ships only with Xcode). Use `State(initialValue:)` plus `.wrappedValue`. `@Observable` works. Synthetic right-clicks from automation tools don't open SwiftUI context menus; a real mouse does.
+
+**Before Plan 3 (collector and delete build on these)**
+- Add a `TreeView` seam: the immutable `FileTree` plus an overlay of collected/removed nodes, exposing `effectiveSize(of:)` and `visibleChildren(of:)`, used by SunburstLayout, the side list and labels. The binary-search size cutoffs assume raw size order; effective sizes can reorder children.
+- Relayout without navigation, with an angle-morph transition keyed by NodeID, so collect and uncollect animate instead of crossfading.
+- Key the app-wide collector by (session, path), with inode and device for delete-time re-checks using `lstat` (Actions.exists follows symlinks).
+- `NSMenuItemValidation` for Delete Collected Items. The "always enabled, no-op" approach is fine for Go/Action but not for Delete.
+- Document or assert the invariant that a directory's size equals the sum of its children. Fix the history-reset `didSet` fallback (`currentPath`/`currentNode` not updated), since deletion makes vanished nodes routine.
+- Structure: split `SunburstView.swift` (~1040 lines) into representable/input/rendering/transition/accessibility files. Move duplicated helpers into Kit/Core (`FileTree.node(atPath:)`, `SegmentKind(flags:)`, `isInside`). Add an app test target (`@testable import Maclean`) for ResultViewModel navigation/selection and SessionRegistry routing.
+
+**Later / minor**
+- Window and chart:
+  - The shrink runs one runloop late, and a miniaturized main window isn't shrunk.
+  - View picks an arbitrary window when several show the same session.
+  - Rings are always sized for 5.
+  - Drill-in fades the old layout instead of scaling it.
+  - Navigating mid-animation jumps.
+  - The highlight flickers while sweeping across segments.
+  - Hover only works when the window is key (tracking area uses `.activeInKeyWindow`).
+  - The centre name has no tooltip.
+  - Unhandled keys beep.
+  - `toolbarFocus` can persist after a background click.
+- Actions:
+  - The osascript call has no timeout.
+  - A missing Terminal fails silently.
+  - ⌘W can close the Quick Look panel.
+  - `rescanDisk` does nothing while the volume is already scanning.
+  - `isStarred` compares canonical paths inconsistently.
+  - The Automation-denied banner hasn't been verified in the GUI.
+- Start screen and starred folders:
+  - Stars accept regular files, and a failed bookmark is silent.
+  - `star.volume` isn't refreshed after a resolve, and legacy stars without a volume are dropped.
+  - Capacity is all-or-nothing.
+  - ftp and FUSE mounts aren't treated as network.
+  - The Disks list is empty until the first refresh.
+  - Failed rows have an unrestricted message label.
+- Accessibility:
+  - `accessibilityHitTest` uses `assumeIsolated` (trap risk).
+  - `layoutChanged` is posted on every frame during a live resize.
+  - The "More" button also exposes "go down".
+  - Full Keyboard Access can double-focus.
+- Main-thread file-system calls (Actions.exists, Quick Look follow, the folder check, network volume icons) can stall on a hung share. This is handled with Plan 4's not-responding work.
+- The Help menu is hidden until `ProjectLinks.repository` is set to the real GitHub URL.
