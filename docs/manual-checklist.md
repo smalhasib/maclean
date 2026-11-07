@@ -111,7 +111,8 @@ Only ever delete inside a scratch folder you create, and remove it afterwards.
 - [ ] 2. Press Delete, then Cancel within 5 s. Nothing is deleted.
 - [ ] 3. Collect a folder, add a file to it in Finder, then Delete. It appears under "Changed since the scan"; check both Keep and Delete Anyway.
 - [ ] 4. `sudo mkdir ~/maclean-scratch/rootdir` with a file inside it (the owner runs this). Collect it and Delete: the password prompt appears. Approve once, and cancel once.
-- [ ] 5. Turn on Trash mode, delete a file, and find it in the Trash.
+- [ ] 4b. Restricted subfolder: `mkdir ~/maclean-scratch/mixed`, put a file in it, then `sudo mkdir -m 700 ~/maclean-scratch/mixed/rootonly` and `sudo touch ~/maclean-scratch/mixed/rootonly/x` (the owner runs these). Rescan, collect `mixed` and Delete: it is **not** listed as "Changed since the scan"; one password prompt appears and `mixed` is gone afterwards. Repeat and cancel the prompt: `mixed` is left whole (its readable file is still there) and stays collected.
+- [ ] 5. Turn on Trash mode, delete a file, and find it in the Trash. The bar reads "Moving … to the Trash in …" during the countdown and "Moving … of … to the Trash…" while it runs. With Trash mode on, recreate `mixed` as in 4b, rescan and collect it: it moves to the Trash (empty the Trash with the owner's consent, or `sudo rm -rf` it there).
 - [ ] 6. Delete Collected Items in the Action menu is disabled with an empty collector and during a run.
 - [ ] 7. Scan `/`, collect `/Library/Caches/<some folder>`, start Delete, and **Cancel during the countdown**. Only the prompt path is exercised; nothing outside the scratch folder is ever deleted.
 
