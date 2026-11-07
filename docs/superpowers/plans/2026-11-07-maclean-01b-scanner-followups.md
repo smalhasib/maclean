@@ -192,3 +192,26 @@ extension Scanner {
 cd ~/Work/maclean && swift build -c release && /usr/bin/time -l sudo .build/release/maclean-scan / --top 8
 ```
 Expected: System ≈ 41.5 GB, `Volumes` present (≈ 1.6 GB with Recovery mounted), the total within about 2% of DaisyDisk's visible 392.8 GB, under 30 s, and "maximum resident set size" ≤ 650 MB.
+
+---
+
+## Outcome and follow-ups (recorded after execution)
+
+Built on branch `feat/scanner-followups`; 72 tests pass. Read-only `/` scan without sudo: 27.5 s, peak RSS 448 MB (was 1.13 GB), System 41.55 GB (DaisyDisk 41.5), Volumes 1.58 GB (Recovery), 3.70M files. A scan of `/System/Volumes/Preboot` alone: 11.27 GB.
+
+**Before Plan 2**
+- The app raises the soft `RLIMIT_NOFILE` at launch like `maclean-scan` does (min(hard, 10240)); otherwise one scan gets ~15 reads in flight.
+- Add a `ScanBoundary.forRoot(_:mounts:)` seam so snapshot, stacked-mount, external-disk and Preboot-root cases get deterministic tests.
+- Decide the I/O queue's QoS (fixed `.utility` vs the submitter's).
+- Add a bulk `fileCounts()` (O(n) bottom-up); `fileCount(of:)` is O(subtree) and must not be called per row.
+- Check `Task.isCancelled` after `finish()` (it ignores cancellation, ~1 s on `/`).
+- A hung syscall blocks the cancel drain; the spec's 60 s "not responding" rule needs continuations that resume early.
+
+**Before Plan 4**
+- Archive: mode 0600 / owned by the user it's for, fsync before rename, consider a checksum.
+
+**Later / minor**
+- `budgetIsReleasedAfterCancel` can't detect a leaked grant: acquire twice after the cancel and expect both full.
+- No test for a partly unreadable descendable volume; `concurrentScansShareSmallBudget` doesn't prove the scans overlapped; no `/dev/fd` leak check; root handle not charged in the fd grant.
+- `fileCountIsComputed` lacks hard-link/clone-extra nodes; no streamed-write error-path test; doc note on `ChunkedColumn`'s shared setter.
+- Scans are ~2–3% slower with ~25% more kernel CPU since reads moved to the dispatch queue; if a sudo `/` scan exceeds 30 s, try `desiredInFlight = activeProcessorCount`.
