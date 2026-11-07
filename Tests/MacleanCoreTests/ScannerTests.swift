@@ -1,0 +1,270 @@
+import Foundation
+import Testing
+@testable import MacleanCore
+
+/// Allocated bytes on disk for `path` (does not follow symlinks).
+private func allocSize(_ path: String) throws -> Int64 {
+    var st = stat()
+    guard lstat(path, &st) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+    return Int64(st.st_blocks) * 512
+}
+
+private func device(_ path: String) -> Int32 {
+    var st = stat()
+    precondition(stat(path, &st) == 0, "stat \(path)")
+    return st.st_dev
+}
+
+/// Finds the node at `relative` (slash-separated) below the root.
+private func node(_ tree: FileTree, _ relative: String) -> NodeID? {
+    var current = tree.root
+    for part in relative.split(separator: "/") {
+        guard let next = tree.children(of: current).first(where: { tree.name(of: $0) == part }) else { return nil }
+        current = next
+    }
+    return current
+}
+
+// Serialized: each scan keeps up to dozens of fds open and many in-flight
+// tasks; running them all at once would make fd use depend on test count.
+@Suite(.serialized) struct ScannerTests {
+    @Test func totalsMatchFixture() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        t.file("a/x", bytes: 8192); t.file("a/b/y", bytes: 4096); t.file("z", bytes: 4096)
+        let tree = try await Scanner.scan(path: t.path)
+        let expected = try ["a/x", "a/b/y", "z"].map { try allocSize(t.url($0)) }.reduce(0, +)
+        #expect(tree.size(of: tree.root) == expected)
+        #expect(tree.fileCount(of: tree.root) == 3)
+        #expect(tree.rootPath == t.path)
+        let b = try #require(node(tree, "a/b"))
+        #expect(tree.flags(of: b).contains(.directory))
+        #expect(tree.path(of: b) == t.url("a/b"))
+        #expect(tree.inode(of: b) != 0)
+    }
+
+    @Test func hardLinksCountOnce() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        t.file("one", bytes: 1 << 20); t.dir("sub"); t.hardlink("sub/two", to: "one")
+        let tree = try await Scanner.scan(path: t.path)
+        #expect(tree.size(of: tree.root) == (try allocSize(t.url("one"))))
+        let ids = [try #require(node(tree, "one")), try #require(node(tree, "sub/two"))]
+        let first = ids.filter { tree.flags(of: $0).contains(.hardLinkFirst) }
+        let extra = ids.filter { tree.flags(of: $0).contains(.hardLinkExtra) }
+        #expect(first.count == 1 && extra.count == 1)
+        #expect(tree.size(of: extra[0]) == 0)
+        #expect(tree.size(of: first[0]) >= 1 << 20)
+    }
+
+    @Test func clonesCountOnce() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        t.file("orig", bytes: 1 << 20)
+        try #require(clonefile(t.url("orig"), t.url("copy"), 0) == 0, "clonefile unsupported here")
+        let h = try DirectoryReader.open(path: t.path)
+        let raw = try DirectoryReader.entries(of: h)
+        try #require(raw.allSatisfy { $0.cloneRefCount > 0 }, "no clone support (non-APFS)")
+
+        let tree = try await Scanner.scan(path: t.path)
+        #expect(tree.size(of: tree.root) == (try allocSize(t.url("orig"))))
+        let ids = [try #require(node(tree, "orig")), try #require(node(tree, "copy"))]
+        let extra = ids.filter { tree.flags(of: $0).contains(.cloneExtra) }
+        #expect(extra.count == 1)
+        #expect(tree.size(of: extra[0]) == 0)
+    }
+
+    @Test func hardLinkToCloneCountsOnce() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        t.file("orig", bytes: 1 << 20); t.hardlink("link", to: "orig")
+        try #require(clonefile(t.url("orig"), t.url("copy"), 0) == 0, "clonefile unsupported here")
+        let tree = try await Scanner.scan(path: t.path)
+        #expect(tree.size(of: tree.root) == (try allocSize(t.url("orig"))))
+    }
+
+    @Test func symlinkLoopIsNotFollowed() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        t.file("f", bytes: 100); t.symlink("loop", to: ".")
+        let tree = try await Scanner.scan(path: t.path)
+        let loop = try #require(node(tree, "loop"))
+        #expect(tree.flags(of: loop).contains(.symlink))
+        #expect(!tree.flags(of: loop).contains(.directory))
+        #expect(tree.children(of: loop).isEmpty)
+        #expect(tree.count == 3)
+    }
+
+    @Test func unreadableDirIsRestricted() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        t.file("secret/inside", bytes: 50_000); t.file("open/visible", bytes: 4096)
+        t.chmod("secret", 0o000)
+        let tree = try await Scanner.scan(path: t.path)
+        let secret = try #require(node(tree, "secret"))
+        #expect(tree.flags(of: secret).contains(.restricted))
+        #expect(tree.flags(of: secret).contains(.directory))
+        #expect(tree.size(of: secret) == 0)
+        #expect(tree.children(of: secret).isEmpty)
+        #expect(tree.fileCount(of: tree.root) == 1)
+        #expect(node(tree, "open/visible") != nil)
+    }
+
+    @Test func deepNestingBeyondPathMax() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        // Build with openat/mkdirat: the full path exceeds PATH_MAX.
+        var fd = open(t.path, O_RDONLY | O_DIRECTORY)
+        try #require(fd >= 0)
+        for _ in 0..<300 {
+            try #require(mkdirat(fd, "d123456789", 0o755) == 0)
+            let next = openat(fd, "d123456789", O_RDONLY | O_DIRECTORY)
+            close(fd)
+            try #require(next >= 0)
+            fd = next
+        }
+        let file = openat(fd, "bottom", O_WRONLY | O_CREAT, 0o644)
+        try #require(file >= 0)
+        #expect(write(file, "hello", 5) == 5)
+        close(file); close(fd)
+        defer { Self.removeDeep(t.path) }
+
+        let tree = try await Scanner.scan(path: t.path)
+        #expect(tree.fileCount(of: tree.root) == 1)
+        #expect(tree.count == 302)
+    }
+
+    @Test func deepAndWideExceedsFdBudget() async throws {
+        // A sibling at every level keeps each parent's children pending, so
+        // more directories want an open fd than the budget allows and the
+        // rest must be reopened name by name from an open ancestor.
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        var fd = open(t.path, O_RDONLY | O_DIRECTORY)
+        try #require(fd >= 0)
+        for _ in 0..<300 {
+            try #require(mkdirat(fd, "s", 0o755) == 0)
+            let f = openat(fd, "s/f", O_WRONLY | O_CREAT, 0o644)
+            try #require(f >= 0); close(f)
+            try #require(mkdirat(fd, "d123456789", 0o755) == 0)
+            let next = openat(fd, "d123456789", O_RDONLY | O_DIRECTORY)
+            close(fd)
+            try #require(next >= 0)
+            fd = next
+        }
+        close(fd)
+        defer { Self.removeDeep(t.path) }
+
+        let tree = try await Scanner.scan(path: t.path)
+        #expect(tree.fileCount(of: tree.root) == 300)
+        #expect(tree.count == 1 + 300 * 3)
+        #expect(!tree.flags(of: tree.root).contains(.restricted))
+    }
+
+    @Test func packageIsFlagged() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        t.file("Foo.app/Contents/Info.plist", bytes: 4096); t.dir("plain")
+        let tree = try await Scanner.scan(path: t.path)
+        let app = try #require(node(tree, "Foo.app"))
+        #expect(tree.flags(of: app).isSuperset(of: [.package, .directory]))
+        #expect(tree.fileCount(of: app) == 1)
+        #expect(node(tree, "Foo.app/Contents/Info.plist") != nil)
+        #expect(!tree.flags(of: try #require(node(tree, "plain"))).contains(.package))
+    }
+
+    @Test func packageDetector() {
+        #expect(PackageDetector.isPackage(name: "Foo.app"))
+        #expect(PackageDetector.isPackage(name: "x.BUNDLE"))
+        #expect(!PackageDetector.isPackage(name: "notes.txt"))
+        #expect(!PackageDetector.isPackage(name: "folder"))
+        #expect(!PackageDetector.isPackage(name: ".app"))
+    }
+
+    @Test func boundaryForStartupDisk() {
+        let b = ScanBoundary.forRoot("/")
+        #expect(b.skippedPaths.contains("/System/Volumes/Data"))
+        // On some macOS releases the sealed system volume and the Data volume
+        // report the same st_dev, so the set may hold one or two devices.
+        let expected: Set<Int32> = [device("/"), device("/System/Volumes/Data")]
+        #expect(b.allowedDevices == expected)
+        #expect((1...2).contains(b.allowedDevices.count))
+    }
+
+    @Test func boundaryForOrdinaryRoot() {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        let b = ScanBoundary.forRoot(t.path)
+        #expect(b.allowedDevices == [device(t.path)])
+        #expect(b.skippedPaths.isEmpty)
+    }
+
+    @Test func otherDeviceIsNotDescended() async throws {
+        // Mount points can't be created in a temp dir, so allow no device at
+        // all: every subdirectory then counts as foreign (the root is exempt).
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        t.file("top", bytes: 4096); t.file("mnt/inner", bytes: 4096); t.dir("Other.app/x")
+        let tree = try await Scanner.scan(path: t.path, boundary: ScanBoundary(allowedDevices: []))
+        let mnt = try #require(node(tree, "mnt"))
+        #expect(tree.flags(of: mnt).contains(.directory))
+        #expect(!tree.flags(of: mnt).contains(.restricted))
+        #expect(tree.children(of: mnt).isEmpty)
+        #expect(tree.size(of: mnt) == 0)
+        #expect(tree.device(of: mnt) == device(t.url("mnt")))
+        #expect(tree.flags(of: try #require(node(tree, "Other.app"))).contains(.package))
+        #expect(tree.fileCount(of: tree.root) == 1)
+    }
+
+    @Test func skippedPathIsNotDescended() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        t.file("keep/a", bytes: 4096); t.file("skip/b", bytes: 4096)
+        let boundary = ScanBoundary(allowedDevices: [device(t.path)], skippedPaths: [t.url("skip")])
+        let tree = try await Scanner.scan(path: t.path, boundary: boundary)
+        let skip = try #require(node(tree, "skip"))
+        #expect(tree.flags(of: skip).contains(.directory))
+        #expect(tree.children(of: skip).isEmpty)
+        #expect(tree.fileCount(of: tree.root) == 1)
+    }
+
+    @Test func missingRootThrows() async {
+        await #expect(throws: ReadError.notFound) {
+            _ = try await Scanner.scan(path: "/nonexistent-maclean-\(UUID().uuidString)")
+        }
+    }
+
+    @Test func progressIsReported() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        for i in 0..<200 { t.file("d\(i)/f", bytes: 4096) }
+        let calls = Counter()
+        let tree = try await Scanner.scan(path: t.path) { p in
+            calls.record(p)
+        }
+        #expect(tree.fileCount(of: tree.root) == 200)
+        #expect(calls.last.map { $0.items <= 400 && $0.bytes >= 0 } ?? true)
+    }
+
+    @Test func cancellationThrows() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        for i in 0..<2_000 { t.dir("d\(i / 50)/e\(i)") }
+        let path = t.path
+        let task = Task { try await Scanner.scan(path: path) }
+        task.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+    }
+
+    /// Removes a tree deeper than PATH_MAX (FileManager cannot).
+    private static func removeDeep(_ root: String) {
+        func purge(_ parent: Int32, _ name: String) {
+            let fd = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+            if fd >= 0 {
+                let h = DirectoryHandle(fd: dup(fd))
+                for e in (try? DirectoryReader.entries(of: h)) ?? [] {
+                    if e.kind == .directory { purge(fd, e.name) } else { unlinkat(fd, e.name, 0) }
+                }
+                close(fd)
+            }
+            unlinkat(parent, name, AT_REMOVEDIR)
+        }
+        let fd = open(root, O_RDONLY | O_DIRECTORY)
+        guard fd >= 0 else { return }
+        purge(fd, "d123456789")
+        close(fd)
+    }
+}
+
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [ScanProgress] = []
+    func record(_ p: ScanProgress) { lock.withLock { values.append(p) } }
+    var last: ScanProgress? { lock.withLock { values.last } }
+}
