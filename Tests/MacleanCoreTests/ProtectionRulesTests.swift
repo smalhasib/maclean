@@ -110,3 +110,48 @@ private func decode(_ line: String) -> String {
         #expect(refusal(p) == nil, "should be collectable: \(p)")
     }
 }
+
+private func env(home: String = "/Users/me", app: String = "/Applications/Maclean.app") -> ProtectionEnvironment {
+    ProtectionEnvironment(home: home, appBundle: app, mountPoints: ["/"], timeMachineMounts: [])
+}
+
+@Test func ancestorsOfAppAndHomeAreRefused() {
+    // Maclean is checked first: an app inside the home folder wins for its own ancestors.
+    let e = env(app: "/Users/me/Downloads/Maclean.app")
+    #expect(ProtectionRules.refusal(for: "/Users/me/Downloads", in: e) == .macleanItself)
+    #expect(ProtectionRules.refusal(for: "/Users/me/Downloads/Maclean.app/Contents", in: e) == .macleanItself)
+    #expect(ProtectionRules.refusal(for: "/Users/me", in: e) == .macleanItself)
+    #expect(ProtectionRules.refusal(for: "/Users/me/Documents", in: e) == nil)
+
+    let h = env(home: "/Volumes/X/home/me")
+    #expect(ProtectionRules.refusal(for: "/Volumes/X/home", in: h) == .homeItself)
+    #expect(ProtectionRules.refusal(for: "/Volumes/X/home/me", in: h) == .homeItself)
+    #expect(ProtectionRules.refusal(for: "/Volumes/X/home/me/Documents", in: h) == nil)
+}
+
+@Test func emptyOrRootHomeAndAppAreIgnored() {
+    for bad in ["", "/"] {
+        let e = env(home: bad, app: bad)
+        #expect(ProtectionRules.refusal(for: "/Users/x/Documents", in: e) == nil, "\(bad)")
+    }
+}
+
+@Test func usrLocalItselfIsCollectable() {
+    #expect(refusal("/usr/local") == nil)
+    #expect(refusal("/usr/local/lib") == nil)
+    #expect(refusal("/usr/share") == .systemProtected)
+}
+
+@Test func unicodeEquivalentNamesCompareEqual() {
+    let nfd = "/Users/Jose\u{301}"          // "José" decomposed
+    let nfc = "/Users/Jos\u{E9}"            // composed
+    #expect(ProtectionRules.refusal(for: nfc, in: env(home: nfd)) == .homeItself)
+    #expect(ProtectionRules.refusal(for: nfd, in: env(home: nfc)) == .homeItself)
+    #expect(ProtectionRules.refusal(for: nfd + "/Documents", in: env(home: nfc)) == nil)
+}
+
+@Test func dataVolumeAliasKeepsRootVerdict() {
+    #expect(refusal("/System/Volumes/Data/Users/me") == .homeItself)
+    #expect(refusal("/System/Volumes/Data/Users/me/Documents") == nil)
+    #expect(refusal("/System/Volumes/Data/System/Library") == .systemProtected)
+}

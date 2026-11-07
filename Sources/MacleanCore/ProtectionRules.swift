@@ -64,8 +64,15 @@ public enum ProtectionRules {
             if parts.first?.hasPrefix(".") == true { return .systemProtected }
         }
 
-        if equal(parts, env.home) { return .homeItself }
-        if inside(parts, root: env.appBundle) { return .macleanItself }
+        // Maclean is checked first: when the app sits inside the home folder
+        // its own bundle and ancestors report .macleanItself. Strict
+        // ancestors are refused too, so a parent can't take the app or the
+        // home folder with it. An empty or "/" home/appBundle counts as absent.
+        let app = normalized(env.appBundle), home = normalized(env.home)
+        if !app.isEmpty, parts.starts(with: app) || (parts.count < app.count && app.starts(with: parts)) {
+            return .macleanItself
+        }
+        if !home.isEmpty, parts.count <= home.count, home.starts(with: parts) { return .homeItself }
         if parts == ["library"] { return .libraryItself }
         return isSystem(parts) ? .systemProtected : nil
     }
@@ -83,17 +90,20 @@ public enum ProtectionRules {
 
     /// Lowercased, with `/var`, `/etc`, `/tmp` rewritten to their `/private` form.
     private static func canonical(_ parts: [String]) -> [String] {
-        var p = parts.map { $0.lowercased() }
+        var p = parts.map(fold)
         canonicalInPlace(&p)
         return p
     }
+
+    /// NFC then lowercase, so NFD and NFC spellings compare equal.
+    private static func fold(_ s: String) -> String { s.precomposedStringWithCanonicalMapping.lowercased() }
 
     private static func canonicalInPlace(_ p: inout [String]) {
         if let first = p.first, ["var", "etc", "tmp"].contains(first) { p.insert("private", at: 0) }
     }
 
     private static func normalized(_ path: String) -> [String] {
-        let parts = path.split(separator: "/").map { $0.lowercased() }
+        let parts = path.split(separator: "/").map { fold(String($0)) }
         return canonical(parts)
     }
 
@@ -109,7 +119,7 @@ public enum ProtectionRules {
         guard let top = p.first else { return true }                    // "/"
         switch top {
         case "system", "bin", "sbin", "dev", "cores", "home", "net": return true
-        case "usr": return !(p.count >= 2 && p[1] == "local" && p.count >= 3)
+        case "usr": return !(p.count >= 2 && p[1] == "local")
         case "applications", "users", "volumes", "opt": return p.count == 1 || (top == "users" && p.count == 2 && p[1] == "shared")
         case "library":
             return p.count >= 2 && (p[1] == "apple" || p[1] == "extensions")
