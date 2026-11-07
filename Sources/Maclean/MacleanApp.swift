@@ -15,7 +15,7 @@ struct MacleanApp: App {
         Window("Maclean", id: "main") {
             RootView(model: appDelegate.startModel, registry: appDelegate.registry, router: appDelegate.router)
         }
-        .defaultSize(width: 560, height: 420)
+        .defaultSize(WindowRouter.startSize)
         .windowResizability(.contentMinSize)
         .commands {
             AppCommands(registry: appDelegate.registry, router: appDelegate.router)
@@ -74,13 +74,17 @@ struct RootView: View {
                 StartView(model: model, registry: registry)
             }
         }
-        .frame(minWidth: 520, minHeight: 300)
+        .frame(minWidth: WindowRouter.startMinimumSize.width, minHeight: WindowRouter.startMinimumSize.height)
         .background(Color(nsColor: .windowBackgroundColor))
         .background(MainWindowAccessor(router: router))
         .environment(\.windowRouter, router)
         .onAppear {
             let open = openWindow
             router.openMainWindow = { open(id: "main") }
+        }
+        // Spec §5.4: the window resizes back to the compact list.
+        .onChange(of: registry.presented == nil) { _, onStart in
+            if onStart { router.shrinkMainWindowToStart() }
         }
         .overlay {
             if dropTargeted.wrappedValue {

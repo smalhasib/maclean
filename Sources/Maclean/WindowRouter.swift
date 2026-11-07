@@ -46,6 +46,13 @@ import SwiftUI
     @ObservationIgnored private var owned: [ObjectIdentifier: Owned] = [:]
     @ObservationIgnored private var observers: [any NSObjectProtocol] = []
     @ObservationIgnored private let defaults: UserDefaults
+    /// The start screen's content size, once the user resized the main
+    /// window while it showed the start screen; "Disks" returns to it.
+    @ObservationIgnored private var compactSize: CGSize?
+
+    /// The start screen's default and minimum content sizes.
+    static let startSize = CGSize(width: 560, height: 420)
+    static let startMinimumSize = CGSize(width: 520, height: 300)
 
     init(registry: SessionRegistry, startModel: StartModel, defaults: UserDefaults = .standard) {
         self.registry = registry
@@ -56,6 +63,11 @@ import SwiftUI
             [weak self] note in
             let id = (note.object as? NSWindow).map(ObjectIdentifier.init)
             MainActor.assumeIsolated { if let id { self?.windowWillClose(id) } }
+        })
+        observers.append(center.addObserver(forName: NSWindow.didEndLiveResizeNotification, object: nil,
+                                            queue: .main) { [weak self] note in
+            let id = (note.object as? NSWindow).map(ObjectIdentifier.init)
+            MainActor.assumeIsolated { if let id { self?.windowDidEndLiveResize(id) } }
         })
         registry.onFinish = { [weak self] session, newWindow in self?.presentFinished(session, newWindow: newWindow) }
         registry.onUserScan = { [weak self] in self?.userScanStarted() }
@@ -139,6 +151,36 @@ import SwiftUI
             registry.presented = nil
         }
         showLauncher()
+    }
+
+    /// One-window mode, back on the start screen: the main window shrinks
+    /// (animated, top-left fixed; instantly with Reduce Motion) to the start
+    /// screen's size, or the size the user last gave the start screen.
+    /// Never grows, and leaves a full-screen window alone.
+    func shrinkMainWindowToStart() {
+        // After SwiftUI has swapped in the start screen and relaxed the
+        // result's minimum size.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = mainWindow, window.isVisible,
+                  !window.styleMask.contains(.fullScreen), registry.presented == nil else { return }
+            let target = compactSize ?? Self.startSize
+            let content = window.contentRect(forFrameRect: window.frame).size
+            let want = CGSize(width: max(min(content.width, target.width), Self.startMinimumSize.width),
+                              height: max(min(content.height, target.height), Self.startMinimumSize.height))
+            guard want != content else { return }
+            var frame = window.frameRect(forContentRect: CGRect(origin: .zero, size: want))
+            frame.origin.x = window.frame.minX
+            frame.origin.y = window.frame.maxY - frame.height
+            if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                window.setFrame(frame, display: true)
+            } else {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.3
+                    context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                    window.animator().setFrame(frame, display: true)
+                }
+            }
+        }
     }
 
     /// Sets "Always Expand smaller objects" in every open result (and the default).
@@ -239,6 +281,13 @@ import SwiftUI
         let id = ObjectIdentifier(window)
         owned[id] = Owned(window: window, session: session)
         window.makeKeyAndOrderFront(nil)
+    }
+
+    /// Remembers a size the user gave the start screen.
+    private func windowDidEndLiveResize(_ id: ObjectIdentifier) {
+        guard let window = mainWindow, ObjectIdentifier(window) == id, registry.presented == nil,
+              !window.styleMask.contains(.fullScreen) else { return }
+        compactSize = window.contentRect(forFrameRect: window.frame).size
     }
 
     private func windowWillClose(_ id: ObjectIdentifier) {
