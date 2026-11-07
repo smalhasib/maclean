@@ -3,22 +3,21 @@ import Testing
 
 @Suite struct PaletteTests {
     @Test func neighbouringHuesDifferInLightness() {
-        for hc in [false, true] { for a in [Appearance.light, .dark] { for i in 0..<Palette.hueCount {
-            let x = Palette.color(kind: .folder, topLevelIndex: i, ring: 1, appearance: a, highContrast: hc)
-            let y = Palette.color(kind: .folder, topLevelIndex: (i + 1) % Palette.hueCount, ring: 1, appearance: a, highContrast: hc)
-            #expect(abs(x.relativeLuminance - y.relativeLuminance) >= 0.04, "hue \(i) \(a) hc=\(hc)")
-        } } }
+        for hc in [false, true] { for a in [Appearance.light, .dark] { for ring in 1...5 { for i in 0..<Palette.hueCount {
+            let x = Palette.color(kind: .folder, topLevelIndex: i, ring: ring, appearance: a, highContrast: hc)
+            let y = Palette.color(kind: .folder, topLevelIndex: (i + 1) % Palette.hueCount, ring: ring, appearance: a, highContrast: hc)
+            let need = ring <= 3 ? 0.04 : 0.02
+            #expect(abs(x.relativeLuminance - y.relativeLuminance) >= need, "hue \(i) ring \(ring) \(a) hc=\(hc)")
+        } } } }
     }
 
     @Test func ringsLightenInLightDarkenInDark() {
-        for i in 0..<Palette.hueCount {
-            let l1 = Palette.color(kind: .folder, topLevelIndex: i, ring: 1, appearance: .light).relativeLuminance
-            let l3 = Palette.color(kind: .folder, topLevelIndex: i, ring: 3, appearance: .light).relativeLuminance
-            let d1 = Palette.color(kind: .folder, topLevelIndex: i, ring: 1, appearance: .dark).relativeLuminance
-            let d3 = Palette.color(kind: .folder, topLevelIndex: i, ring: 3, appearance: .dark).relativeLuminance
-            #expect(l3 > l1)
-            #expect(d3 < d1)
-        }
+        for hc in [false, true] { for i in 0..<Palette.hueCount { for a in [Appearance.light, .dark] {
+            let lums = (1...5).map { Palette.color(kind: .folder, topLevelIndex: i, ring: $0, appearance: a, highContrast: hc).relativeLuminance }
+            for (p, n) in zip(lums, lums.dropFirst()) {
+                #expect(a == .light ? n > p : n < p, "hue \(i) \(a) hc=\(hc) \(lums)")
+            }
+        } } }
     }
 
     @Test func hueRepeatsAfterEight() {
