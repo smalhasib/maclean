@@ -40,6 +40,11 @@ import Observation
     var selected: NodeID?
     /// The list target whose "smaller objects" row was clicked open.
     var expandedTarget: NodeID?
+    /// The toolbar control holding the keyboard focus (Tab cycle: toolbar →
+    /// list → chart); nil when the list or chart has it.
+    var toolbarFocus: ToolbarItem?
+
+    enum ToolbarItem: Hashable { case back, forward, disks, crumb(String) }
 
     var expandSmallerObjects: Bool {
         didSet { defaults.set(expandSmallerObjects, forKey: Self.alwaysExpandKey) }
@@ -75,6 +80,8 @@ import Observation
     @ObservationIgnored private var segmentIndex: [NodeID: Int] = [:]
     /// Parent → index of its merged "smaller objects" segment.
     @ObservationIgnored private var smallerIndex: [NodeID: Int] = [:]
+    /// The folder shown before the last navigation (keyboard focus after going up).
+    @ObservationIgnored private var previousFolder: NodeID?
     @ObservationIgnored let openedAt = Timings.now
     @ObservationIgnored private var firstFrameReported = false
 
@@ -203,6 +210,58 @@ import Observation
                 self.selected = tree.children(of: selected)[0]
             }
         }
+    }
+
+    /// A selection for the chart's keyboard focus after a navigation: kept if
+    /// it is inside the current folder; after going up, the folder the user
+    /// came from (its ancestor among the current children); else the first child.
+    func selectForKeyboardFocus() {
+        if let selected, selected != currentNode, isInside(selected) { return }
+        if var node = previousFolder, node != currentNode, isInside(node) {
+            while let parent = tree.parent(of: node), parent != currentNode { node = parent }
+            selected = node
+        } else if visibleChildCount(of: currentNode) > 0 {
+            selected = tree.children(of: currentNode)[0]
+        }
+    }
+
+    // MARK: Toolbar focus
+
+    /// Breadcrumbs: (name, path) from the scan root to the current folder.
+    var crumbs: [(name: String, path: String)] {
+        let root = tree.rootPath
+        let current = history.current
+        var out = [(name: rootName, path: root)]
+        let prefix = root.hasSuffix("/") ? root : root + "/"
+        guard current != root, current.hasPrefix(prefix) else { return out }
+        var path = root
+        for component in current.dropFirst(prefix.count).split(separator: "/") {
+            path = path.hasSuffix("/") ? path + component : path + "/" + component
+            out.append((name: String(component), path: path))
+        }
+        return out
+    }
+
+    /// Toolbar controls in Tab order (disabled ones included).
+    var toolbarItems: [ToolbarItem] { [.back, .forward, .disks] + crumbs.map { .crumb($0.path) } }
+
+    func isEnabled(_ item: ToolbarItem) -> Bool {
+        switch item {
+        case .back: return history.canGoBack
+        case .forward: return history.canGoForward
+        case .disks, .crumb: return true
+        }
+    }
+
+    /// The next (or previous) enabled toolbar control after `item`; nil past the end.
+    func toolbarItem(after item: ToolbarItem?, backwards: Bool) -> ToolbarItem? {
+        let items = toolbarItems
+        var order = Array(items.indices)
+        if backwards { order.reverse() }
+        let start = item.flatMap { items.firstIndex(of: $0) }
+            ?? (item == nil ? nil : items.firstIndex(of: .disks))
+        let rest = start.map { s in order.drop { $0 != s }.dropFirst() } ?? order[...]
+        return rest.map { items[$0] }.first(where: isEnabled)
     }
 
     /// Whether `node` lies below the current folder.
@@ -344,6 +403,7 @@ import Observation
             return
         }
         currentPath = path
+        previousFolder = currentNode
         currentNode = node
         hovered = nil
         hoverSource = .chart

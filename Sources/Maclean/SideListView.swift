@@ -15,7 +15,7 @@ struct SideListView: View {
         let target = model.listTarget
         VStack(alignment: .leading, spacing: 0) {
             header(target)
-            Divider()
+            Separator()
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
@@ -113,7 +113,7 @@ struct SideListView: View {
         }
 
         if target == tree.root, let space = model.volumeSpace {
-            Divider().padding(.vertical, 6).padding(.horizontal, 16)
+            Separator().padding(.vertical, 6).padding(.horizontal, 16)
             SpaceRow(title: "free space", size: space.free)
             SpaceRow(title: "free + purgeable", size: space.freePurgeable)
         }
@@ -175,7 +175,8 @@ private struct RowBlock: View {
             let flags = NSEvent.modifierFlags.intersection([.command, .option, .shift, .control])
             // Control-click opens the context menu; it never drills.
             if flags.contains(.control) { return }
-            // Clicking the list gives it keyboard focus back from the chart.
+            // Clicking the list gives it keyboard focus back from the chart (or toolbar).
+            model.toolbarFocus = nil
             if let window = NSApp.keyWindow, window.firstResponder is SunburstChartView {
                 window.makeFirstResponder(window.contentView)
             }
@@ -346,5 +347,23 @@ private struct SecondaryText: ViewModifier {
 
     func body(content: Content) -> some View {
         content.foregroundStyle(contrast == .increased ? HierarchicalShapeStyle.primary : .secondary)
+    }
+}
+
+/// A hairline separator; with Increase Contrast, a thicker, stronger line
+/// (spec §7). Horizontal unless `vertical`.
+struct Separator: View {
+    var vertical = false
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        if contrast == .increased {
+            Rectangle()
+                .fill(Color.primary.opacity(0.55))
+                .frame(width: vertical ? 2 : nil, height: vertical ? nil : 2)
+                .accessibilityHidden(true)
+        } else {
+            Divider()
+        }
     }
 }

@@ -44,14 +44,64 @@ final class ResultResponder: NSResponder, QLPreviewPanelDataSource, QLPreviewPan
     /// The window whose chain this responder sits in.
     weak var hostWindow: NSWindow?
 
+    /// Tab cycle (spec §6): toolbar controls → list → chart → toolbar, and
+    /// Shift-Tab the reverse. The list holds focus whenever the chart (an
+    /// AppKit first responder) doesn't and no toolbar control is focused; the
+    /// toolbar's focus is `model.toolbarFocus`, drawn by `BreadcrumbBar`.
     override func keyDown(with event: NSEvent) {
+        let mods = event.modifierFlags.intersection([.command, .option, .control])
+        let shift = event.modifierFlags.contains(.shift)
+        let tab = Int(event.keyCode) == KeyCode.tab && mods.isEmpty
+        if let model, model.toolbarFocus != nil, mods.isEmpty, handleToolbarKey(event, model: model, shift: shift) {
+            return
+        }
         if let model, ResultActions(model: model, router: router).handleKey(event, chart: false) { return }
-        if Int(event.keyCode) == KeyCode.tab, let chart = hostWindow?.contentView.flatMap(Self.chart(in:)) {
-            // Tab from the list moves focus to the chart.
-            chart.window?.makeFirstResponder(chart)
+        if tab, let model {
+            if shift {
+                // Shift-Tab from the list: the toolbar's last control.
+                model.toolbarFocus = model.toolbarItem(after: nil, backwards: true)
+            } else if let chart = hostWindow?.contentView.flatMap(Self.chart(in:)) {
+                chart.window?.makeFirstResponder(chart)
+            }
             return
         }
         super.keyDown(with: event)
+    }
+
+    /// Keys while a toolbar control has the focus: Tab / Shift-Tab step
+    /// through the controls and on to the list / chart, ←/→ step within the
+    /// toolbar, Return or Space activates, Escape returns to the list. Other
+    /// keys go to the list, which takes the focus back.
+    private func handleToolbarKey(_ event: NSEvent, model: ResultViewModel, shift: Bool) -> Bool {
+        guard let item = model.toolbarFocus else { return false }
+        switch Int(event.keyCode) {
+        case KeyCode.tab:
+            let next = model.toolbarItem(after: item, backwards: shift)
+            model.toolbarFocus = next
+            if next == nil, shift, let chart = hostWindow?.contentView.flatMap(Self.chart(in:)) {
+                chart.window?.makeFirstResponder(chart)
+            }
+        case KeyCode.left, KeyCode.right:
+            if let next = model.toolbarItem(after: item, backwards: Int(event.keyCode) == KeyCode.left) {
+                model.toolbarFocus = next
+            }
+        case KeyCode.return, KeyCode.enter, KeyCode.space:
+            guard !shift, model.isEnabled(item) else { return true }
+            switch item {
+            case .back: model.back()
+            case .forward: model.forward()
+            case .disks:
+                model.toolbarFocus = nil
+                router?.backToDisks(from: model)
+            case .crumb(let path): model.visit(path: path)
+            }
+        case KeyCode.escape:
+            model.toolbarFocus = nil
+        default:
+            model.toolbarFocus = nil
+            return false
+        }
+        return true
     }
 
     static func chart(in view: NSView) -> SunburstChartView? {

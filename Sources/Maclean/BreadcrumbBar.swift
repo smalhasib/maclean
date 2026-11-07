@@ -12,31 +12,34 @@ struct BreadcrumbBar: View {
         var id: String { path }
     }
 
-    private var crumbs: [Crumb] {
-        let root = model.tree.rootPath
-        let current = model.history.current
-        var out = [Crumb(name: model.rootName, path: root)]
-        let prefix = root.hasSuffix("/") ? root : root + "/"
-        guard current != root, current.hasPrefix(prefix) else { return out }
-        var path = root
-        for component in current.dropFirst(prefix.count).split(separator: "/") {
-            path = path.hasSuffix("/") ? path + component : path + "/" + component
-            out.append(Crumb(name: String(component), path: path))
-        }
-        return out
+    private var crumbs: [Crumb] { model.crumbs.map { Crumb(name: $0.name, path: $0.path) } }
+
+    @Environment(\.controlActiveState) private var activeState
+
+    /// Whether `item` shows the keyboard focus (in the key window only).
+    private func focused(_ item: ResultViewModel.ToolbarItem) -> Bool {
+        model.toolbarFocus == item && activeState == .key
+    }
+
+    /// A mouse click on a control moves the keyboard focus off the toolbar.
+    private func click(_ action: () -> Void) {
+        model.toolbarFocus = nil
+        action()
     }
 
     var body: some View {
         HStack(spacing: 6) {
-            Button { model.back() } label: {
+            Button { click(model.back) } label: {
                 Image(systemName: "chevron.left").frame(width: 22, height: 22)
             }
+            .focusOutline(focused(.back))
             .disabled(!model.history.canGoBack)
             .help("Back")
             .accessibilityLabel("Back")
-            Button { model.forward() } label: {
+            Button { click(model.forward) } label: {
                 Image(systemName: "chevron.right").frame(width: 22, height: 22)
             }
+            .focusOutline(focused(.forward))
             .disabled(!model.history.canGoForward)
             .help("Forward")
             .accessibilityLabel("Forward")
@@ -60,14 +63,15 @@ struct BreadcrumbBar: View {
         let hidden = keepLast >= all.count - 1 ? [] : Array(all[1 ..< all.count - keepLast])
         let shown = hidden.isEmpty ? all : [all[0]] + Array(all.suffix(keepLast))
         return HStack(spacing: 4) {
-            Button("Disks", action: onDisks)
+            Button("Disks") { click(onDisks) }
                 .fixedSize()
+                .focusOutline(focused(.disks))
             ForEach(Array(shown.enumerated()), id: \.element.id) { offset, crumb in
                 separator
                 if offset == 1, !hidden.isEmpty {
                     Menu {
                         ForEach(hidden) { c in
-                            Button(c.name) { model.visit(path: c.path) }
+                            Button(c.name) { click { model.visit(path: c.path) } }
                         }
                     } label: {
                         Text("…")
@@ -75,6 +79,8 @@ struct BreadcrumbBar: View {
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
                     .fixedSize()
+                    // A focused crumb that is collapsed shows its focus here.
+                    .focusOutline(hidden.contains { focused(.crumb($0.path)) })
                     .accessibilityLabel("Hidden folders")
                     separator
                 }
@@ -93,7 +99,7 @@ struct BreadcrumbBar: View {
     }
 
     private func crumbButton(_ crumb: Crumb, isLast: Bool) -> some View {
-        Button { model.visit(path: crumb.path) } label: {
+        Button { click { model.visit(path: crumb.path) } } label: {
             Text(crumb.name)
                 .fontWeight(isLast ? .semibold : .regular)
                 .foregroundStyle(isLast ? .primary : .secondary)
@@ -102,6 +108,7 @@ struct BreadcrumbBar: View {
                 .frame(maxWidth: isLast ? 260 : 160, alignment: .leading)
                 .fixedSize()   // natural width, capped (and middle-truncated) at the max
         }
+        .focusOutline(focused(.crumb(crumb.path)))
         .help(crumb.name)
         .layoutPriority(isLast ? 1 : 0)
     }
@@ -114,5 +121,19 @@ private struct CrumbChevron: Shape {
         path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
         path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
         return path
+    }
+}
+
+extension View {
+    /// The keyboard-focus outline of a toolbar control (Tab cycle; see `ResultResponder`).
+    func focusOutline(_ shown: Bool) -> some View {
+        overlay {
+            if shown {
+                RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(Color.accentColor, lineWidth: 2)
+                    .padding(-3)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 }

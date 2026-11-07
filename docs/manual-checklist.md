@@ -75,9 +75,11 @@ open -a "$PWD/.build/Maclean.app" /some/dir  # scan a folder directly
 - [ ] ⌘E expands or collapses "smaller objects".
 - [ ] ⌘, opens Settings.
 - [ ] Every action is in the menu bar with its shortcut: App, File, Edit, View, Go (including the persisted Always Expand "smaller objects" toggle), Action (including Launch Disk Utility…), Window and Help.
-- [ ] Focus: the list has keyboard focus by default, and Tab moves between the list and the chart. With Full Keyboard Access on, the toolbar buttons are reachable too.
+- [ ] Focus: the list has keyboard focus by default. Tab moves between the toolbar, the list and the chart: each enabled toolbar control in turn (back, forward, Disks, the breadcrumbs), then the list, then the chart, then back to the toolbar. Shift-Tab goes the other way.
+- [ ] A focused toolbar control shows an accent outline (a collapsed crumb shows it on "…"). Return or Space activates it, ←/→ step within the toolbar, and Escape returns to the list.
 - [ ] In the chart, ←/→ move between siblings, ↓ moves into the first child, and ↑ moves out to the parent. Return enters and Space previews the keyboard-current segment.
 - [ ] Chart focus indication: after Tab, the keyboard-current segment gets an accent outline, or a thin accent ring hugs the chart when nothing is selected. There's no outline after a mouse click until an arrow key is pressed. There's never a full-size focus circle.
+- [ ] After a keyboard drill from the chart (Return, ⌘↓, ⌘↑, ⌘[ / ⌘]), the outline stays visible once the animation ends. After drilling in it's on the first child. After going up it's on the folder you came from.
 
 ## Context menu
 
@@ -127,7 +129,7 @@ Turn on System Settings › Accessibility › Display › Increase contrast. Tog
 
 - [ ] The chart re-renders at once: stronger, more saturated colours and thicker segment gaps.
 - [ ] The centre disc's folder name and the list's secondary text (sizes, kinds, "smaller objects…", free space) use full-contrast labels. So does the start screen's detail and status text.
-- [ ] Separators and the hover outline are more visible.
+- [ ] Separators (toolbar, chart and list divider, list header, collector bar, banners, start-screen rows) are thicker and stronger, and the hover outline is more visible.
 - [ ] The keyboard focus outline is thicker.
 
 ## VoiceOver
@@ -137,7 +139,7 @@ Turn VoiceOver on with ⌘F5.
 - [ ] List rows read "<name>, <folder|file|package>, <size>", for example "Users, folder, 307.6 gigabytes". The selected row is announced as selected.
 - [ ] Activating a row (VO-Space) drills into a folder or selects a file.
 - [ ] The list header reads the name, item count and size. "smaller objects…" reads its item count, size and expanded state, and VO-Space toggles it.
-- [ ] The chart is one group, "Disk map of <folder>". Its children are the first ring's segments, with the same labels as the rows. VO-Space on a segment opens it.
+- [ ] The chart is one group, "Disk map of <folder>". Its children are the first ring's segments, with the same labels as the rows. VO-Space on a segment opens it. The ring-1 "smaller objects" segment is read but has no press action.
 - [ ] The VoiceOver cursor's outline on a segment sits over that segment.
 - [ ] Start-screen rows read the name, then the capacity and free space (or the path), then the state ("not scanned", "scanning, 182 gigabytes counted", "scanned, 300 gigabytes", or the error). Scan/View/Cancel and More are separate buttons.
 - [ ] Every action can be reached without a mouse (§6).

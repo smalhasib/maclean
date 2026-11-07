@@ -85,7 +85,7 @@ enum ActionResult: Equatable { case ok, missing }
 
 /// Virtual key codes of the keys the result window handles itself.
 enum KeyCode {
-    static let `return` = 36, enter = 76, space = 49, tab = 48
+    static let `return` = 36, enter = 76, space = 49, tab = 48, escape = 53
     static let left = 123, right = 124, down = 125, up = 126
     static let pageUp = 116, pageDown = 121, home = 115, end = 119
 }

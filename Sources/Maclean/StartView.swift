@@ -187,7 +187,7 @@ struct StartView: View {
                         path: volume.entry.scanPath,
                         expected: volume.usedBytes,
                         registry: registry)
-                    Divider().padding(.leading, 64)
+                    Separator().padding(.leading, 64)
                 }
 
                 let folders = scannedFolders
@@ -196,7 +196,7 @@ struct StartView: View {
                         .padding(.top, 12)
                     ForEach(folders) { folder in
                         folderRow(folder, icon: Self.folderIcon)
-                        Divider().padding(.leading, 64)
+                        Separator().padding(.leading, 64)
                     }
                 }
 
@@ -243,7 +243,7 @@ struct StartView: View {
                     .contextMenu {
                         Button("Unstar") { model.unstar(folder.path) }
                     }
-                Divider().padding(.leading, 64)
+                Separator().padding(.leading, 64)
             }
         }
         .background {

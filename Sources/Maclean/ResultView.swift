@@ -23,16 +23,16 @@ struct ResultView: View {
     var body: some View {
         VStack(spacing: 0) {
             BreadcrumbBar(model: model, onDisks: onDisks)
-            Divider()
+            Separator()
             ResultBanners(model: model)
             HStack(spacing: 0) {
                 SunburstView(model: model)
                     .frame(minWidth: 220, maxWidth: .infinity, maxHeight: .infinity)
-                Divider()
+                Separator(vertical: true)
                 SideListView(model: model)
                     .frame(width: 280)
             }
-            Divider()
+            Separator()
             CollectorBar()
         }
         // The minimum applies once the window has grown, so it animates
@@ -95,7 +95,7 @@ private struct ResultBanners: View {
             .padding(.horizontal, 16)
             .frame(height: 32)
             .background(Color.primary.opacity(0.04))
-            Divider()
+            Separator()
         }
         .accessibilityElement(children: .combine)
     }

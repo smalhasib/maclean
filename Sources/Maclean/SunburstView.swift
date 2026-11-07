@@ -70,6 +70,16 @@ private struct SunburstRepresentable: NSViewRepresentable {
         }
         view.onCentreClick = { [weak model] in model?.goUp() }
         view.onFirstFrame = { [weak model] in model?.chartDidDrawFirstFrame() }
+        // Tab cycle: chart → toolbar, Shift-Tab chart → list (the chart has
+        // already handed first responder to the content view).
+        view.onTabOut = { [weak model] backwards in
+            guard let model else { return }
+            model.toolbarFocus = backwards ? nil : model.toolbarItem(after: nil, backwards: false)
+        }
+        view.onFocus = { [weak model] in
+            if model?.toolbarFocus != nil { model?.toolbarFocus = nil }
+        }
+        view.onNeedsKeyboardSelection = { [weak model] in model?.selectForKeyboardFocus() }
         view.segmentLabel = { [weak model] segment in
             guard let model else { return "" }
             guard let node = segment.node else { return "smaller objects, \(SizeText.spoken(segment.mergedSize))" }
@@ -125,6 +135,12 @@ final class SunburstChartView: NSView {
     var canSwipe: (() -> (Bool, Bool))?
     var onCentreClick: (() -> Void)?
     var onFirstFrame: (() -> Void)?
+    /// Tab (false) or Shift-Tab (true) out of the chart.
+    var onTabOut: ((Bool) -> Void)?
+    /// The chart took keyboard focus (or was clicked).
+    var onFocus: (() -> Void)?
+    /// After a navigation with keyboard focus: pick a keyboard-current segment.
+    var onNeedsKeyboardSelection: (() -> Void)?
     /// VoiceOver label of a segment: "<name>, <kind>, <size>".
     var segmentLabel: ((Segment) -> String)?
 
@@ -248,6 +264,7 @@ final class SunburstChartView: NSView {
         // Focus from a click shows nothing; from Tab (or VoiceOver) it does.
         let mouse: Set<NSEvent.EventType> = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
         keyboardFocus = !(NSApp.currentEvent.map { mouse.contains($0.type) } ?? false)
+        onFocus?()
         DispatchQueue.main.async { [weak self] in self?.updateFocusLayer() }
         return true
     }
@@ -266,8 +283,10 @@ final class SunburstChartView: NSView {
         }
         let mods = event.modifierFlags.intersection([.command, .option, .control])
         if Int(event.keyCode) == KeyCode.tab, mods.isEmpty {
-            // Tab from the chart gives focus back to the list (the content view).
+            // Tab: on to the toolbar; Shift-Tab: back to the list. Both live in
+            // the content view, which takes first responder.
             window?.makeFirstResponder(window?.contentView)
+            onTabOut?(event.modifierFlags.contains(.shift))
             return
         }
         super.keyDown(with: event)
@@ -327,8 +346,21 @@ final class SunburstChartView: NSView {
         for (i, s) in chartLayout.segments.enumerated() where s.ring == 1 {
             let path = CGMutablePath()
             addSegment(to: path, geometry: g, ringPosition: 1, a0: s.startAngle, a1: s.endAngle, gap: gap)
-            let element = SegmentElement()
-            element.setAccessibilityRole(.button)
+            // "smaller objects" does nothing on click: a static element, no AXPress.
+            let element: SegmentElement
+            if s.node == nil {
+                element = SegmentElement()
+                element.setAccessibilityRole(.staticText)
+            } else {
+                let pressable = PressableSegmentElement()
+                pressable.setAccessibilityRole(.button)
+                // Presses on an element held from an older layout are ignored.
+                let layoutGeneration = generation, node = s.node
+                pressable.press = { [weak self] in
+                    self?.pressSegment(i, node: node, generation: layoutGeneration) ?? false
+                }
+                element = pressable
+            }
             element.setAccessibilityLabel(segmentLabel?(s) ?? "")
             element.setAccessibilityParent(self)
             // Parent space is bottom-left based even for a flipped view.
@@ -337,7 +369,6 @@ final class SunburstChartView: NSView {
             element.setAccessibilityFrameInParentSpace(box)
             element.index = i
             element.chart = self
-            element.press = { [weak self] in self?.pressSegment(i) ?? false }
             elements.append(element)
         }
         accessibilityElements = elements
@@ -364,8 +395,9 @@ final class SunburstChartView: NSView {
     }
 
     /// VoiceOver's press on a ring-1 segment: the same as a plain click.
-    private func pressSegment(_ i: Int) -> Bool {
-        guard transition == nil, let chartLayout, i < chartLayout.segments.count else { return false }
+    private func pressSegment(_ i: Int, node: NodeID?, generation pressed: Int) -> Bool {
+        guard pressed == generation, transition == nil, let chartLayout, i < chartLayout.segments.count,
+              chartLayout.segments[i].node == node else { return false }
         onClick?(chartLayout.segments[i], [])
         return true
     }
@@ -490,6 +522,11 @@ final class SunburstChartView: NSView {
         transition = nil
         frameContext = nil
         refreshHoverFromMouse()
+        // A keyboard drill keeps the focus visible on a segment of the new chart.
+        if keyboardFocus, window?.firstResponder === self {
+            DispatchQueue.main.async { [weak self] in self?.onNeedsKeyboardSelection?() }
+        }
+        updateFocusLayer()
     }
 
     // MARK: Geometry
@@ -547,6 +584,7 @@ final class SunburstChartView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        onFocus?()
         if keyboardFocus { keyboardFocus = false; updateFocusLayer() }
         // Control-click is a context-menu click, never a drill.
         if event.modifierFlags.contains(.control) {
@@ -980,17 +1018,21 @@ final class SunburstChartView: NSView {
     }
 }
 
-/// A ring-1 segment as an accessibility element; VoiceOver's press opens it.
-private final class SegmentElement: NSAccessibilityElement {
+/// A ring-1 segment as an accessibility element.
+private class SegmentElement: NSAccessibilityElement {
     var index = 0
-    var press: (() -> Bool)?
     nonisolated(unsafe) weak var chart: SunburstChartView?
-
-    override func accessibilityPerformPress() -> Bool { press?() ?? false }
 
     /// A segment's frame is its bounding box, which overlaps its neighbours';
     /// the chart resolves the point against the real ring geometry.
     override nonisolated func accessibilityHitTest(_ point: NSPoint) -> Any? {
         chart?.accessibilityElement(atScreen: point) ?? self
     }
+}
+
+/// A ring-1 file or folder segment; VoiceOver's press acts as a click.
+private final class PressableSegmentElement: SegmentElement {
+    var press: (() -> Bool)?
+
+    override func accessibilityPerformPress() -> Bool { press?() ?? false }
 }
