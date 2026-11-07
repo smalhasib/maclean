@@ -3,50 +3,99 @@ import Testing
 @testable import MacleanKit
 
 @MainActor @Suite struct StarredFoldersTests {
-    private func fixture() throws -> (UserDefaults, String, URL) {
+    private final class Fixture {
+        let defaults: UserDefaults
         let suite = UUID().uuidString
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("starred-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        // Bookmarks resolve to the canonical (/private/var) form of the path.
-        let real = try #require(realpath(dir.path, nil))
-        defer { free(real) }
-        return (defaults, suite, URL(fileURLWithPath: String(cString: real)))
+        let dir: URL
+        var mounts = ["/"]
+
+        init() throws {
+            defaults = try #require(UserDefaults(suiteName: suite))
+            let base = FileManager.default.temporaryDirectory.appendingPathComponent("starred-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+            // Canonical (/private/var) form, as starred paths are stored.
+            let real = try #require(realpath(base.path, nil))
+            defer { free(real) }
+            dir = URL(fileURLWithPath: String(cString: real))
+        }
+
+        @MainActor func make() -> StarredFolders {
+            StarredFolders(defaults: defaults, mountPoints: { [unowned self] in self.mounts })
+        }
+
+        func mkdir(_ name: String) throws -> URL {
+            let u = dir.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
+            return u
+        }
+
+        deinit {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: dir)
+        }
     }
 
     @Test func starRoundTrip() throws {
-        let (d, suite, dir) = try fixture()
-        defer { UserDefaults.standard.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: dir) }
-        let a = dir.appendingPathComponent("a")
-        try FileManager.default.createDirectory(at: a, withIntermediateDirectories: true)
-        StarredFolders(defaults: d).star(a)
-        #expect(StarredFolders(defaults: d).paths == [a.path])
-        let s = StarredFolders(defaults: d)
-        s.unstar(a.path)
-        #expect(StarredFolders(defaults: d).paths.isEmpty)
+        let f = try Fixture()
+        let a = try f.mkdir("a")
+        f.make().star(a)
+        #expect(f.make().paths == [a.path])
+        f.make().unstar(a.path)
+        #expect(f.make().paths.isEmpty)
     }
 
     @Test func movedStarredFolderFollows() throws {
-        let (d, suite, dir) = try fixture()
-        defer { UserDefaults.standard.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: dir) }
-        let a = dir.appendingPathComponent("a"), b = dir.appendingPathComponent("b")
-        try FileManager.default.createDirectory(at: a, withIntermediateDirectories: true)
-        let s = StarredFolders(defaults: d)
+        let f = try Fixture()
+        let a = try f.mkdir("a"), b = f.dir.appendingPathComponent("b")
+        let s = f.make()
         s.star(a)
         try FileManager.default.moveItem(at: a, to: b)
         #expect(s.resolve() == [b.path])
-        #expect(StarredFolders(defaults: d).paths == [b.path])
+        #expect(f.make().paths == [b.path])
     }
 
     @Test func deletedStarredFolderDropped() throws {
-        let (d, suite, dir) = try fixture()
-        defer { UserDefaults.standard.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: dir) }
-        let a = dir.appendingPathComponent("a")
-        try FileManager.default.createDirectory(at: a, withIntermediateDirectories: true)
-        let s = StarredFolders(defaults: d)
+        let f = try Fixture()
+        let a = try f.mkdir("a")
+        let s = f.make()
         s.star(a)
         try FileManager.default.removeItem(at: a)
         #expect(s.resolve() == [])
         #expect(s.paths == [])
+    }
+
+    @Test func unmountedVolumeStarKeptUntilItReturns() throws {
+        let f = try Fixture()
+        let a = try f.mkdir("a")
+        f.mounts = ["/", f.dir.path]        // dir plays a mounted volume
+        let s = f.make()
+        s.star(a)
+        f.mounts = ["/"]                    // "eject"
+        try FileManager.default.removeItem(at: a)
+        #expect(s.resolve() == [a.path])
+        f.mounts = ["/", f.dir.path]        // back, but the folder is really gone
+        #expect(s.resolve() == [])
+    }
+
+    @Test func folderMovedToTrashDropped() throws {
+        let f = try Fixture()
+        let a = try f.mkdir("a")
+        let trash = try f.mkdir(".Trash")
+        let s = f.make()
+        s.star(a)
+        try FileManager.default.moveItem(at: a, to: trash.appendingPathComponent("a"))
+        #expect(s.resolve() == [])
+    }
+
+    @Test func symlinkAndTargetYieldOneEntry() throws {
+        let f = try Fixture()
+        let a = try f.mkdir("a")
+        let link = f.dir.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: a)
+        let s = f.make()
+        s.star(a)
+        s.star(link)
+        #expect(s.paths == [a.path])
+        #expect(s.resolve() == [a.path])
     }
 }

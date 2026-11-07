@@ -23,12 +23,17 @@ import MacleanCore
 
     @Test func startupAndExternalListedSystemHidden() {
         let e = VolumeList.entries(from: mounts, volumeName: name)
-        #expect(e.map(\.id) == ["/", "/Volumes/USB", "/Volumes/Share"])
+        #expect(e.map(\.id) == ["/", "/Volumes/Share", "/Volumes/USB"])
         #expect(e[0].name == "Macintosh HD")
         #expect(e[0].scanPath == "/")
-        #expect(e[2].isNetwork)
-        #expect(!e[1].isNetwork)
-        #expect(e[1].scanPath == "/Volumes/USB")
+        #expect(e[1].isNetwork)
+        #expect(!e[2].isNetwork)
+        #expect(e[2].scanPath == "/Volumes/USB")
+    }
+
+    @Test func startupDiskFirstThenByName() {
+        let shuffled = [m("/Volumes/Zed"), m("/Volumes/Alpha"), m("/", "/dev/disk3s1s1")]
+        #expect(VolumeList.entries(from: shuffled, volumeName: name).map(\.id) == ["/", "/Volumes/Alpha", "/Volumes/Zed"])
     }
 
     @Test func ejectedVolumeDisappears() {

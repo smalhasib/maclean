@@ -27,11 +27,16 @@ public enum VolumeList {
     /// disk images apart needs DiskArbitration, which this Foundation-only
     /// module avoids.
     public static func entries(from mounts: [MountInfo], volumeName: (String) -> String) -> [VolumeEntry] {
-        mounts.compactMap { mount in
+        let listed: [VolumeEntry] = mounts.compactMap { mount in
             guard isListed(mount) else { return nil }
             let path = mount.path
             return VolumeEntry(id: path, name: volumeName(path), scanPath: path,
                                isNetwork: networkTypes.contains(mount.fsType), isDiskImage: false)
+        }
+        // Startup disk first, then by name.
+        return listed.sorted {
+            if ($0.id == "/") != ($1.id == "/") { return $0.id == "/" }
+            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
     }
 
