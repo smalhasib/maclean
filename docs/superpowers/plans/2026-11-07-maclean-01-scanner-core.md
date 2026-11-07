@@ -261,3 +261,26 @@ public enum ArchiveError: Error { case badMagic, unsupportedVersion(UInt32), tru
 - [ ] **Step 2: Verify on a fixture:** `swift run -c release maclean-scan Tests` → prints a total and the top entries, exit 0. `swift run maclean-scan /nope; echo $?` → `1`. `swift run maclean-scan; echo $?` → usage + `2`.
 - [ ] **Step 3: Benchmark (read-only) on the startup disk:** `swift build -c release && time .build/release/maclean-scan / --top 8 --out .build/maclean-root.mcln`. Expected: finishes in under 60 s (DaisyDisk took ~30 s on this Mac). The total is within 5% of DaisyDisk's 417.2 GB scanned figure *if the terminal running it has Full Disk Access*; the top children are Users, System, opt, Applications, private, Library, in roughly the sizes DaisyDisk showed (305.8, 41.5, 14.4, 14.1, 8.2, 6.2 GB). Record the actual numbers in the commit body. If it is more than 5% off, investigate before committing: firmlink double-counting or missing `/System/Volumes/Data` content are the likely causes.
 - [ ] **Step 4: Commit** `feat(cli): add maclean-scan with summary and archive output`, with the benchmark numbers in the body.
+
+---
+
+## Outcome and follow-ups (recorded after execution)
+
+Built on branch `feat/scanner-core`; 51 tests pass. Benchmark of `/` from a session without Full Disk Access: 28.1 s, 274 GB, 4.32M nodes, peak RSS 1.13 GB. `/System` scans 29.1 GB in 3.6 s.
+
+**Before Plan 2**
+- Re-run `maclean-scan /` from a terminal with Full Disk Access, and once with `sudo`; compare with DaisyDisk (417.2 GB; Users 305.8, System 41.5). Without FDA, ~/Library/Group Containers is unreadable (DaisyDisk sees 82.4 GB there); System is 12.4 GB short and ~26 GB of other top-level items are unexplained.
+- Memory task: peak ~262 B/node (builder staging + `finish()` copies), steady state ~75 B/node; the spec's <64 B/node needs a layout shrink too (e.g. `fileCount` UInt32 or computed lazily), or a revised target.
+- Move blocking reads off Swift's cooperative thread pool; use a process-wide fd budget (concurrent scans, app-held fds).
+
+**Before Plan 3**
+- Decide how the immutable tree updates after delete and Quick Rescan (overlay of removed nodes/size deltas vs O(n) rebuild, ~1 s at 4M nodes).
+- Refuse collecting `.mountPoint` nodes (volume roots).
+- `children(of:)` allocates per call; return a range-backed collection for the sunburst's hot paths.
+
+**Before Plan 4**
+- Root-written archives: 0600, `O_EXCL|O_NOFOLLOW`, private directory, chown to the invoking user. Add a byte-layout pin test before the format becomes cache + transport.
+- Define CLI exit codes for non-"unreadable" scanner errors; treat a `.restricted` root as unreadable; add a restricted-count accessor (Quick Rescan needs it).
+- Hidden space must account for Data-volume content unreachable via firmlinks (`.Spotlight-V100`, `.fseventsd`).
+
+**Later / minor:** cancellation and progress-throttle tests are weak; O(depth²) reopen chains past 32 retained fds; package root never flagged; bidi/line-separator characters not escaped in CLI output; no `--` end-of-options; the `TestingMacros` plugin flakes on some `swift test` runs with Command Line Tools.
