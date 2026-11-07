@@ -36,7 +36,7 @@ These are the owner's decisions made in this round:
 
 ### Non-goals (this round)
 - **Running tools' own cleanup commands**, such as `npm cache clean`, `brew cleanup`, `go clean`, `xcrun simctl delete unavailable` or `nix-store --gc`. Smart Clean deletes known folders directly. *Designer's call:* owner commands are opaque bulk actions that are hard to preview. Add them later if wanted.
-- **System-level (admin) Smart Clean targets** such as `/Library/Caches`, `/private/var/log` and Time Machine `.inProgress`. v1 covers the user's own files. Admin-level rows are a later addition, using the §6.5 admin path. *Designer's call.* Collector deletes still use admin rights when needed, per §5.8.
+- **Time Machine `.inProgress` backups and other users' home folders.** Maclean refuses anything on Time Machine volumes (spec §5.8). Smart Clean covers the current user and system-wide folders (§6.2a), never other accounts. *Designer's call.*
 - **App uninstaller**, memory/"optimize" tweaks, scheduled background cleaning, and a menu-bar agent.
 - **Local snapshots and purgeable space**: Plan 4 (hidden space), as already planned.
 
@@ -124,6 +124,16 @@ Behaviour is as in spec §5.7, §5.8 and §6.6. This section adds only the decis
 ### 5.3 Interaction with open scan results
 After a Smart Clean delete, any open scan result containing a deleted path marks that node removed through the overlay (§4.1), so the map shrinks without a rescan. A path is found with `node(atPath:)` plus an inode/device match. Results whose root contains no deleted paths are untouched.
 
+### 5.3a System-wide folders (owner's decision)
+- **Included.** System-wide targets (§6.2a) are part of every check.
+- **Measuring.** The launch check runs as the user and measures what it can read; most system logs and caches are readable with Full Disk Access.
+  - Anything it can't read is still listed, marked "size unknown", unticked.
+  - A **Measure with administrator rights** button sits at the top of that group. It runs the bundled CLI as root once (`maclean-scan smart-measure <paths>`, via the §6.5 `osascript` path, one password prompt) and fills in the sizes, ages and identities.
+  - The launch check itself **never** asks for a password.
+- **Deleting.** Ticked system items go into the admin batch (§4.3 step 5). There is **one password prompt** for the whole Clean, shown after the confirmation alert. The alert says "Some items need your administrator password."
+- **Root re-checks.** The root CLI re-runs Smart Clean protection, identity and age checks itself before each delete. It accepts only paths matching a system rule in the catalog, which is compiled into MacleanCore and shared by app and CLI. So even a tampered request can't make it delete anything else.
+- **Cancelled password prompt:** those items show as "skipped: administrator password not given". Everything else proceeds.
+
 ### 5.4 Full Disk Access
 Without Full Disk Access, some targets can't be read: other apps' containers, Mail Downloads and the Trash. These go to Skipped as "needs Full Disk Access", with a link to the existing FDA guide. Plan 4 builds the full onboarding; Plan 3 links to System Settings.
 
@@ -170,7 +180,36 @@ Ages are "nothing inside modified for N days" unless stated. "Owner" means the i
 | Window state | `~/Library/Saved Application State/*.savedState` | each | Review | ≥ 30 days; owner = its app |
 | Trash | `~/.Trash/*` | the whole Trash as one row (expandable) | Review | needs Full Disk Access; always permanent |
 | Mail attachments cache | `~/Library/Containers/com.apple.mail/Data/Library/Mail Downloads/*` | each folder | Review | ≥ 30 days; owner = Mail |
+| *System-wide rows are in §6.2a.* | | | | |
 | Large data (info) | `~/Library/Application Support/MobileSync/Backup`, `~/Library/Developer/Xcode/Archives`, `~/Library/Containers/com.docker.docker`, `~/.orbstack`, `~/.m2/repository`, `~/.gradle/caches`, `~/.ollama/models`, `~/.cache/lm-studio`, `~/Library/Developer/CoreSimulator/Devices` | the folder | Info | none |
+
+### 6.2a Catalog, system-wide (owner's decision: included)
+
+All rows need admin to delete, and some need it to measure (§5.3a). Ages are "nothing inside modified for N days".
+
+| Category | Target | Unit | Tier | Condition |
+|---|---|---|---|---|
+| System logs | `/Library/Logs/*` (including `DiagnosticReports` contents) | each child | Safe | ≥ 7 days |
+| System logs | `/private/var/log/*` regular files matching `*.log`, `*.log.*`, `*.gz`, `*.bz2` (not directories, not `asl`) | each file | Safe | ≥ 7 days; not open (open-file check) |
+| System logs | `/private/var/db/diagnostics/{Persist,Special,HighVolume}/*` | each file | Review | ≥ 7 days. The reason says "Older unified log history; Console loses entries older than this" |
+| System logs | `/private/var/db/reportmemoryexception/MemoryLimitViolations/*` | each | Safe | ≥ 30 days |
+| System caches | `/Library/Caches/*` | each child | Review | ≥ 7 days; `com.apple.*` excluded except `com.apple.iconservices.store`. Owner = the child's bundle id if any app or daemon with that id is running (`launchctl`-free check: running process whose executable's bundle id matches) |
+| System caches | current user's Darwin cache dir (`confstr(_CS_DARWIN_USER_CACHE_DIR)`): `com.apple.metal`, `com.apple.metalfe`, `com.apple.gpuarchiver` | the folder | Safe | nothing modified in the last 1 day; skipped if an EDR/MDM vendor folder is present (§6.4). This is user-owned and needs no admin; it's listed here because it lives under `/private/var/folders` |
+| System caches | `/private/var/folders/*/*/T/com.apple.idleassetsd/CFNetworkDownload_*.tmp` | each file | Safe | ≥ 7 days; not open |
+| Leftover system services | `/Library/LaunchDaemons/*.plist`, `/Library/LaunchAgents/*.plist`, `/Library/PrivilegedHelperTools/*` not named `com.apple.*` | each | Review | the plist's `Program`/`ProgramArguments[0]` is an absolute path that no longer exists, or the helper's owning app (from its embedded `SMAuthorizedClients`/Info.plist bundle id) isn't installed (§6.6). The reason names the missing program |
+
+**Never offered, even with admin:**
+- `/Library/Updates` and `macOS Install Data`;
+- `/private/var/db` outside the two rows above (including `uuidtext`);
+- `/private/var/vm`, `/System`, `/usr`;
+- any `com.apple.*` LaunchDaemon;
+- other users' `/private/var/folders` entries.
+
+**`/private` allowlist:** Smart Clean may touch only:
+- `/private/var/log`
+- `/private/var/db/diagnostics`
+- `/private/var/db/reportmemoryexception`
+- the current user's `/private/var/folders/<x>/<y>` cache and temp dirs.
 
 **Rule order (first match wins):**
 1. Never-clean entries and protection.
@@ -261,7 +300,7 @@ Port mole's `tests/fuzz_corpus/dangerous_paths.txt` (127 paths) as a Swift test.
 ## 7. Constraints
 - Everything in the product spec §3 applies: no developer account, macOS 14, Swift 6, ad-hoc signed.
 - **No new dependencies.**
-- **Tests never touch real user paths.** Rule tests run against a fake home directory, which means the catalog roots must be resolvable against an injected home URL. Owner-running and installed-app probes are injected protocols with fakes in tests.
+- **Tests never touch real user paths.** Rule tests run against a fake home directory, which means the catalog roots, including the system roots (`/Library`, `/private/var`, `/Applications`), must be resolvable against an injected base URL. The root CLI paths are tested as the normal user against temp folders. Owner-running and installed-app probes are injected protocols with fakes in tests.
 - The launch check must not block the main thread, and must not add measurable time to first frame (Plan 2 measured 31.86 ms).
 
 ## 8. Suggested build order (the builder may split differently)
@@ -271,6 +310,7 @@ Port mole's `tests/fuzz_corpus/dangerous_paths.txt` (127 paths) as a Swift test.
 2. **Plan 3b: Smart Clean.**
    - Rule engine and probes; catalog; project leftovers; app leftovers.
    - Launch check, start-screen card, review sheet, Skipped list, never-clean list, Settings › Smart Clean, and overlay updates of open results.
+   - System-wide rows: `maclean-scan smart-measure` and the catalog-restricted root delete (§5.3a, §6.2a).
 
 ## 9. Left to the builder
 - Exact visual styling of the card, review sheet, countdown and summary, within the Plan 2 light & airy language (both appearances, readable, uncluttered, keyboard accessible: Space toggles a row's checkbox, Return activates Clean only after focus is on it).
@@ -282,6 +322,10 @@ Port mole's `tests/fuzz_corpus/dangerous_paths.txt` (127 paths) as a Swift test.
 - The collector's protection is DaisyDisk-narrow, and Smart Clean's is strict (§6.4).
 - The collector and overlay are per scan session, with rescan carry-over by path (§4.1).
 - Leftovers rules run before the generic sweeps (§6.2 rule order).
+- **System-wide folders (owner's request after the first draft).**
+  - The system rows (§6.2a) are mostly Review tier, apart from logs and GPU caches.
+  - The launch check never asks for a password; admin rights are needed only to measure unreadable items or to delete.
+  - The root CLI only deletes paths that match a catalog system rule.
 - `com.apple.*` caches are offered only from an allowlist (§6.2).
 
 ## 11. Open questions
