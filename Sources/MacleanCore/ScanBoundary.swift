@@ -21,6 +21,10 @@ public struct ScanBoundary: Sendable {
     }
 
     static let dataVolume = "/System/Volumes/Data"
+    static let prebootVolume = "/System/Volumes/Preboot"
+    /// Cryptex graft points (OS, App, Rosetta, ...): their contents are the
+    /// disk images under Preboot's `<UUID>/cryptex1`, already counted there.
+    static let prebootCryptexes = "/System/Volumes/Preboot/Cryptexes"
     /// Canonical roots that contain the startup disk's Data volume mount point.
     static let rootsContainingDataVolume: Set<String> = ["/", "/System", "/System/Volumes"]
 
@@ -36,7 +40,8 @@ public struct ScanBoundary: Sendable {
     /// When the root lies on an APFS volume, the other mounted volumes of the
     /// same APFS container whose mount points lie strictly inside the root
     /// (Preboot, VM, Update, Recovery for `/`) are made descendable, as
-    /// DaisyDisk counts them; the Data volume is excluded (see above).
+    /// DaisyDisk counts them; the Data volume is excluded (see above). When
+    /// Preboot is descendable, its `Cryptexes` graft directory is skipped.
     public static func forRoot(_ path: String) -> ScanBoundary {
         let root = canonicalPath(path) ?? path
         var boundary = ScanBoundary(allowedDevices: [])
@@ -58,6 +63,9 @@ public struct ScanBoundary: Sendable {
                 boundary.descendableMounts.insert(m.path)
                 boundary.allowedDevices.insert(m.device)
             }
+        }
+        if boundary.descendableMounts.contains(prebootVolume) {
+            boundary.skippedPaths.insert(prebootCryptexes)
         }
         return boundary
     }

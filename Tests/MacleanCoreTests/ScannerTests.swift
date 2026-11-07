@@ -186,7 +186,10 @@ private func node(_ tree: FileTree, _ relative: String) -> NodeID? {
 
     @Test(arguments: ["/System", "/System/Volumes", "/System/Volumes/", "//", "/./System/../System"])
     func boundarySkipsDataVolumeInsideRoot(root: String) {
-        #expect(ScanBoundary.forRoot(root).skippedPaths == ["/System/Volumes/Data"])
+        // Preboot's cryptex grafts are skipped too when Preboot is descendable.
+        let skipped = ScanBoundary.forRoot(root).skippedPaths
+        #expect(skipped.contains("/System/Volumes/Data"))
+        #expect(skipped.isSubset(of: ["/System/Volumes/Data", "/System/Volumes/Preboot/Cryptexes"]))
     }
 
     @Test func boundaryDoesNotSkipDataVolumeOutsideRoot() {
@@ -255,7 +258,15 @@ private func node(_ tree: FileTree, _ relative: String) -> NodeID? {
 
     @Test func tempRootHasNoDescendableMounts() {
         let t = TempDir(); defer { withExtendedLifetime(t) {} }
-        #expect(ScanBoundary.forRoot(t.path).descendableMounts.isEmpty)
+        let b = ScanBoundary.forRoot(t.path)
+        #expect(b.descendableMounts.isEmpty)
+        #expect(!b.skippedPaths.contains("/System/Volumes/Preboot/Cryptexes"))
+    }
+
+    @Test(.enabled(if: FileManager.default.fileExists(atPath: "/System/Volumes/Preboot")))
+    func startupRootSkipsCryptexGrafts() {
+        #expect(ScanBoundary.forRoot("/").skippedPaths.contains("/System/Volumes/Preboot/Cryptexes"))
+        #expect(ScanBoundary.forRoot("/System").skippedPaths.contains("/System/Volumes/Preboot/Cryptexes"))
     }
 
     @Test(.enabled(if: FileManager.default.fileExists(atPath: "/System/Volumes/Preboot")))
