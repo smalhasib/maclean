@@ -2,7 +2,34 @@ import Foundation
 import Testing
 @testable import MacleanCore
 
+/// A real mount point on this machine whose parent can be listed, if any.
+private let knownMountPoint: (parent: String, name: String)? = {
+    for (parent, name) in [("/System/Volumes", "VM"), ("/System/Volumes", "Preboot"), ("/", "dev")] {
+        var a = stat(), b = stat()
+        let path = parent == "/" ? "/" + name : parent + "/" + name
+        if stat(parent, &a) == 0, stat(path, &b) == 0, a.st_dev != b.st_dev { return (parent, name) }
+    }
+    return nil
+}()
+
 @Suite struct DirectoryReaderTests {
+    @Test(.enabled(if: knownMountPoint != nil)) func reportsMountPoint() throws {
+        let (parent, name) = try #require(knownMountPoint)
+        let h = try DirectoryReader.open(path: parent)
+        let e = try #require(try DirectoryReader.entries(of: h).first { $0.name == name })
+        #expect(e.kind == .directory)
+        #expect(e.isMountPoint)
+    }
+
+    @Test func ordinaryEntriesAreNotMountPoints() throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        t.file("a.bin", bytes: 100); t.dir("sub"); t.symlink("ln", to: "sub")
+        let h = try DirectoryReader.open(path: t.path)
+        let e = try DirectoryReader.entries(of: h)
+        #expect(e.count == 3)
+        #expect(e.allSatisfy { !$0.isMountPoint })
+    }
+
     @Test func listsFilesDirsAndSymlinks() throws {
         let t = TempDir(); defer { withExtendedLifetime(t) {} }
         t.file("a.bin", bytes: 10_000); t.dir("sub"); t.symlink("ln", to: "sub")

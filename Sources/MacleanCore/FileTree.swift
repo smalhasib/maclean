@@ -20,6 +20,8 @@ public struct NodeFlags: OptionSet, Sendable {
     public static let hardLinkFirst = NodeFlags(rawValue: 1 << 4)
     public static let hardLinkExtra = NodeFlags(rawValue: 1 << 5)
     public static let cloneExtra = NodeFlags(rawValue: 1 << 6)
+    /// A directory that is a mount point (a volume root); recorded empty, never descended.
+    public static let mountPoint = NodeFlags(rawValue: 1 << 7)
 }
 
 /// Immutable, compact (struct-of-arrays) tree of a scanned directory.

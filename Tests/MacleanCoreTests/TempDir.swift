@@ -1,4 +1,5 @@
 import Foundation
+@testable import MacleanCore
 
 /// A uniquely named scratch directory for tests. Everything inside it is
 /// removed when the instance is deallocated, after restoring permissions so
@@ -10,7 +11,9 @@ final class TempDir {
     let path: String
 
     init() {
-        let base = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().path
+        // Canonical (realpath) form, matching the scanner's rootPath: unlike
+        // `resolvingSymlinksInPath`, it keeps the `/private` prefix.
+        let base = ScanBoundary.canonicalPath(FileManager.default.temporaryDirectory.path)!
         path = (base as NSString).appendingPathComponent("maclean-tests-\(UUID().uuidString)")
         try! FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: false)
     }

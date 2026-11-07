@@ -15,6 +15,9 @@ public struct RawEntry: Sendable {
     public var cloneID: UInt64
     /// Number of files sharing `cloneID`'s data; 0 when unsupported or not cloned.
     public var cloneRefCount: UInt32
+    /// True for a directory that is a mount point (`DIR_MNTSTATUS_MNTPOINT`);
+    /// always false for non-directories.
+    public var isMountPoint: Bool = false
 }
 
 public enum ReadError: Error, Equatable {
@@ -72,6 +75,7 @@ public enum DirectoryReader {
         request.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
         request.commonattr = attrgroup_t(ATTR_CMN_RETURNED_ATTRS)
             | attrgroup_t(ATTR_CMN_NAME | ATTR_CMN_DEVID | ATTR_CMN_OBJTYPE | ATTR_CMN_FILEID)
+        request.dirattr = attrgroup_t(ATTR_DIR_MOUNTSTATUS)
         request.fileattr = attrgroup_t(ATTR_FILE_LINKCOUNT | ATTR_FILE_ALLOCSIZE)
         request.forkattr = attrgroup_t(ATTR_CMNEXT_CLONEID | ATTR_CMNEXT_CLONE_REFCNT)
 
@@ -103,9 +107,9 @@ public enum DirectoryReader {
     }
 
     /// Parses one getattrlistbulk record (`record` spans exactly its length).
-    /// Attributes appear in bitmask order (common, file, then extended-common
-    /// in the fork slot); attributes not set in `returned_attrs` occupy no
-    /// space. Any read outside the record throws `.other(EIO)`.
+    /// Attributes appear in bitmask order (common, directory, file, then
+    /// extended-common in the fork slot); attributes not set in
+    /// `returned_attrs` occupy no space. Any read outside the record throws `.other(EIO)`.
     private static func parse(_ record: UnsafeRawBufferPointer) throws(ReadError) -> RawEntry? {
         var offset = MemoryLayout<UInt32>.size  // record length
         func read<T>(_: T.Type) throws(ReadError) -> T {
@@ -133,6 +137,8 @@ public enum DirectoryReader {
         let objType = has(returned.commonattr, ATTR_CMN_OBJTYPE) ? try read(fsobj_type_t.self) : VNON.rawValue
         let inode = has(returned.commonattr, ATTR_CMN_FILEID) ? try read(UInt64.self) : 0
 
+        let mountStatus = has(returned.dirattr, ATTR_DIR_MOUNTSTATUS) ? try read(UInt32.self) : 0
+
         let linkCount = has(returned.fileattr, ATTR_FILE_LINKCOUNT) ? try read(UInt32.self) : 1
         let allocated = has(returned.fileattr, ATTR_FILE_ALLOCSIZE) ? try read(off_t.self) : 0
 
@@ -149,6 +155,7 @@ public enum DirectoryReader {
         return RawEntry(
             name: name, kind: kind, inode: inode, device: device,
             linkCount: linkCount, allocatedSize: kind == .directory ? 0 : allocated,
-            cloneID: cloneID, cloneRefCount: cloneRefCount)
+            cloneID: cloneID, cloneRefCount: cloneRefCount,
+            isMountPoint: kind == .directory && mountStatus & UInt32(DIR_MNTSTATUS_MNTPOINT) != 0)
     }
 }

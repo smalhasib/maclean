@@ -182,6 +182,47 @@ private func node(_ tree: FileTree, _ relative: String) -> NodeID? {
         #expect((1...2).contains(b.allowedDevices.count))
     }
 
+    @Test(arguments: ["/System", "/System/Volumes", "/System/Volumes/", "//", "/./System/../System"])
+    func boundarySkipsDataVolumeInsideRoot(root: String) {
+        #expect(ScanBoundary.forRoot(root).skippedPaths == ["/System/Volumes/Data"])
+    }
+
+    @Test func boundaryDoesNotSkipDataVolumeOutsideRoot() {
+        #expect(ScanBoundary.forRoot("/System/Library").skippedPaths.isEmpty)
+        #expect(ScanBoundary.forRoot("/System/Volumes/Data").skippedPaths.isEmpty)
+    }
+
+    @Test func canonicalPathResolvesSlashesDotsAndSymlinks() {
+        #expect(ScanBoundary.canonicalPath("//") == "/")
+        #expect(ScanBoundary.canonicalPath("/./System/") == "/System")
+        #expect(ScanBoundary.canonicalPath("/nonexistent-maclean-\(UUID().uuidString)") == nil)
+    }
+
+    @Test func nonCanonicalRootYieldsCanonicalRootPath() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        t.file("real/a", bytes: 4096); t.symlink("link", to: "real")
+        let dotted = (t.path as NSString).deletingLastPathComponent + "/./"
+            + (t.path as NSString).lastPathComponent + "//real/"
+        let viaDots = try await Scanner.scan(path: dotted)
+        #expect(viaDots.rootPath == t.url("real"))
+        let viaLink = try await Scanner.scan(path: t.url("link"))
+        #expect(viaLink.rootPath == t.url("real"))
+        #expect(viaLink.fileCount(of: viaLink.root) == 1)
+        let explicit = try await Scanner.scan(path: t.url("link"), boundary: ScanBoundary(allowedDevices: []))
+        #expect(explicit.rootPath == t.url("real"))
+    }
+
+    @Test(.enabled(if: FileManager.default.fileExists(atPath: "/System/Volumes/VM")))
+    func mountPointIsFlaggedAndNotDescended() async throws {
+        // Scans only the VM volume's parent listing; VM itself is not opened.
+        // Restrict devices to none so no other subdirectory is descended.
+        let tree = try await Scanner.scan(path: "/System/Volumes", boundary: ScanBoundary(allowedDevices: []))
+        let vm = try #require(node(tree, "VM"))
+        #expect(tree.flags(of: vm).isSuperset(of: [.directory, .mountPoint]))
+        #expect(tree.children(of: vm).isEmpty)
+        #expect(tree.size(of: vm) == 0)
+    }
+
     @Test func boundaryForOrdinaryRoot() {
         let t = TempDir(); defer { withExtendedLifetime(t) {} }
         let b = ScanBoundary.forRoot(t.path)

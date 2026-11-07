@@ -23,19 +23,24 @@ public struct ScanProgress: Sendable {
 /// and the fd budget allows; otherwise its children are reopened name by name
 /// from the nearest ancestor that is still open.
 public enum Scanner {
+    /// Scans `path` with `ScanBoundary.forRoot` of its canonical path.
     public static func scan(path: String,
                             progress: @Sendable (ScanProgress) -> Void = { _ in }) async throws -> FileTree {
-        try await scan(path: path, boundary: .forRoot(path), progress: progress)
+        let rootPath = try canonicalRoot(path)
+        return try await scan(path: rootPath, boundary: .forRoot(rootPath), progress: progress)
     }
 
-    /// Scans `path`, descending only into directories `boundary` allows.
-    /// Only a root that cannot be opened throws (a `ReadError`); unreadable
-    /// subdirectories become `.restricted` nodes. Throws `CancellationError`
-    /// when the calling task is cancelled.
+    /// Scans `path` (canonicalized with `realpath`; the tree's `rootPath` is
+    /// the canonical path), descending only into directories `boundary`
+    /// allows. Directories that are mount points are recorded as empty
+    /// `.mountPoint` nodes and never opened. Only a root that cannot be
+    /// resolved or opened throws (a `ReadError`); unreadable subdirectories
+    /// become `.restricted` nodes. Throws `CancellationError` when the calling
+    /// task is cancelled.
     public static func scan(path: String, boundary: ScanBoundary,
                             progress: @Sendable (ScanProgress) -> Void = { _ in }) async throws -> FileTree {
         try Task.checkCancellation()
-        let rootPath = normalized(path)
+        let rootPath = try canonicalRoot(path)
         let rootHandle = try DirectoryReader.open(path: rootPath)
         var st = stat()
         let ok = fstat(rootHandle.fd, &st) == 0
@@ -100,10 +105,9 @@ public enum Scanner {
         }
     }
 
-    static func normalized(_ path: String) -> String {
-        var p = path
-        while p.count > 1, p.hasSuffix("/") { p.removeLast() }
-        return p
+    static func canonicalRoot(_ path: String) throws(ReadError) -> String {
+        guard let resolved = ScanBoundary.canonicalPath(path) else { throw ReadError(errno: errno) }
+        return resolved
     }
 }
 
@@ -265,7 +269,11 @@ private struct Walk {
             items += 1
             switch e.kind {
             case .directory:
-                if checkSkips, boundary.skippedPaths.contains(join(base, e.name)) {
+                // Mount points are never opened: crossing into another volume
+                // could trigger an automount or hang on a stale network mount.
+                if e.isMountPoint {
+                    addDirectory(e, in: ref, flags: .mountPoint)
+                } else if checkSkips, boundary.skippedPaths.contains(join(base, e.name)) {
                     addDirectory(e, in: ref, flags: [])
                 } else {
                     stack.append(Pending(parent: ref, entry: e))
