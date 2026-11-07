@@ -13,6 +13,21 @@ func formatBytes(_ bytes: Int64) -> String {
     ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
 }
 
+/// Replaces control characters (C0, DEL, C1) with visible \u{XX} escapes so
+/// file names cannot inject terminal escape sequences.
+func sanitized(_ text: String) -> String {
+    var out = ""
+    for scalar in text.unicodeScalars {
+        switch scalar.value {
+        case 0x00...0x1F, 0x7F...0x9F:
+            out += "\\u{" + String(scalar.value, radix: 16, uppercase: true) + "}"
+        default:
+            out.unicodeScalars.append(scalar)
+        }
+    }
+    return out
+}
+
 var path: String?
 var outPath: String?
 var top = 10
@@ -42,7 +57,7 @@ do {
         fputs(String(format: "\r\u{1B}[K%.1f GB scanned, %lld items", gb, p.items), stderr)
     }
 } catch {
-    fputs("\nmaclean-scan: cannot scan \(path): \(error)\n", stderr)
+    fputs("\nmaclean-scan: cannot scan \(sanitized(path)): \(error)\n", stderr)
     exit(1)
 }
 fputs("\r\u{1B}[K", stderr)
@@ -54,7 +69,7 @@ for i in 0..<tree.count where tree.flags(of: NodeID(index: Int32(i))).contains(.
 }
 
 let root = tree.root
-print("Path:        \(tree.rootPath)")
+print("Path:        \(sanitized(tree.rootPath))")
 print("Total size:  \(formatBytes(tree.size(of: root)))")
 print("Files:       \(tree.fileCount(of: root))")
 print("Restricted:  \(restricted)")
@@ -62,16 +77,16 @@ print(String(format: "Elapsed:     %.1f s", elapsed))
 if top > 0 {
     print("Top \(top):")
     for child in tree.children(of: root).prefix(top) {
-        print("  \(formatBytes(tree.size(of: child)).padding(toLength: 10, withPad: " ", startingAt: 0)) \(tree.name(of: child))")
+        print("  \(formatBytes(tree.size(of: child)).padding(toLength: 10, withPad: " ", startingAt: 0)) \(sanitized(tree.name(of: child)))")
     }
 }
 
 if let outPath {
     do {
         try TreeArchive.write(tree, to: URL(fileURLWithPath: outPath))
-        print("Archive:     \(outPath)")
+        print("Archive:     \(sanitized(outPath))")
     } catch {
-        fputs("maclean-scan: cannot write \(outPath): \(error)\n", stderr)
+        fputs("maclean-scan: cannot write \(sanitized(outPath)): \(error)\n", stderr)
         exit(1)
     }
 }

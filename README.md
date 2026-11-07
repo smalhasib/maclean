@@ -21,6 +21,11 @@ Scans `<path>`, prints the total size, file count, number of restricted (unreada
 elapsed time and the `--top` largest children (default 10) to stdout. Live progress goes to stderr.
 `--out` writes the scan tree as an archive.
 
+Run it from a terminal with Full Disk Access for complete results: without it, macOS (TCC)
+blocks folders such as `~/Pictures` and parts of `~/Library`, which are then reported as restricted
+and counted as empty, so totals come out lower than tools that have access (e.g. DaisyDisk).
+File names are printed with control characters escaped (`\u{1B}`).
+
 Exit codes: `0` ok, `1` root unreadable, `2` usage error.
 
 ## License
