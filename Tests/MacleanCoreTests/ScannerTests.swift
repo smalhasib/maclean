@@ -132,19 +132,7 @@ private func node(_ tree: FileTree, _ relative: String) -> NodeID? {
         // more directories want an open fd than the budget allows and the
         // rest must be reopened name by name from an open ancestor.
         let t = TempDir(); defer { withExtendedLifetime(t) {} }
-        var fd = open(t.path, O_RDONLY | O_DIRECTORY)
-        try #require(fd >= 0)
-        for _ in 0..<300 {
-            try #require(mkdirat(fd, "s", 0o755) == 0)
-            let f = openat(fd, "s/f", O_WRONLY | O_CREAT, 0o644)
-            try #require(f >= 0); close(f)
-            try #require(mkdirat(fd, "d123456789", 0o755) == 0)
-            let next = openat(fd, "d123456789", O_RDONLY | O_DIRECTORY)
-            close(fd)
-            try #require(next >= 0)
-            fd = next
-        }
-        close(fd)
+        try Self.makeDeepAndWide(t)
         defer { Self.removeDeep(t.path) }
 
         let tree = try await Scanner.scan(path: t.path)
@@ -374,6 +362,76 @@ private func node(_ tree: FileTree, _ relative: String) -> NodeID? {
         let task = Task { try await Scanner.scan(path: path) }
         task.cancel()
         await #expect(throws: CancellationError.self) { _ = try await task.value }
+    }
+
+    @Test func concurrentScansShareSmallBudget() async throws {
+        let budget = FDBudget(limit: 24)
+        let a = TempDir(); try Self.makeDeepAndWide(a)
+        let b = TempDir(); try Self.makeDeepAndWide(b)
+        defer { Self.removeDeep(a.path); Self.removeDeep(b.path); withExtendedLifetime((a, b)) {} }
+        let (pa, pb) = (a.path, b.path)
+        async let ta = Scanner.scan(path: pa, boundary: .forRoot(pa), budget: budget, progress: { _ in })
+        async let tb = Scanner.scan(path: pb, boundary: .forRoot(pb), budget: budget, progress: { _ in })
+        let (x, y) = try await (ta, tb)
+        #expect(restrictedCount(x) == 0 && restrictedCount(y) == 0)
+        #expect(x.fileCount(of: x.root) == 300)
+        #expect(x.fileCount(of: x.root) == y.fileCount(of: y.root))
+        #expect(budget.highWater <= 24 + 8)  // floor overshoot allowed for the second scan
+    }
+
+    @Test func budgetIsReleasedAfterCancel() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        for i in 0..<2_000 { t.dir("d\(i / 50)/e\(i)") }
+        let (inFlight, retained) = (Scanner.desiredInFlight, Scanner.desiredRetained)
+        let budget = FDBudget(limit: 2 * inFlight + retained)
+        let path = t.path
+        let task = Task {
+            try await Scanner.scan(path: path, boundary: .forRoot(path), budget: budget) { _ in
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
+        }
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        #expect(budget.highWater > 0)  // the scan did acquire a grant before cancelling
+        let grant = budget.acquire(desiredInFlight: inFlight, desiredRetained: retained)
+        #expect(grant.inFlight == inFlight && grant.retained == retained)
+    }
+
+    @Test func budgetGrantsScaleDownToFloor() {
+        let budget = FDBudget(limit: 100)
+        let full = budget.acquire(desiredInFlight: 10, desiredRetained: 40)  // costs 60
+        #expect(full.inFlight == 10 && full.retained == 40)
+        let scaled = budget.acquire(desiredInFlight: 10, desiredRetained: 40)  // 40 left
+        #expect(scaled.inFlight < 10 && scaled.retained < 40)
+        #expect(2 * scaled.inFlight + scaled.retained <= 40)
+        let floor = budget.acquire(desiredInFlight: 10, desiredRetained: 40)  // nothing left
+        #expect(floor.inFlight == 2 && floor.retained == 4)
+        #expect(budget.highWater == 60 + 2 * scaled.inFlight + scaled.retained + 8)
+        for g in [full, scaled, floor] { budget.release(g) }
+        let again = budget.acquire(desiredInFlight: 10, desiredRetained: 40)
+        #expect(again.inFlight == 10 && again.retained == 40)
+    }
+
+    private func restrictedCount(_ tree: FileTree) -> Int {
+        (0..<tree.count).filter { tree.flags(of: NodeID(index: Int32($0))).contains(.restricted) }.count
+    }
+
+    /// 300 nested `d123456789` levels, each with a sibling `s/f`: a sibling at
+    /// every level keeps each parent's children pending, so more directories
+    /// want an open fd than the budget allows. Remove with `removeDeep`.
+    private static func makeDeepAndWide(_ t: TempDir) throws {
+        var fd = open(t.path, O_RDONLY | O_DIRECTORY)
+        try #require(fd >= 0)
+        for _ in 0..<300 {
+            try #require(mkdirat(fd, "s", 0o755) == 0)
+            let f = openat(fd, "s/f", O_WRONLY | O_CREAT, 0o644)
+            try #require(f >= 0); close(f)
+            try #require(mkdirat(fd, "d123456789", 0o755) == 0)
+            let next = openat(fd, "d123456789", O_RDONLY | O_DIRECTORY)
+            close(fd)
+            try #require(next >= 0)
+            fd = next
+        }
+        close(fd)
     }
 
     /// Removes a tree deeper than PATH_MAX (FileManager cannot).

@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import os
 
 public struct ScanProgress: Sendable {
     /// Allocated bytes counted so far (after hard-link and clone de-duplication).
@@ -12,10 +13,13 @@ public struct ScanProgress: Sendable {
 
 /// Parallel directory-tree scanner.
 ///
-/// Directory reads run concurrently in a task group (at most
-/// `activeProcessorCount * 2` in flight); a single consumer — the scanning
-/// task itself — appends results to the non-thread-safe `FileTreeBuilder` and
-/// schedules child directories depth-first.
+/// Directory reads run concurrently in a task group; each child hands its
+/// blocking read (openat chain, fstat, getattrlistbulk) to a private
+/// concurrent dispatch queue so Swift's cooperative pool never blocks. A
+/// single consumer — the scanning task itself — appends results to the
+/// non-thread-safe `FileTreeBuilder` and schedules child directories
+/// depth-first. Reads in flight and directories keeping an fd open are
+/// bounded by a grant from the process-wide `FDBudget`.
 ///
 /// Every directory is opened with `openat` relative to an open ancestor, so
 /// full paths are never passed to the kernel (no PATH_MAX limit). A directory
@@ -41,6 +45,18 @@ public enum Scanner {
     /// task is cancelled.
     public static func scan(path: String, boundary: ScanBoundary,
                             progress: @Sendable (ScanProgress) -> Void = { _ in }) async throws -> FileTree {
+        try await scan(path: path, boundary: boundary, budget: .shared, progress: progress)
+    }
+
+    /// Reads in flight a scan asks its budget for.
+    static let desiredInFlight = ProcessInfo.processInfo.activeProcessorCount * 2
+    /// Directories (besides the root) a scan asks to keep open.
+    static let desiredRetained = 128
+
+    /// `scan(path:boundary:progress:)` drawing its fd allowance from `budget`;
+    /// the grant is returned when the scan ends (success, throw or cancel).
+    static func scan(path: String, boundary: ScanBoundary, budget: FDBudget,
+                     progress: @Sendable (ScanProgress) -> Void) async throws -> FileTree {
         try Task.checkCancellation()
         let rootPath = try canonicalRoot(path)
         let rootHandle = try DirectoryReader.open(path: rootPath)
@@ -49,28 +65,44 @@ public enum Scanner {
         let rootInode = ok ? UInt64(st.st_ino) : 0
         let rootDevice = ok ? st.st_dev : 0
 
-        return try await withThrowingTaskGroup(of: (Int, Outcome).self) { group in
-            var walk = Walk(rootPath: rootPath, rootInode: rootInode, rootDevice: rootDevice,
-                            rootHandle: rootHandle, boundary: boundary)
-            let allowed = boundary.allowedDevices
-            var clock = ProgressClock()
+        let grant = budget.acquire(desiredInFlight: desiredInFlight, desiredRetained: desiredRetained)
+        defer { budget.release(grant) }
+        let cancel = CancelFlag()
 
-            group.addTask { (Walk.rootToken, read(anchor: rootHandle, path: [], allowed: nil)) }
-            var inFlight = 1
+        return try await withTaskCancellationHandler {
+            try await withThrowingTaskGroup(of: (Int, Outcome).self) { group in
+                // On any exit, reads still queued return at once instead of
+                // making the group's implicit drain wait for them.
+                defer { cancel.set() }
+                var walk = Walk(rootPath: rootPath, rootInode: rootInode, rootDevice: rootDevice,
+                                rootHandle: rootHandle, boundary: boundary, grant: grant)
+                let allowed = boundary.allowedDevices
+                var clock = ProgressClock()
 
-            while let (token, outcome) = try await group.next() {
-                inFlight -= 1
-                if Task.isCancelled { throw CancellationError() }
-                if let current = walk.handle(token: token, outcome: outcome), clock.due() {
-                    progress(ScanProgress(bytes: walk.bytes, items: walk.items,
-                                          currentPath: walk.path(of: current)))
+                group.addTask {
+                    (Walk.rootToken, await readOffPool(anchor: rootHandle, path: [], allowed: nil, cancel: cancel))
                 }
-                while inFlight < walk.maxInFlight, let job = walk.nextJob() {
-                    group.addTask { (job.token, read(anchor: job.anchor, path: job.path, allowed: allowed)) }
-                    inFlight += 1
+                var inFlight = 1
+
+                while let (token, outcome) = try await group.next() {
+                    inFlight -= 1
+                    if Task.isCancelled { throw CancellationError() }
+                    if let current = walk.handle(token: token, outcome: outcome), clock.due() {
+                        progress(ScanProgress(bytes: walk.bytes, items: walk.items,
+                                              currentPath: walk.path(of: current)))
+                    }
+                    while inFlight < walk.maxInFlight, let job = walk.nextJob() {
+                        group.addTask {
+                            (job.token, await readOffPool(anchor: job.anchor, path: job.path,
+                                                          allowed: allowed, cancel: cancel))
+                        }
+                        inFlight += 1
+                    }
                 }
+                return walk.builder.finish()
             }
-            return walk.builder.finish()
+        } onCancel: {
+            cancel.set()
         }
     }
 
@@ -82,10 +114,29 @@ public enum Scanner {
         case failed(ReadError)
     }
 
+    /// Blocking reads run here rather than on the cooperative pool. In-flight
+    /// reads are bounded by the scan's fd grant, so GCD cannot over-spawn.
+    private static let ioQueue = DispatchQueue(label: "maclean.scan.io", qos: .utility,
+                                               attributes: .concurrent)
+
+    /// Runs `read` on `ioQueue`. The continuation is resumed exactly once by
+    /// the queued closure, which returns at once if `cancel` is set by then.
+    static func readOffPool(anchor: DirectoryHandle, path: [String], allowed: Set<Int32>?,
+                            cancel: CancelFlag) async -> Outcome {
+        await withCheckedContinuation { continuation in
+            ioQueue.async {
+                continuation.resume(returning: read(anchor: anchor, path: path, allowed: allowed, cancel: cancel))
+            }
+        }
+    }
+
     /// Opens `path` (names relative to `anchor`, never following symlinks),
     /// checks its device against `allowed` (nil: no check) and lists it.
-    static func read(anchor: DirectoryHandle, path: [String], allowed: Set<Int32>?) -> Outcome {
-        if Task.isCancelled { return .failed(.other(ECANCELED)) }
+    /// Returns `ECANCELED` without touching the disk once `cancel` is set
+    /// (a GCD thread has no current task, so `Task.isCancelled` can't be used).
+    static func read(anchor: DirectoryHandle, path: [String], allowed: Set<Int32>?,
+                     cancel: CancelFlag) -> Outcome {
+        if cancel.isSet { return .failed(.other(ECANCELED)) }
         var handle = anchor
         do {
             for name in path { handle = try DirectoryReader.open(name: name, in: handle) }
@@ -111,6 +162,14 @@ public enum Scanner {
         guard let resolved = ScanBoundary.canonicalPath(path) else { throw ReadError(errno: errno) }
         return resolved
     }
+}
+
+/// A one-way flag set when a scan is cancelled or ends, checked by reads
+/// queued on the I/O queue.
+final class CancelFlag: Sendable {
+    private let state = OSAllocatedUnfairLock(initialState: false)
+    func set() { state.withLock { $0 = true } }
+    var isSet: Bool { state.withLock { $0 } }
 }
 
 // MARK: - Consumer state (single-threaded)
@@ -177,18 +236,14 @@ private struct Walk {
     private(set) var items: Int64 = 0
 
     init(rootPath: String, rootInode: UInt64, rootDevice: Int32, rootHandle: DirectoryHandle,
-         boundary: ScanBoundary) {
+         boundary: ScanBoundary, grant: FDBudget.Grant) {
         builder = FileTreeBuilder(rootPath: rootPath, rootInode: rootInode, rootDevice: rootDevice)
         self.rootPath = rootPath
         self.boundary = boundary
         rootRef = DirRef(parent: nil, name: rootPath, node: builder.root, depth: 0, handle: rootHandle)
 
-        var limit = rlimit()
-        let soft = getrlimit(RLIMIT_NOFILE, &limit) == 0 ? Int(clamping: limit.rlim_cur) : 256
-        // In flight, each job holds at most two fds (while walking a reopen
-        // chain), plus the retained ones: ~soft/2 at worst for the default 256.
-        maxInFlight = max(2, min(ProcessInfo.processInfo.activeProcessorCount * 2, soft / 8))
-        maxRetained = max(4, min(128, soft / 8))
+        maxInFlight = grant.inFlight
+        maxRetained = grant.retained
 
         let rootComponents = rootPath.split(separator: "/").count
         maxSkipDepth = boundary.skippedPaths.union(boundary.descendableMounts)
@@ -344,12 +399,13 @@ private struct Walk {
     }
 }
 
-/// Rate limiter for progress callbacks: at most one per 100 ms.
+/// Rate limiter for progress callbacks: the first is due at once (after the
+/// root is read), then at most one per 100 ms.
 private struct ProgressClock {
-    private var last = ContinuousClock.now
+    private var last: ContinuousClock.Instant?
     mutating func due() -> Bool {
         let now = ContinuousClock.now
-        guard now - last >= .milliseconds(100) else { return false }
+        if let last, now - last < .milliseconds(100) { return false }
         last = now
         return true
     }
