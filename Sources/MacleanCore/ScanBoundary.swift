@@ -117,7 +117,7 @@ public struct MountInfo: Sendable, Equatable {
 extension ScanBoundary {
     /// Currently mounted file systems (`getmntinfo(MNT_NOWAIT)`: cached
     /// statistics, so a stale network mount cannot block).
-    static func mounts() -> [MountInfo] {
+    public static func mounts() -> [MountInfo] {
         var buffer: UnsafeMutablePointer<statfs>?
         let count = Int(getmntinfo(&buffer, MNT_NOWAIT))
         guard count > 0, let buffer else { return [] }
