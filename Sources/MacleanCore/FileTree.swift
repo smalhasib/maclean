@@ -142,5 +142,8 @@ public struct NodeChildren: RandomAccessCollection, Sendable, Equatable {
 
     public var startIndex: Int { 0 }
     public var endIndex: Int { length }
-    public subscript(i: Int) -> NodeID { NodeID(index: Int32(first + i)) }
+    public subscript(i: Int) -> NodeID {
+        precondition(i >= 0 && i < length, "NodeChildren index out of range")
+        return NodeID(index: Int32(first + i))
+    }
 }
