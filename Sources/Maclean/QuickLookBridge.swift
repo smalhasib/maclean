@@ -88,6 +88,7 @@ final class ResultResponder: NSResponder, QLPreviewPanelDataSource, QLPreviewPan
         case KeyCode.return, KeyCode.enter, KeyCode.space:
             guard !shift, model.isEnabled(item) else { return true }
             switch item {
+            case .collector: model.collectorPanelOpen.toggle()
             case .back: model.back()
             case .forward: model.forward()
             case .disks:
@@ -96,7 +97,12 @@ final class ResultResponder: NSResponder, QLPreviewPanelDataSource, QLPreviewPan
             case .crumb(let path): model.visit(path: path)
             }
         case KeyCode.escape:
-            model.toolbarFocus = nil
+            // Escape closes the collector panel first, keeping the focus on its circle.
+            if item == .collector, model.collectorPanelOpen {
+                model.collectorPanelOpen = false
+            } else {
+                model.toolbarFocus = nil
+            }
         default:
             model.toolbarFocus = nil
             return false

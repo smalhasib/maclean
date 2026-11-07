@@ -17,6 +17,9 @@ struct ResultView: View {
     let onDisks: () -> Void
     // `State` used as a type: the `@State` macro's plugin ships only with Xcode.
     private let grown = State(initialValue: false)
+    private let height = State(initialValue: CGFloat(0))
+    private let chartTargeted = State(initialValue: false)
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let minimumSize = CGSize(width: 760, height: 520)
 
@@ -28,13 +31,38 @@ struct ResultView: View {
             HStack(spacing: 0) {
                 SunburstView(model: model)
                     .frame(minWidth: 220, maxWidth: .infinity, maxHeight: .infinity)
+                    // A collected item dragged out of the panel is put back.
+                    .onDrop(of: [.macleanNode],
+                            delegate: ChartDropDelegate(model: model, targeted: chartTargeted.projectedValue))
+                    .overlay {
+                        if chartTargeted.wrappedValue {
+                            RoundedRectangle(cornerRadius: 8)
+                                .strokeBorder(Color.accentColor.opacity(0.6), lineWidth: 2)
+                                .padding(6)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    // The collector panel slides up over the chart (up to 40% of the window).
+                    .overlay(alignment: .bottom) {
+                        if model.collectorPanelOpen && !model.view.collected.isEmpty {
+                            CollectorPanel(model: model, maxHeight: height.wrappedValue * 0.4)
+                                .transition(reduceMotion ? .opacity : .move(edge: .bottom))
+                        }
+                    }
+                    .clipped()
+                    .animation(.easeInOut(duration: 0.2), value: model.collectorPanelOpen)
                 Separator(vertical: true)
                 SideListView(model: model)
                     .frame(width: 280)
             }
             Separator()
-            CollectorBar()
+            CollectorBar(model: model)
         }
+        .background(GeometryReader { proxy in
+            Color.clear
+                .onAppear { height.wrappedValue = proxy.size.height }
+                .onChange(of: proxy.size.height) { _, h in height.wrappedValue = h }
+        })
         // The minimum applies once the window has grown, so it animates
         // instead of snapping.
         .frame(minWidth: grown.wrappedValue ? Self.minimumSize.width : nil,

@@ -52,7 +52,16 @@ import Observation
     /// list → chart); nil when the list or chart has it.
     var toolbarFocus: ToolbarItem?
 
-    enum ToolbarItem: Hashable { case back, forward, disks, crumb(String) }
+    /// `collector` is the collector bar's circle (first in the cycle, so Tab
+    /// from the chart reaches it before the toolbar); enabled while it holds items.
+    enum ToolbarItem: Hashable { case collector, back, forward, disks, crumb(String) }
+
+    /// Whether the collector panel is open over the chart (this window only).
+    var collectorPanelOpen = false {
+        didSet { if !collectorPanelOpen { panelHovered = nil } }
+    }
+    /// The collector panel row under the pointer (⌘⌫ removes it).
+    var panelHovered: NodeID?
 
     var expandSmallerObjects: Bool {
         didSet { defaults.set(expandSmallerObjects, forKey: Self.alwaysExpandKey) }
@@ -269,10 +278,11 @@ import Observation
     }
 
     /// Toolbar controls in Tab order (disabled ones included).
-    var toolbarItems: [ToolbarItem] { [.back, .forward, .disks] + crumbs.map { .crumb($0.path) } }
+    var toolbarItems: [ToolbarItem] { [.collector, .back, .forward, .disks] + crumbs.map { .crumb($0.path) } }
 
     func isEnabled(_ item: ToolbarItem) -> Bool {
         switch item {
+        case .collector: return !view.collected.isEmpty
         case .back: return history.canGoBack
         case .forward: return history.canGoForward
         case .disks, .crumb: return true
@@ -342,6 +352,10 @@ import Observation
     /// it refuses instead.
     func toggleCollected() {
         guard !session.isDeleting else { return }
+        if collectorPanelOpen, let row = panelHovered {
+            session.uncollect([row])
+            return
+        }
         if hovered == nil, hoveredSmallerObjects != nil {
             collectorRefusal = Notice(text: Self.smallerObjectsRefusal)
             return
@@ -365,6 +379,83 @@ import Observation
         }
     }
 
+    /// Collects `ids` (context menu, drops, Move All); the first refusal is
+    /// reported through `collectorRefusal`.
+    func collect(_ ids: [NodeID]) {
+        guard !session.isDeleting else { return }
+        if let refusal = session.collect(ids).first {
+            collectorRefusal = Notice(text: refusal.1.message(name: name(of: refusal.0)))
+        }
+    }
+
+    /// Action › Move All Items from Current Folder to Collector.
+    func collectAllInCurrentFolder() {
+        collect(Array(view.children(of: currentNode)))
+    }
+
+    /// Message for a Finder drop outside the scan (or of a hidden item).
+    static func notInScanRefusal(name: String) -> String { "“\(name)” isn't in this scan." }
+
+    /// The visible node for a path dropped from Finder: the parent folder is
+    /// canonicalized (`realpath`) and the last component kept, so a dropped
+    /// symlink is the link itself. nil when outside the scan or hidden.
+    func visibleNode(forDroppedPath path: String) -> NodeID? {
+        let standard = (path as NSString).standardizingPath
+        var resolved = standard
+        if standard != "/" {
+            let parent = (standard as NSString).deletingLastPathComponent
+            let canonicalParent = ScanBoundary.canonicalPath(parent) ?? parent
+            resolved = (canonicalParent as NSString).appendingPathComponent((standard as NSString).lastPathComponent)
+        }
+        guard let node = tree.node(atPath: resolved), !view.isHidden(node) else { return nil }
+        return node
+    }
+
+    /// Collects files dropped from Finder. A path outside the scan, or
+    /// already hidden, is refused with "“<name>” isn't in this scan."
+    func collectDropped(paths: [String]) {
+        guard !session.isDeleting, !paths.isEmpty else { return }
+        var ids: [NodeID] = []
+        var missing: String?
+        for path in paths {
+            if let node = visibleNode(forDroppedPath: path) {
+                ids.append(node)
+            } else if missing == nil {
+                missing = (path as NSString).lastPathComponent
+            }
+        }
+        collect(ids)
+        if let missing { collectorRefusal = Notice(text: Self.notInScanRefusal(name: missing)) }
+    }
+
+    /// The node an in-app drag payload refers to, if it is from this session.
+    func node(for payload: NodeDragPayload) -> NodeID? {
+        guard payload.sessionID == session.id else { return nil }
+        return tree.node(atPath: payload.path)
+    }
+
+    /// Whether a drag payload can be collected here (from this session, visible).
+    func canCollect(_ payload: NodeDragPayload) -> Bool {
+        guard let node = node(for: payload) else { return false }
+        return node != tree.root && !view.isHidden(node)
+    }
+
+    /// Whether a drag payload is a collected item of this session (a panel row).
+    func isCollected(_ payload: NodeDragPayload) -> Bool {
+        guard let node = node(for: payload) else { return false }
+        return view.collected.contains(node)
+    }
+
+    /// Payload for dragging `node` out of this window.
+    func dragPayload(for node: NodeID) -> NodeDragPayload {
+        NodeDragPayload(sessionID: session.id, path: tree.path(of: node))
+    }
+
+    /// Reports a collector refusal (shown by the collector bar).
+    func reportCollectorRefusal(_ text: String) {
+        collectorRefusal = Notice(text: text)
+    }
+
     /// The session's overlay changed (called on each `session.view`
     /// generation change): re-lays out the same folder, or, if the current
     /// folder is now hidden, goes to its nearest visible ancestor. Hover,
@@ -380,6 +471,11 @@ import Observation
             return
         }
         hoveredSmallerObjects = nil
+        if let p = panelHovered, !view.collected.contains(p) { panelHovered = nil }
+        if view.collected.isEmpty {
+            collectorPanelOpen = false
+            if toolbarFocus == .collector { toolbarFocus = nil }
+        }
         if let h = hovered, view.isHidden(h) { hovered = nil }
         if let s = selected, view.isHidden(s) { selected = nil }
         if let e = expandedTarget, view.isHidden(e) { expandedTarget = nil }

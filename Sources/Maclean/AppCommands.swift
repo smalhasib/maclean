@@ -100,6 +100,12 @@ private struct ActionMenu: View {
         Button("Show Current Folder in Finder") { actOnFolder { $0.showInFinder($1) } }
         Button("Open Current Folder in Terminal") { actOnFolder { $0.openInTerminal($1) } }
         Divider()
+        Button("Move to Collector") { toggleCollected() }
+            .keyboardShortcut(.delete, modifiers: .command)
+        Button("Move All Items from Current Folder to Collector") { router.frontModel?.collectAllInCurrentFolder() }
+        Button("Remove All Items from Collector") { router.frontModel?.session.uncollectAll() }
+        // "Delete Collected Items" is inserted here in AppKit (menu validation).
+        Divider()
         Button("Launch Disk Utility…") { Actions.launchDiskUtility() }
     }
 
@@ -107,6 +113,19 @@ private struct ActionMenu: View {
     private func act(_ action: (ResultActions, NodeID) -> Void) {
         guard let model = router.frontModel else { return }
         action(ResultActions(model: model, router: router), model.actionTarget ?? model.currentNode)
+    }
+
+    /// ⌘⌫: toggles the item under the pointer (or the selection, or the
+    /// hovered collector panel row) in the collector. In a text field the
+    /// key keeps its usual meaning (delete to the start of the line): the
+    /// menu equivalent is matched before the field sees the key, so it is
+    /// passed on here.
+    private func toggleCollected() {
+        if let text = NSApp.keyWindow?.firstResponder as? NSTextView, text.isEditable {
+            text.deleteToBeginningOfLine(nil)
+            return
+        }
+        router.frontModel?.toggleCollected()
     }
 
     /// Runs `action` on the current folder.

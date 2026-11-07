@@ -109,7 +109,28 @@ extension SunburstChartView {
             showContextMenu(for: event)
             return
         }
-        pressedHit = hit(at: convert(event.locationInWindow, from: nil))
+        pressLocation = convert(event.locationInWindow, from: nil)
+        pressedHit = hit(at: pressLocation!)
+    }
+
+    /// After `dragThreshold` of movement on a segment (not "smaller
+    /// objects"), starts a drag carrying only `org.maclean.node`.
+    override func mouseDragged(with event: NSEvent) {
+        guard let start = pressLocation, case .segment(let i)? = pressedHit, transition == nil,
+              let chartLayout, i < chartLayout.segments.count else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        guard hypot(point.x - start.x, point.y - start.y) >= Self.dragThreshold else { return }
+        let segment = chartLayout.segments[i]
+        guard segment.node != nil, let payload = onDragStart?(segment) else { return }
+        pressedHit = nil
+        pressLocation = nil
+        NodeDrag.current = payload
+        let item = NSPasteboardItem()
+        item.setData(payload.data, forType: .macleanNode)
+        let dragging = NSDraggingItem(pasteboardWriter: item)
+        let icon = FileIcons.icon(for: payload.path)
+        dragging.setDraggingFrame(NSRect(x: point.x - 16, y: point.y - 16, width: 32, height: 32), contents: icon)
+        beginDraggingSession(with: [dragging], event: event, source: self)
     }
 
     override func rightMouseDown(with event: NSEvent) {
@@ -124,7 +145,7 @@ extension SunburstChartView {
 
     override func mouseUp(with event: NSEvent) {
         let h = hit(at: convert(event.locationInWindow, from: nil))
-        defer { pressedHit = nil }
+        defer { pressedHit = nil; pressLocation = nil }
         guard pressedHit != nil, !event.modifierFlags.contains(.control) else { return }
         guard h == pressedHit, transition == nil, let chartLayout else { return }
         let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
@@ -252,5 +273,20 @@ extension SunburstChartView {
         }
         CATransaction.commit()
         updateFocusLayer()
+    }
+}
+
+// MARK: Drag source
+
+extension SunburstChartView: NSDraggingSource {
+    /// Inside Maclean only: a drop on Finder or another app is refused.
+    func draggingSession(_ session: NSDraggingSession,
+                         sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        context == .withinApplication ? [.copy, .move, .generic] : []
+    }
+
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        NodeDrag.current = nil
+        refreshHoverFromMouse()
     }
 }

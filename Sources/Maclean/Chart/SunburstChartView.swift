@@ -75,6 +75,11 @@ final class SunburstChartView: NSView {
     var shownHighlight: Int?
     var centreHovered = false
     var pressedHit: Hit?
+    /// Where the mouse went down (a drag starts after `dragThreshold` of movement).
+    var pressLocation: CGPoint?
+    static let dragThreshold: CGFloat = 4
+    /// The drag payload of a segment (nil: not draggable).
+    var onDragStart: ((Segment) -> NodeDragPayload?)?
     /// Magnification accumulated in the current pinch; nil once it fired.
     var pinch: CGFloat? = 0
     static let pinchThreshold: CGFloat = 0.12

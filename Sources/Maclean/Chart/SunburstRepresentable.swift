@@ -56,6 +56,10 @@ private struct SunburstRepresentable: NSViewRepresentable {
             guard let model, let node = segment.node else { return nil }
             return ResultActions(model: model, router: router).contextMenu(for: node)
         }
+        view.onDragStart = { [weak model] segment in
+            guard let model, let node = segment.node else { return nil }
+            return model.dragPayload(for: node)
+        }
         view.onPinch = { [weak model] opening in
             guard let model else { return }
             if opening {

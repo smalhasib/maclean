@@ -166,6 +166,8 @@ struct ContextItem {
         let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
         guard mods.isEmpty else { return false }
         switch Int(event.keyCode) {
+        case KeyCode.escape where model.collectorPanelOpen:
+            model.collectorPanelOpen = false
         case KeyCode.return, KeyCode.enter:
             if let target = model.actionTarget { enter(target) }
         case KeyCode.space:
@@ -211,7 +213,24 @@ struct ContextItem {
             items.append(ContextItem(title: isStarred(node) ? "Unstar Folder" : "Star Folder",
                                      separatorBefore: !canOpenInNewWindow(node)) { toggleStar(node) })
         }
+        items.append(ContextItem(title: "Move “\(name)” to Collector", shortcut: .command("\u{8}", .command),
+                                 separatorBefore: true) { model.collect([node]) })
         return items
+    }
+
+    /// Context menu of a collector panel row (spec §5.7).
+    func collectorItems(for node: NodeID) -> [ContextItem] {
+        [
+            ContextItem(title: "Preview", shortcut: .space) { preview(node) },
+            ContextItem(title: "Show in Finder", shortcut: .command("r", [.command, .option])) { showInFinder(node) },
+            ContextItem(title: "Open in Terminal", shortcut: .command("t", [.command, .option])) {
+                openInTerminal(node)
+            },
+            ContextItem(title: "Remove “\(model.name(of: node))” from Collector",
+                        shortcut: .command("\u{8}", .command), separatorBefore: true) {
+                model.session.uncollect([node])
+            },
+        ]
     }
 
     /// The context menu as an AppKit menu (chart segments).
@@ -245,7 +264,15 @@ struct ContextMenuContent: View {
     @Environment(\.windowRouter) private var router
 
     var body: some View {
-        let items = ResultActions(model: model, router: router).contextItems(for: node)
+        ContextMenuButtons(items: ResultActions(model: model, router: router).contextItems(for: node))
+    }
+}
+
+/// Context items as SwiftUI menu buttons.
+struct ContextMenuButtons: View {
+    let items: [ContextItem]
+
+    var body: some View {
         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
             if item.separatorBefore { Divider() }
             button(item)

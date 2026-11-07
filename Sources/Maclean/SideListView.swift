@@ -223,6 +223,8 @@ private struct RowHost: View {
                 highlighted: model.hoverSource == .list && model.hovered == node,
                 selected: model.selected == node)
             .equatable()
+            // Drags carry only `org.maclean.node`, never a file URL.
+            .onDrag { NodeDrag.provider(for: model.dragPayload(for: node)) }
             .contextMenu { ContextMenuContent(model: model, node: node) }
             .accessibilityAction { model.activate(node) }
     }
