@@ -215,3 +215,17 @@ Built on branch `feat/scanner-followups`; 72 tests pass. Read-only `/` scan with
 - No test for a partly unreadable descendable volume; `concurrentScansShareSmallBudget` doesn't prove the scans overlapped; no `/dev/fd` leak check; root handle not charged in the fd grant.
 - `fileCountIsComputed` lacks hard-link/clone-extra nodes; no streamed-write error-path test; doc note on `ChunkedColumn`'s shared setter.
 - Scans are ~2–3% slower with ~25% more kernel CPU since reads moved to the dispatch queue; if a sudo `/` scan exceeds 30 s, try `desiredInFlight = activeProcessorCount`.
+
+**Full Disk Access parity check (2026-11-07, same moment, no sudo)**
+
+| | DaisyDisk (fresh rescan) | Maclean |
+|---|---|---|
+| Scanned total | 420.1 − 25.2 hidden = 394.9 GB | 394.87 GB |
+| Users | 307.6 | 307.59 |
+| System | 41.5 | 41.54 |
+| opt / Applications | 14.4 / 14.1 | 14.36 / 14.03 |
+| private / Library | 8.6 / 6.2 | 8.58 / 6.18 |
+| smaller objects (Volumes, usr, …) | 2.6 | 1.58 + 1.01 + … |
+| Time / peak memory | — | 30.2 s / 441 MB |
+
+Note for running scans from Claude Code: Full Disk Access must be granted to the helper bundle `~/Library/Application Support/Claude/claude-code/<version>/<hash>/claude.app` (not `/Applications/Claude.app`), and takes effect only after restarting Claude.
