@@ -73,6 +73,20 @@ import Testing
         #expect(try DirectoryReader.entries(of: s).map(\.name).sorted() == ["x", "y"])
     }
 
+    @Test func openPathFollowsSymlinkedRoot() throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        t.file("real/x"); t.file("real/y"); t.symlink("link", to: "real")
+        let h = try DirectoryReader.open(path: t.url("link"))
+        #expect(try DirectoryReader.entries(of: h).map(\.name).sorted() == ["x", "y"])
+    }
+
+    @Test func openNameDoesNotFollowSymlink() throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        t.dir("real"); t.symlink("link", to: "real")
+        let h = try DirectoryReader.open(path: t.path)
+        #expect(throws: ReadError.self) { _ = try DirectoryReader.open(name: "link", in: h) }
+    }
+
     @Test func unreadableDirThrowsPermissionDenied() throws {
         let t = TempDir(); defer { withExtendedLifetime(t) {} }
         t.file("sub/x"); t.chmod("sub", 0o000)

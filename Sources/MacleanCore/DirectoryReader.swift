@@ -44,23 +44,28 @@ public final class DirectoryHandle: Sendable {
 }
 
 public enum DirectoryReader {
-    private static let openFlags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+    private static let baseFlags = O_RDONLY | O_DIRECTORY | O_CLOEXEC
 
+    /// Opens a scan root. Follows a symlinked root (no O_NOFOLLOW).
     public static func open(path: String) throws(ReadError) -> DirectoryHandle {
-        let fd = Darwin.open(path, openFlags)
+        let fd = Darwin.open(path, baseFlags)
         guard fd >= 0 else { throw ReadError(errno: errno) }
         return DirectoryHandle(fd: fd)
     }
 
     /// Opens `name` relative to `parent` (works for paths longer than PATH_MAX).
+    /// Never follows a symlink.
     public static func open(name: String, in parent: borrowing DirectoryHandle) throws(ReadError) -> DirectoryHandle {
-        let fd = openat(parent.fd, name, openFlags)
+        let fd = openat(parent.fd, name, baseFlags | O_NOFOLLOW)
         guard fd >= 0 else { throw ReadError(errno: errno) }
         return DirectoryHandle(fd: fd)
     }
 
     private static let bufferSize = 256 * 1024
-    private static let options = UInt64(FSOPT_PACK_INVAL_ATTRS | FSOPT_ATTR_CMN_EXTENDED | FSOPT_NOFOLLOW)
+    /// No FSOPT_PACK_INVAL_ATTRS: without it `returned_attrs` describes the
+    /// record layout exactly (absent attributes occupy no space).
+    private static let options = UInt64(FSOPT_ATTR_CMN_EXTENDED | FSOPT_NOFOLLOW)
+    private static let headerSize = MemoryLayout<UInt32>.size + MemoryLayout<attribute_set_t>.size
 
     public static func entries(of dir: borrowing DirectoryHandle) throws(ReadError) -> [RawEntry] {
         var request = attrlist()
@@ -81,52 +86,58 @@ public enum DirectoryReader {
                 throw ReadError(errno: errno)
             }
             if count == 0 { break }
-            var record = UnsafeRawPointer(buffer)
+            var position = 0
             for _ in 0..<count {
+                guard bufferSize - position >= headerSize else { throw ReadError.other(EIO) }
+                let record = UnsafeRawPointer(buffer + position)
                 let length = Int(record.load(as: UInt32.self))
-                if let entry = parse(record), entry.name != ".", entry.name != ".." {
+                guard length >= headerSize, length <= bufferSize - position else { throw ReadError.other(EIO) }
+                if let entry = try parse(UnsafeRawBufferPointer(start: record, count: length)),
+                   entry.name != ".", entry.name != ".." {
                     result.append(entry)
                 }
-                record += length
+                position += length
             }
         }
         return result
     }
 
-    /// Parses one getattrlistbulk record. Attributes appear in bitmask order
-    /// (common, file, then extended-common in the fork slot); attributes not
-    /// set in `returned_attrs` occupy no space (verified on APFS: directories
-    /// carry no ATTR_FILE_* fields even with FSOPT_PACK_INVAL_ATTRS).
-    private static func parse(_ record: UnsafeRawPointer) -> RawEntry? {
+    /// Parses one getattrlistbulk record (`record` spans exactly its length).
+    /// Attributes appear in bitmask order (common, file, then extended-common
+    /// in the fork slot); attributes not set in `returned_attrs` occupy no
+    /// space. Any read outside the record throws `.other(EIO)`.
+    private static func parse(_ record: UnsafeRawBufferPointer) throws(ReadError) -> RawEntry? {
         var offset = MemoryLayout<UInt32>.size  // record length
-        let returned = record.loadUnaligned(fromByteOffset: offset, as: attribute_set_t.self)
-        offset += MemoryLayout<attribute_set_t>.size
-
-        func read<T>(_: T.Type) -> T {
+        func read<T>(_: T.Type) throws(ReadError) -> T {
+            guard record.count - offset >= MemoryLayout<T>.size else { throw ReadError.other(EIO) }
             defer { offset += MemoryLayout<T>.size }
             return record.loadUnaligned(fromByteOffset: offset, as: T.self)
         }
         func has(_ group: attrgroup_t, _ bit: Int32) -> Bool { group & attrgroup_t(bit) != 0 }
 
+        let returned = try read(attribute_set_t.self)
         guard has(returned.commonattr, ATTR_CMN_NAME) else { return nil }
         let nameRefOffset = offset
-        let nameRef = read(attrreference_t.self)
-        let nameStart = record + nameRefOffset + Int(nameRef.attr_dataoffset)
+        let nameRef = try read(attrreference_t.self)
+        let nameStart = nameRefOffset + Int(nameRef.attr_dataoffset)
         var nameLength = Int(nameRef.attr_length)
-        if nameLength > 0, nameStart.load(fromByteOffset: nameLength - 1, as: UInt8.self) == 0 {
+        guard nameStart >= 0, nameStart <= record.count, nameLength <= record.count - nameStart else {
+            throw ReadError.other(EIO)
+        }
+        if nameLength > 0, record[nameStart + nameLength - 1] == 0 {
             nameLength -= 1  // drop NUL terminator
         }
-        let name = String(decoding: UnsafeRawBufferPointer(start: nameStart, count: nameLength), as: UTF8.self)
+        let name = String(decoding: record[nameStart..<(nameStart + nameLength)], as: UTF8.self)
 
-        let device = has(returned.commonattr, ATTR_CMN_DEVID) ? read(dev_t.self) : 0
-        let objType = has(returned.commonattr, ATTR_CMN_OBJTYPE) ? read(fsobj_type_t.self) : VNON.rawValue
-        let inode = has(returned.commonattr, ATTR_CMN_FILEID) ? read(UInt64.self) : 0
+        let device = has(returned.commonattr, ATTR_CMN_DEVID) ? try read(dev_t.self) : 0
+        let objType = has(returned.commonattr, ATTR_CMN_OBJTYPE) ? try read(fsobj_type_t.self) : VNON.rawValue
+        let inode = has(returned.commonattr, ATTR_CMN_FILEID) ? try read(UInt64.self) : 0
 
-        let linkCount = has(returned.fileattr, ATTR_FILE_LINKCOUNT) ? read(UInt32.self) : 1
-        let allocated = has(returned.fileattr, ATTR_FILE_ALLOCSIZE) ? read(off_t.self) : 0
+        let linkCount = has(returned.fileattr, ATTR_FILE_LINKCOUNT) ? try read(UInt32.self) : 1
+        let allocated = has(returned.fileattr, ATTR_FILE_ALLOCSIZE) ? try read(off_t.self) : 0
 
-        let cloneID = has(returned.forkattr, ATTR_CMNEXT_CLONEID) ? read(UInt64.self) : 0
-        let cloneRefCount = has(returned.forkattr, ATTR_CMNEXT_CLONE_REFCNT) ? read(UInt32.self) : 0
+        let cloneID = has(returned.forkattr, ATTR_CMNEXT_CLONEID) ? try read(UInt64.self) : 0
+        let cloneRefCount = has(returned.forkattr, ATTR_CMNEXT_CLONE_REFCNT) ? try read(UInt32.self) : 0
 
         let kind: EntryKind
         switch objType {
