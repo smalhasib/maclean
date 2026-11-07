@@ -8,6 +8,8 @@
 	<string>Maclean</string>
 	<key>CFBundleExecutable</key>
 	<string>Maclean</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>org.maclean.Maclean</string>
 	<key>CFBundleInfoDictionaryVersion</key>
