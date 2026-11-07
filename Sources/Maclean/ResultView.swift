@@ -42,6 +42,9 @@ struct ResultView: View {
         .background(WindowGrower(minimum: Self.minimumSize) { grown.wrappedValue = true })
         .background(ResultWindowBridge(model: model, router: router, title: model.name(of: model.currentNode)))
         .environment(\.windowRouter, router)
+        // The session's collector overlay changed (in this window or another on the session).
+        .onChange(of: model.session.view?.generation) { _, _ in model.viewDidChange() }
+        .onChange(of: model.session.carryOverDropped, initial: true) { _, _ in model.showCarryOverNote() }
         .onChange(of: model.selected) { _, node in
             // Quick Look follows the keyboard selection while it's open.
             if let node, model.hovered == nil { QuickLookBridge.follow(path: model.tree.path(of: node)) }

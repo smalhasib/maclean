@@ -4,7 +4,9 @@ import MacleanKit
 import Observation
 
 /// State of one result window: where it is in the tree (history of paths),
-/// the chart layout for that folder, and hover/selection.
+/// the chart layout for that folder, and hover/selection. Visible structure
+/// (sizes, children, what can be selected) is read through the session's
+/// collector overlay (`view`); `tree` is used for names, paths and flags.
 @MainActor @Observable final class ResultViewModel {
     /// Where the current hover comes from. A hover from the chart retargets
     /// the side list (look inside without navigating); a hover from the list
@@ -30,13 +32,19 @@ import Observation
         }
     }
     private(set) var currentNode: NodeID
-    /// Recomputed on navigation only.
+    /// Recomputed on navigation and when the session's overlay changes.
     private(set) var layout: SunburstLayout
     /// Bumped whenever `layout` is replaced (drives the chart's transition).
     private(set) var layoutGeneration = 0
+    /// Why `layout` last changed: the chart zooms for a navigation and morphs
+    /// angles for an overlay change (collect, uncollect, delete).
+    enum LayoutChange { case navigation, overlay }
+    private(set) var layoutChange = LayoutChange.navigation
 
     var hovered: NodeID?
     private(set) var hoverSource: HoverSource = .chart
+    /// The parent of the chart's "smaller objects" segment under the pointer.
+    private(set) var hoveredSmallerObjects: NodeID?
     var selected: NodeID?
     /// The list target whose "smaller objects" row was clicked open.
     var expandedTarget: NodeID?
@@ -56,6 +64,10 @@ import Observation
         let text: String
     }
     private(set) var notice: Notice?
+    /// Why the last collect was refused (shown by the collector bar).
+    private(set) var collectorRefusal: Notice?
+
+    static let smallerObjectsRefusal = "“smaller objects” is a group. Expand it and collect the items inside."
 
     /// Volume roots only: (free, free including purgeable) bytes.
     private(set) var volumeSpace: (free: Int64, freePurgeable: Int64)?
@@ -69,12 +81,22 @@ import Observation
     /// What keyboard actions apply to: under the pointer first, else the selection.
     var actionTarget: NodeID? { hovered ?? selected }
 
+    /// The session's overlay on this tree. While the session rescans (or
+    /// after a failed rescan) it has none for this tree, so the last one seen
+    /// is used and the window keeps showing what it showed.
+    var view: TreeView {
+        if let v = session.view, v.tree === tree { return v }
+        return lastView
+    }
+
     @ObservationIgnored private let defaults: UserDefaults
     /// Whether navigation is written back to `session.history` (the main
     /// window's result, so View returns to where it was). Other windows on
     /// the session keep their own history.
     @ObservationIgnored private let ownsSessionHistory: Bool
     @ObservationIgnored private var currentPath: String
+    /// The overlay `layout` was built from.
+    @ObservationIgnored private var lastView: TreeView
     /// Set by `open(_:)` so the history change doesn't re-resolve the path.
     @ObservationIgnored private var pendingNode: NodeID?
     @ObservationIgnored private var segmentIndex: [NodeID: Int] = [:]
@@ -98,16 +120,18 @@ import Observation
         let name = FileManager.default.displayName(atPath: tree.rootPath)
         rootName = name.isEmpty ? tree.rootPath : name
 
+        let view = session.view.flatMap { $0.tree === tree ? $0 : nil } ?? TreeView(tree: tree)
+        lastView = view
         var history = start ?? session.history
         if let startPath { history.visit(startPath) }
-        let node = tree.node(atPath: history.current)
+        let node = Self.visibleNode(atPath: history.current, in: view)
         if node == nil { history = NavigationHistory(rootPath: tree.rootPath) }
         self.history = history
         currentNode = node ?? tree.root
         currentPath = history.current
-        layout = Self.computeLayout(tree: tree, root: node ?? tree.root)
+        layout = Self.computeLayout(view: view, root: node ?? tree.root)
         rebuildSegmentIndex()
-        if let selectedPath, let node = tree.node(atPath: selectedPath), node != currentNode {
+        if let selectedPath, let node = Self.visibleNode(atPath: selectedPath, in: view), node != currentNode {
             selected = node
         }
         loadVolumeSpace()
@@ -158,7 +182,7 @@ import Observation
     /// Rows the list shows for the current folder: its visible children,
     /// plus the expanded "smaller objects" (capped like the list).
     var listRowCount: Int {
-        let kids = tree.children(of: currentNode).count
+        let kids = view.children(of: currentNode).count
         let visible = visibleChildCount(of: currentNode)
         guard isExpanded(currentNode) else { return visible }
         return min(kids, visible + Self.expandedRowLimit)
@@ -167,7 +191,7 @@ import Observation
     /// The selection's row in the current folder's list, if it is one.
     var selectedRow: Int? {
         guard let selected, tree.parent(of: selected) == currentNode else { return nil }
-        guard let i = tree.children(of: currentNode).firstIndex(of: selected), i < listRowCount else { return nil }
+        guard let i = view.children(of: currentNode).firstIndex(of: selected), i < listRowCount else { return nil }
         return i
     }
 
@@ -185,20 +209,21 @@ import Observation
         case .home: target = 0
         case .end: target = count - 1
         }
-        selected = tree.children(of: currentNode)[min(max(target, 0), count - 1)]
+        selected = view.children(of: currentNode)[min(max(target, 0), count - 1)]
     }
 
     /// Arrow keys in the chart: ←/→ between siblings, ↑ out, ↓ in.
     func traverse(_ step: Traversal) {
-        guard let selected, selected != currentNode, isInside(selected) else {
-            let kids = tree.children(of: currentNode)
+        let view = self.view
+        guard let selected, selected != currentNode, isInside(selected), !view.isHidden(selected) else {
+            let kids = view.children(of: currentNode)
             if visibleChildCount(of: currentNode) > 0 { self.selected = kids[0] }
             return
         }
         switch step {
         case .previous, .next:
             guard let parent = tree.parent(of: selected) else { return }
-            let kids = tree.children(of: parent)
+            let kids = view.children(of: parent)
             guard let i = kids.firstIndex(of: selected) else { return }
             let count = max(visibleChildCount(of: parent), i + 1)
             let j = min(max(i + (step == .next ? 1 : -1), 0), count - 1)
@@ -207,7 +232,7 @@ import Observation
             if let parent = tree.parent(of: selected), parent != currentNode { self.selected = parent }
         case .into:
             if tree.flags(of: selected).contains(.directory), visibleChildCount(of: selected) > 0 {
-                self.selected = tree.children(of: selected)[0]
+                self.selected = view.children(of: selected)[0]
             }
         }
     }
@@ -216,12 +241,13 @@ import Observation
     /// it is inside the current folder; after going up, the folder the user
     /// came from (its ancestor among the current children); else the first child.
     func selectForKeyboardFocus() {
-        if let selected, selected != currentNode, isInside(selected) { return }
-        if var node = previousFolder, node != currentNode, isInside(node) {
+        let view = self.view
+        if let selected, selected != currentNode, isInside(selected), !view.isHidden(selected) { return }
+        if var node = previousFolder, node != currentNode, isInside(node), !view.isHidden(node) {
             while let parent = tree.parent(of: node), parent != currentNode { node = parent }
             selected = node
         } else if visibleChildCount(of: currentNode) > 0 {
-            selected = tree.children(of: currentNode)[0]
+            selected = view.children(of: currentNode)[0]
         }
     }
 
@@ -282,7 +308,7 @@ import Observation
 
     /// Whether the list target has a "smaller objects" row.
     var hasSmallerObjects: Bool {
-        visibleChildCount(of: listTarget) < tree.children(of: listTarget).count
+        visibleChildCount(of: listTarget) < view.children(of: listTarget).count
     }
 
     // MARK: Notices
@@ -295,9 +321,76 @@ import Observation
         if id == nil || notice?.id == id { notice = nil }
     }
 
+    func dismissCollectorRefusal(_ id: UUID? = nil) {
+        if id == nil || collectorRefusal?.id == id { collectorRefusal = nil }
+    }
+
+    /// Shows the session's "collected items no longer exist" note after a
+    /// rescan, once (the first window to show it clears it).
+    func showCarryOverNote() {
+        guard let dropped = session.carryOverDropped else { return }
+        session.clearCarryOverDropped()
+        notice = Notice(text: dropped == 1
+            ? "1 collected item no longer exists and was removed from the collector"
+            : "\(dropped.formatted()) collected items no longer exist and were removed from the collector")
+    }
+
+    // MARK: Collector
+
+    /// ⌘⌫: toggles the action target (hovered, else selected) in the
+    /// collector; never the current folder. Over a "smaller objects" segment
+    /// it refuses instead.
+    func toggleCollected() {
+        if hovered == nil, hoveredSmallerObjects != nil {
+            collectorRefusal = Notice(text: Self.smallerObjectsRefusal)
+            return
+        }
+        guard let target = actionTarget else { return }
+        toggleCollected(target)
+    }
+
+    /// Collects `id` if it is visible, else puts it back if it is collected.
+    /// A refusal is reported through `collectorRefusal`.
+    func toggleCollected(_ id: NodeID) {
+        let view = self.view
+        if view.collected.contains(id) {
+            session.uncollect([id])
+        } else if !view.isHidden(id) {
+            if let refusal = session.collect([id]).first {
+                collectorRefusal = Notice(text: refusal.1.message(name: name(of: refusal.0)))
+            }
+        }
+    }
+
+    /// The session's overlay changed (called on each `session.view`
+    /// generation change): re-lays out the same folder, or, if the current
+    /// folder is now hidden, goes to its nearest visible ancestor. Hover,
+    /// selection and expansion on hidden items are dropped.
+    func viewDidChange() {
+        let view = self.view
+        guard view.generation != lastView.generation || view.tree !== lastView.tree else { return }
+        lastView = view
+        if view.isHidden(currentNode) {
+            // Navigates through didSet → syncToHistory (which resolves to a visible node).
+            history.replaceCurrent(nearestSurvivingAncestor(of: tree.path(of: currentNode)))
+            return
+        }
+        if let h = hovered, view.isHidden(h) { hovered = nil }
+        if let s = selected, view.isHidden(s) { selected = nil }
+        if let e = expandedTarget, view.isHidden(e) { expandedTarget = nil }
+        if let p = previousFolder, view.isHidden(p) { previousFolder = nil }
+        layout = Self.computeLayout(view: view, root: currentNode)
+        layoutChange = .overlay
+        layoutGeneration += 1
+        rebuildSegmentIndex()
+    }
+
     // MARK: Hover
 
-    func hover(_ node: NodeID?, from source: HoverSource) {
+    /// `smallerObjectsOf`: the parent of the "smaller objects" chart segment
+    /// under the pointer (with a nil `node`).
+    func hover(_ node: NodeID?, from source: HoverSource, smallerObjectsOf group: NodeID? = nil) {
+        if source == .chart, hoveredSmallerObjects != group { hoveredSmallerObjects = group }
         if node == nil {
             // Only clear a hover this source owns.
             guard hoverSource == source else { return }
@@ -332,7 +425,7 @@ import Observation
 
     /// VoiceOver label of a list row or chart segment: "Users, folder, 307.6 gigabytes".
     func accessibilityLabel(of node: NodeID) -> String {
-        "\(name(of: node)), \(Self.kindWord(kind(of: node))), \(SizeText.spoken(tree.size(of: node)))"
+        "\(name(of: node)), \(Self.kindWord(kind(of: node))), \(SizeText.spoken(view.size(of: node)))"
     }
 
     /// Whether clicking drills in (plain folders only; packages open via Show Package Contents).
@@ -363,14 +456,15 @@ import Observation
     /// How many leading children of `node` get their own list row (the rest
     /// are "smaller objects"). Children are sorted by size, largest first.
     func visibleChildCount(of node: NodeID) -> Int {
-        let kids = tree.children(of: node)
-        let total = tree.size(of: node)
+        let view = self.view
+        let kids = view.children(of: node)
+        let total = view.size(of: node)
         guard total > 0 else { return 0 }
         let cutoff = Double(total) * Self.smallShare
         var lo = 0, hi = kids.count
         while lo < hi {
             let mid = (lo + hi) / 2
-            let size = tree.size(of: kids[mid])
+            let size = view.size(of: kids[mid])
             if size > 0 && Double(size) >= cutoff { lo = mid + 1 } else { hi = mid }
         }
         return lo
@@ -392,11 +486,11 @@ import Observation
         let node: NodeID
         if let pending = pendingNode {
             node = pending
-        } else if let found = tree.node(atPath: path) {
+        } else if let found = Self.visibleNode(atPath: path, in: view) {
             node = found
         } else {
-            // The folder vanished: fall back to its nearest surviving ancestor
-            // (assigning inside didSet doesn't re-enter it).
+            // The folder vanished (or was collected): fall back to its nearest
+            // surviving ancestor (assigning inside didSet doesn't re-enter it).
             path = nearestSurvivingAncestor(of: path)
             history.replaceCurrent(path)
             if ownsSessionHistory { session.history = history }
@@ -411,14 +505,18 @@ import Observation
         hoverSource = .chart
         selected = nil
         expandedTarget = nil
-        layout = Self.computeLayout(tree: tree, root: node)
+        lastView = view
+        layout = Self.computeLayout(view: lastView, root: node)
+        layoutChange = .navigation
         layoutGeneration += 1
         rebuildSegmentIndex()
     }
 
+    /// The nearest ancestor of `path` (or `path` itself) that exists and is visible.
     private func nearestSurvivingAncestor(of path: String) -> String {
+        let view = self.view
         var path = path
-        while path != tree.rootPath, tree.node(atPath: path) == nil {
+        while path != tree.rootPath, Self.visibleNode(atPath: path, in: view) == nil {
             let parent = (path as NSString).deletingLastPathComponent
             path = PathUtil.isInside(parent, orEqualTo: tree.rootPath) ? parent : tree.rootPath
         }
@@ -436,9 +534,15 @@ import Observation
         smallerIndex = smaller
     }
 
-    private static func computeLayout(tree: FileTree, root: NodeID) -> SunburstLayout {
+    /// The node at `path` unless it is missing or hidden by the overlay.
+    private static func visibleNode(atPath path: String, in view: TreeView) -> NodeID? {
+        guard let node = view.tree.node(atPath: path), !view.isHidden(node) else { return nil }
+        return node
+    }
+
+    private static func computeLayout(view: TreeView, root: NodeID) -> SunburstLayout {
         let t0 = Timings.now
-        let layout = SunburstLayout(view: TreeView(tree: tree), root: root)
+        let layout = SunburstLayout(view: view, root: root)
         Timings.mark("layout", (Timings.now - t0) * 1000)
         return layout
     }

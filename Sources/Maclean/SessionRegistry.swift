@@ -83,12 +83,14 @@ import Observation
         session.rescan()
     }
 
-    /// Forgets the in-memory result for `path`, cancelling a scan in progress.
+    /// Forgets the in-memory result for `path`, cancelling a scan in progress
+    /// and clearing its collector (the caller confirms a non-empty one).
     func forget(path: String) {
         let key = sessions[path] != nil ? path : Self.canonical(path)
         guard let session = sessions.removeValue(forKey: key) else { return }
         order.removeAll { $0 == key }
         session.cancel()
+        session.uncollectAll()
         if presented === session { presented = nil }
         if latest === session { latest = nil }
         if resume === session { resume = nil }

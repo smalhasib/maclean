@@ -15,8 +15,11 @@ import SwiftUI
 /// - Navigation animates over 0.35 s (ease-in-out) on the view's display link:
 ///   drilling in, the new layout starts where its root sat in the old one
 ///   (angles and ring scaled into that slice) and sweeps out to full size while
-///   the old layout fades; drilling out is the reverse. Unrelated jumps, and
-///   all transitions with Reduce Motion on, crossfade. Each frame is rendered
+///   the old layout fades; drilling out is the reverse. A collect or
+///   uncollect (same folder, new overlay) morphs angles over 0.25 s: segments
+///   are matched by NodeID, new ones grow from zero width and vanished ones
+///   shrink to it. Unrelated jumps, and all transitions with Reduce Motion
+///   on, crossfade. Each frame is rendered
 ///   into a reused bitmap and set as the layer's contents.
 /// - Segments are batched into one path per colour for drawing.
 /// - Accessibility: one group element ("Disk map of <folder>") whose children
@@ -47,6 +50,7 @@ final class SunburstChartView: NSView {
 
     static let animationDuration: TimeInterval = 0.35
     static let crossfadeDuration: TimeInterval = 0.25
+    static let morphDuration: TimeInterval = 0.25
     static let highlightFade: TimeInterval = 0.1
     static let padding: CGFloat = 24
 
@@ -82,6 +86,8 @@ final class SunburstChartView: NSView {
             /// The old root sits at `ring` / `a0..<a1` of the new layout.
             case zoomOut(ring: Int, a0: Double, a1: Double)
             case crossfade
+            /// Same root, new overlay: angles move from `from` to the new layout.
+            case morph(MorphPlan)
         }
         let kind: Kind
         let from: SunburstLayout
@@ -189,8 +195,9 @@ final class SunburstChartView: NSView {
 
     // MARK: Content
 
+    /// `morph`: the layout changed because the overlay did (same root).
     func setContent(layout new: SunburstLayout, generation newGeneration: Int, title: String, subtitle: String,
-                    canGoUp: Bool, animated: Bool) {
+                    canGoUp: Bool, animated: Bool, morph: Bool = false) {
         self.canGoUp = canGoUp
         guard newGeneration != generation else { return }
         let old = chartLayout
@@ -206,7 +213,7 @@ final class SunburstChartView: NSView {
         invalidateAccessibility()
 
         if animated, let old, window != nil, !bounds.isEmpty {
-            startTransition(from: old, to: new, fromTitle: oldTitle, fromSubtitle: oldSubtitle)
+            startTransition(from: old, to: new, fromTitle: oldTitle, fromSubtitle: oldSubtitle, morph: morph)
         }
         updateHighlightLayer(animated: false)
         // Re-evaluate what's under a resting pointer once the new chart is in.

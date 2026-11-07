@@ -6,10 +6,12 @@ import SwiftUI
 
 extension SunburstChartView {
     func startTransition(from old: SunburstLayout, to new: SunburstLayout,
-                                 fromTitle: String, fromSubtitle: String) {
+                                 fromTitle: String, fromSubtitle: String, morph: Bool = false) {
         let kind: Transition.Kind
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             kind = .crossfade
+        } else if morph, old.root == new.root {
+            kind = .morph(Self.morphPlan(from: old, to: new))
         } else if let s = old.segments.first(where: { $0.node == new.root }) {
             kind = .zoomIn(ring: s.ring, a0: s.startAngle, a1: s.endAngle)
         } else if let s = new.segments.first(where: { $0.node == old.root }) {
@@ -18,7 +20,11 @@ extension SunburstChartView {
             kind = .crossfade
         }
         let duration: TimeInterval
-        if case .crossfade = kind { duration = Self.crossfadeDuration } else { duration = Self.animationDuration }
+        switch kind {
+        case .crossfade: duration = Self.crossfadeDuration
+        case .morph: duration = Self.morphDuration
+        case .zoomIn, .zoomOut: duration = Self.animationDuration
+        }
         transition = Transition(kind: kind, from: old, fromTitle: fromTitle, fromSubtitle: fromSubtitle,
                                 start: CACurrentMediaTime(), duration: duration)
         startLink()
@@ -98,9 +104,95 @@ extension SunburstChartView {
                 (lerp(Double(s.ring), Double(s.ring + ring)),
                  lerp(s.startAngle, a0 + s.startAngle * k), lerp(s.endAngle, a0 + s.endAngle * k))
             }
+        case .morph(let plan):
+            // Vanished segments shrink to zero width at their collapse angle.
+            drawSegments(plan.vanished.map(\.segment), in: ctx, geometry: g) { s in
+                let c = plan.closing[MorphKey(s)] ?? s.startAngle
+                return (Double(s.ring), lerp(s.startAngle, c), lerp(s.endAngle, c))
+            }
+            drawSegments(new.segments, in: ctx, geometry: g) { s in
+                let from = plan.start[MorphKey(s)] ?? (s.startAngle, s.startAngle)
+                return (Double(s.ring), lerp(from.a0, s.startAngle), lerp(from.a1, s.endAngle))
+            }
         }
         ctx.restoreGState()
         drawLabels(title: t.fromTitle, subtitle: t.fromSubtitle, alpha: 1 - e, geometry: g)
         drawLabels(title: title, subtitle: subtitle, alpha: e, geometry: g)
+    }
+}
+
+// MARK: Morph (collect / uncollect)
+
+extension SunburstChartView {
+    /// Identity of a segment across two layouts of one root: its node, or for
+    /// a "smaller objects" segment, its parent.
+    enum MorphKey: Hashable {
+        case node(NodeID)
+        case smaller(parent: NodeID)
+
+        init(_ s: Segment) { self = s.node.map(MorphKey.node) ?? .smaller(parent: s.parent) }
+    }
+
+    struct MorphPlan {
+        /// Starting angles of each new segment: its old angles if it was
+        /// drawn before, else zero width where its slot opens.
+        let start: [MorphKey: (a0: Double, a1: Double)]
+        /// Old segments missing from the new layout, in drawing order.
+        let vanished: [(segment: Segment, angle: Double)]
+        /// The angle each vanished segment shrinks to (where its slot closes).
+        let closing: [MorphKey: Double]
+    }
+
+    /// Matches `old` and `new` (same root) by `MorphKey`. A segment that
+    /// appears or vanishes opens or closes at the far edge of its previous
+    /// matched sibling (else its parent's start), so neighbours slide without
+    /// gaps; inside a parent that itself appears or vanishes it follows the
+    /// parent.
+    static func morphPlan(from old: SunburstLayout, to new: SunburstLayout) -> MorphPlan {
+        var oldByKey: [MorphKey: Segment] = [:]
+        var newByKey: [MorphKey: Segment] = [:]
+        oldByKey.reserveCapacity(old.segments.count)
+        newByKey.reserveCapacity(new.segments.count)
+        for s in old.segments { oldByKey[MorphKey(s)] = s }
+        for s in new.segments { newByKey[MorphKey(s)] = s }
+
+        /// For each segment of `segments` absent from `other`: the angle, in
+        /// `other`, where it opens or closes. Segments come in ring order, so
+        /// parents are seen before their children.
+        func pivots(_ segments: [Segment], other: [MorphKey: Segment], root: NodeID) -> [MorphKey: Double] {
+            var pivot: [MorphKey: Double] = [:]
+            var lastEnd: [NodeID: Double] = [:]   // parent → `other` end of its last matched child so far
+            for s in segments {
+                let key = MorphKey(s)
+                if let match = other[key] {
+                    lastEnd[s.parent] = match.endAngle
+                } else if let end = lastEnd[s.parent] {
+                    pivot[key] = end
+                } else if s.parent == root {
+                    pivot[key] = 0
+                } else if let p = other[.node(s.parent)] {
+                    pivot[key] = p.startAngle
+                } else {
+                    pivot[key] = pivot[.node(s.parent)] ?? s.startAngle
+                }
+            }
+            return pivot
+        }
+
+        let closing = pivots(old.segments, other: newByKey, root: old.root)
+        let opening = pivots(new.segments, other: oldByKey, root: new.root)
+        var start: [MorphKey: (a0: Double, a1: Double)] = [:]
+        start.reserveCapacity(new.segments.count)
+        for s in new.segments {
+            let key = MorphKey(s)
+            if let o = oldByKey[key] {
+                start[key] = (o.startAngle, o.endAngle)
+            } else {
+                let a = opening[key] ?? s.startAngle
+                start[key] = (a, a)
+            }
+        }
+        let vanished = old.segments.compactMap { s in closing[MorphKey(s)].map { (segment: s, angle: $0) } }
+        return MorphPlan(start: start, vanished: vanished, closing: closing)
     }
 }

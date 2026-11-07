@@ -5,7 +5,7 @@ import MacleanKit
 @testable import Maclean
 
 /// Scratch directory removed on deinit; only ever touches its own files.
-private final class Scratch {
+final class Scratch {
     let path: String
     init() {
         let base = ScanBoundary.canonicalPath(FileManager.default.temporaryDirectory.path)!
@@ -22,14 +22,14 @@ private final class Scratch {
     func remove(_ rel: String) { try! FileManager.default.removeItem(atPath: path + "/" + rel) }
 }
 
-@MainActor private func scannedSession(_ s: Scratch) async -> ScanSession {
+@MainActor func scannedSession(_ s: Scratch) async -> ScanSession {
     let session = ScanSession(rootPath: s.path)
     session.start()
     while session.isScanning { try? await Task.sleep(for: .milliseconds(10)) }
     return session
 }
 
-@MainActor private func model(_ session: ScanSession) -> ResultViewModel {
+@MainActor func model(_ session: ScanSession) -> ResultViewModel {
     ResultViewModel(session: session, ownsSessionHistory: false,
                     defaults: UserDefaults(suiteName: "maclean-tests-\(UUID().uuidString)")!)
 }

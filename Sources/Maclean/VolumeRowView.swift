@@ -26,6 +26,9 @@ struct VolumeRowView: View {
     let expected: Int64?
     let registry: SessionRegistry
     @Environment(\.windowRouter) private var router
+    // `State` used as a type: the `@State` macro's plugin ships only with Xcode.
+    /// Collected items Forget Scan Result asks about (nil: no question showing).
+    private let forgetCount = State<Int?>(initialValue: nil)
 
     /// ⌥-click on Scan or View opens the result in its own window.
     private var optionDown: Bool { NSEvent.modifierFlags.contains(.option) }
@@ -173,7 +176,7 @@ struct VolumeRowView: View {
                     report(Actions.getInfo(path) { start?.report(Actions.finderPermissionMessage) })
                 }
                 Divider()
-                Button("Forget Scan Result") { registry.forget(path: path) }
+                Button("Forget Scan Result") { forget(session) }
                     .disabled(session.map(\.isScanning) ?? true)
             } label: {
                 Image(systemName: "chevron.down")
@@ -185,6 +188,27 @@ struct VolumeRowView: View {
             .accessibilityLabel("More")
         }
         .frame(minWidth: 120, alignment: .trailing)
+        .alert("Forget this scan?", isPresented: Binding(
+            get: { forgetCount.wrappedValue != nil },
+            set: { if !$0 { forgetCount.wrappedValue = nil } }
+        )) {
+            Button("Forget", role: .destructive) { registry.forget(path: path) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            let n = forgetCount.wrappedValue ?? 0
+            Text(n == 1 ? "1 collected item will be removed from the collector."
+                 : "\(n.formatted()) collected items will be removed from the collector.")
+        }
+    }
+
+    /// Forget Scan Result: asks first when the session's collector holds items.
+    private func forget(_ session: ScanSession?) {
+        let count = session?.view?.collected.count ?? 0
+        if count > 0 {
+            forgetCount.wrappedValue = count
+        } else {
+            registry.forget(path: path)
+        }
     }
 
     private func report(_ result: ActionResult) {

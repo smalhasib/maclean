@@ -35,9 +35,9 @@ struct SideListView: View {
     // MARK: Header
 
     private func header(_ target: NodeID) -> some View {
-        let tree = model.tree
+        let view = model.view
         let name = model.name(of: target)
-        let count = tree.children(of: target).count
+        let count = view.children(of: target).count
         return HStack(alignment: .center, spacing: 10) {
             Circle()
                 .fill(headerColor(target))
@@ -53,7 +53,7 @@ struct SideListView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            Text(SizeText.string(tree.size(of: target)))
+            Text(SizeText.string(view.size(of: target)))
                 .font(.headline)
                 .monospacedDigit()
                 .fixedSize()
@@ -61,7 +61,7 @@ struct SideListView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(name), \(kindText(target, count: count)), \(SizeText.spoken(tree.size(of: target)))")
+        .accessibilityLabel("\(name), \(kindText(target, count: count)), \(SizeText.spoken(view.size(of: target)))")
         .accessibilityAddTraits(.isHeader)
     }
 
@@ -80,11 +80,12 @@ struct SideListView: View {
     @ViewBuilder
     private func rows(_ target: NodeID) -> some View {
         let tree = model.tree
-        let kids = tree.children(of: target)
+        let view = model.view
+        let kids = view.children(of: target)
         let visible = model.visibleChildCount(of: target)
         let isFolder = tree.flags(of: target).contains(.directory)
 
-        if isFolder && (kids.isEmpty || tree.size(of: target) == 0) {
+        if isFolder && (kids.isEmpty || view.size(of: target) == 0) {
             Text("Empty folder")
                 .secondaryText()
                 .padding(.horizontal, 16)
@@ -93,7 +94,7 @@ struct SideListView: View {
 
         RowBlock(model: model, target: target, range: 0 ..< visible)
 
-        let tailSize = max(tree.size(of: target) - (0 ..< visible).reduce(Int64(0)) { $0 + tree.size(of: kids[$1]) }, 0)
+        let tailSize = max(view.size(of: target) - (0 ..< visible).reduce(Int64(0)) { $0 + view.size(of: kids[$1]) }, 0)
         if visible < kids.count, tailSize > 0 {
             let expanded = model.isExpanded(target)
             SmallerObjectsRow(count: kids.count - visible, size: tailSize, expanded: expanded,
@@ -150,7 +151,7 @@ private struct RowBlock: View {
     static let rowHeight: CGFloat = 30
 
     var body: some View {
-        let kids = model.tree.children(of: target)
+        let kids = model.view.children(of: target)
         LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(range, id: \.self) { i in
                 RowHost(model: model, node: kids[i], index: i, parent: target)
@@ -186,16 +187,17 @@ private struct RowBlock: View {
         }
     }
 
-    private func node(at y: CGFloat, kids: NodeChildren) -> NodeID? {
+    private func node(at y: CGFloat, kids: ViewChildren) -> NodeID? {
         guard y >= 0 else { return nil }
         let i = range.lowerBound + Int(y / Self.rowHeight)
-        return range.contains(i) ? kids[i] : nil
+        return range.contains(i) && i < kids.count ? kids[i] : nil
     }
 
     /// Clears a list hover only if it belongs to this block (another block may own it now).
-    private func clearHover(kids: NodeChildren) {
-        guard model.hoverSource == .list, let hovered = model.hovered, let first = kids.first else { return }
-        if range.contains(Int(hovered.index) - Int(first.index)) { model.hover(nil, from: .list) }
+    private func clearHover(kids: ViewChildren) {
+        guard model.hoverSource == .list, let hovered = model.hovered else { return }
+        // Bounded by the block's row count (at most `expandedRowLimit`).
+        if range.contains(where: { $0 < kids.count && kids[$0] == hovered }) { model.hover(nil, from: .list) }
     }
 }
 
@@ -212,8 +214,7 @@ private struct RowHost: View {
 
     var body: some View {
         let c = model.colorInputs(child: node, index: index, parent: parent)
-        let tree = model.tree
-        ListRow(name: tree.name(of: node), size: tree.size(of: node),
+        ListRow(name: model.tree.name(of: node), size: model.view.size(of: node),
                 kind: ResultViewModel.kindWord(model.kind(of: node)),
                 color: SideListView.color(c.kind, top: c.top, ring: c.ring, dark: colorScheme == .dark,
                                           highContrast: contrast == .increased),

@@ -16,7 +16,8 @@ struct SunburstView: View {
         let external = model.hoverSource == .list ? (model.hovered ?? model.selected) : model.selected
         SunburstRepresentable(
             model: model, router: router, layout: model.layout, generation: model.layoutGeneration,
-            title: SizeText.string(model.tree.size(of: node)), subtitle: model.name(of: node),
+            morph: model.layoutChange == .overlay,
+            title: SizeText.string(model.view.size(of: node)), subtitle: model.name(of: node),
             canGoUp: model.tree.parent(of: node) != nil,
             listHoverIndex: external.flatMap { model.chartIndex(forListItem: $0) },
             selectedIndex: model.selected.flatMap { model.chartIndex(forListItem: $0) })
@@ -29,6 +30,8 @@ private struct SunburstRepresentable: NSViewRepresentable {
     let router: WindowRouter?
     let layout: SunburstLayout
     let generation: Int
+    /// The layout changed because the overlay did (same folder): morph angles.
+    let morph: Bool
     let title: String
     let subtitle: String
     let canGoUp: Bool
@@ -39,7 +42,8 @@ private struct SunburstRepresentable: NSViewRepresentable {
     func makeNSView(context: Context) -> SunburstChartView {
         let view = SunburstChartView()
         view.onHover = { [weak model] segment in
-            model?.hover(segment?.node, from: .chart)
+            model?.hover(segment?.node, from: .chart,
+                         smallerObjectsOf: segment.flatMap { $0.node == nil ? $0.parent : nil })
         }
         let router = self.router
         view.onClick = { [weak model] segment, flags in
@@ -95,7 +99,7 @@ private struct SunburstRepresentable: NSViewRepresentable {
 
     private func apply(to view: SunburstChartView, animated: Bool) {
         view.setContent(layout: layout, generation: generation, title: title, subtitle: subtitle,
-                        canGoUp: canGoUp, animated: animated)
+                        canGoUp: canGoUp, animated: animated, morph: morph)
         // A list-row hover highlights its segment, or the "smaller objects"
         // segment it was merged into.
         view.setExternalHighlight(index: listHoverIndex)
