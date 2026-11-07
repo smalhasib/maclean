@@ -184,7 +184,7 @@ Most act on the item **under the pointer**, falling back to the selected list it
 - Progress is reported as scanned bytes versus volume used bytes, throttled to UI frame rate. The scan can be cancelled.
 
 ### 6.3 Tree model
-- Startup disks can hold millions of nodes, so the tree is a compact, index-based struct-of-arrays: parent index, first-child and child-count ranges, size, flags, inode and device, name offset into a shared UTF-8 name buffer. Target: under 64 bytes per node, and under 1 GB RAM for 10M files.
+- Startup disks can hold millions of nodes, so the tree is a compact, index-based struct-of-arrays: parent index, first-child and child-count ranges, size, flags, inode and device, name offset into a shared UTF-8 name buffer. Target (revised in Plan 1b after measuring): steady state at most 40 bytes per node plus name bytes; peak while building at most 100 bytes per node including names (about 1 GB for 10M files).
 - After the scan, children are sorted by size, and subtree sizes are summed bottom-up.
 - Collector state is a set of node indices. "Effective size" = subtree size − collected descendants. It is updated incrementally along the ancestor path on collect and uncollect.
 
