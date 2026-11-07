@@ -36,8 +36,31 @@ import Testing
     b.add(parent: b.root, name: odd, size: 1, flags: [], inode: 2, device: 1)
     let t = b.finish()
     let id = t.children(of: t.root)[0]
-    #expect(t.name(of: id) == odd)
-    #expect(t.path(of: id).hasSuffix("/" + odd))
+    #expect(Array(t.name(of: id).utf8) == Array(odd.utf8))
+    #expect(Array(t.path(of: id).utf8) == Array(("/r/" + odd).utf8))
+}
+
+@Test func canonicallyEquivalentNamesStayDistinct() {
+    let decomposed = "cafe\u{301}"
+    let precomposed = "caf\u{e9}"
+    let b = FileTreeBuilder(rootPath: "/r", rootInode: 1, rootDevice: 1)
+    b.add(parent: b.root, name: decomposed, size: 1, flags: [], inode: 2, device: 1)
+    b.add(parent: b.root, name: precomposed, size: 1, flags: [], inode: 3, device: 1)
+    let t = b.finish()
+    let kids = t.children(of: t.root)
+    #expect(kids.count == 2)
+    let got = Set(kids.map { Array(t.name(of: $0).utf8) })
+    #expect(got == [Array(decomposed.utf8), Array(precomposed.utf8)])
+}
+
+@Test func pathJoinsWithoutDoubledSlash() {
+    for (root, expected) in [("/", "/Users"), ("/foo/", "/foo/Users"), ("/foo", "/foo/Users")] {
+        let b = FileTreeBuilder(rootPath: root, rootInode: 1, rootDevice: 1)
+        b.add(parent: b.root, name: "Users", size: 1, flags: [], inode: 2, device: 1)
+        let t = b.finish()
+        #expect(t.path(of: t.children(of: t.root)[0]) == expected)
+        #expect(t.path(of: t.root) == root)
+    }
 }
 
 @Test func restrictedFlagIsKept() {

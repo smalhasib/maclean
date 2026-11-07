@@ -77,7 +77,8 @@ public final class FileTree: Sendable {
             current = up
         }
         guard !components.isEmpty else { return rootPath }
-        return rootPath + "/" + components.reversed().joined(separator: "/")
+        let base = rootPath.hasSuffix("/") ? String(rootPath.dropLast()) : rootPath
+        return base + "/" + components.reversed().joined(separator: "/")
     }
 
     public func size(of id: NodeID) -> Int64 { sizes[Int(id.index)] }
