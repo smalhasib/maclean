@@ -23,6 +23,10 @@ struct VolumeRowView: View {
     /// Bytes progress is measured against; nil shows indeterminate progress.
     let expected: Int64?
     let registry: SessionRegistry
+    @Environment(\.windowRouter) private var router
+
+    /// ⌥-click on Scan or View opens the result in its own window.
+    private var optionDown: Bool { NSEvent.modifierFlags.contains(.option) }
 
     var body: some View {
         let session = registry.session(canonical: path)
@@ -120,10 +124,16 @@ struct VolumeRowView: View {
                 Button(session.isStopping ? "Stopping…" : "Cancel") { session.cancel() }
                     .disabled(session.isStopping)
             } else if let session, session.tree != nil {
-                Button("View") { registry.presented = session }
-                    .buttonStyle(.borderedProminent)
+                Button("View") {
+                    if let router {
+                        router.show(session: session, at: nil, forceNewWindow: optionDown)
+                    } else {
+                        registry.presented = session
+                    }
+                }
+                .buttonStyle(.borderedProminent)
             } else {
-                Button("Scan") { registry.startScan(path: path, expected: expected) }
+                Button("Scan") { registry.startScan(path: path, expected: expected, newWindow: optionDown) }
                     .buttonStyle(.borderedProminent)
             }
             Menu {
@@ -135,6 +145,10 @@ struct VolumeRowView: View {
                     }
                 }
                 .disabled(session?.isScanning ?? false)
+                Divider()
+                Button("Show in Finder") { report(Actions.showInFinder(path)) }
+                Button("Get Info") { report(Actions.getInfo(path)) }
+                Divider()
                 Button("Forget Scan Result") { registry.forget(path: path) }
                     .disabled(session.map(\.isScanning) ?? true)
             } label: {
@@ -147,5 +161,9 @@ struct VolumeRowView: View {
             .accessibilityLabel("More")
         }
         .frame(minWidth: 120, alignment: .trailing)
+    }
+
+    private func report(_ result: ActionResult) {
+        if result == .missing { router?.startModel.reportMissing(title) }
     }
 }

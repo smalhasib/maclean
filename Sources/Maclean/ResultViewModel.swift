@@ -25,7 +25,7 @@ import Observation
 
     var history: NavigationHistory {
         didSet {
-            session.history = history
+            if ownsSessionHistory { session.history = history }
             syncToHistory()
         }
     }
@@ -45,6 +45,13 @@ import Observation
         didSet { defaults.set(expandSmallerObjects, forKey: Self.alwaysExpandKey) }
     }
 
+    /// An inline message ("… no longer exists"); `id` restarts its dismiss timer.
+    struct Notice: Equatable {
+        let id = UUID()
+        let text: String
+    }
+    private(set) var notice: Notice?
+
     /// Volume roots only: (free, free including purgeable) bytes.
     private(set) var volumeSpace: (free: Int64, freePurgeable: Int64)?
 
@@ -58,6 +65,10 @@ import Observation
     var actionTarget: NodeID? { hovered ?? selected }
 
     @ObservationIgnored private let defaults: UserDefaults
+    /// Whether navigation is written back to `session.history` (the main
+    /// window's result, so View returns to where it was). Other windows on
+    /// the session keep their own history.
+    @ObservationIgnored private let ownsSessionHistory: Bool
     @ObservationIgnored private var currentPath: String
     /// Set by `open(_:)` so the history change doesn't re-resolve the path.
     @ObservationIgnored private var pendingNode: NodeID?
@@ -67,16 +78,20 @@ import Observation
     @ObservationIgnored let openedAt = Timings.now
     @ObservationIgnored private var firstFrameReported = false
 
-    init(session: ScanSession, startPath: String? = nil, defaults: UserDefaults = .standard) {
+    /// `history` defaults to the session's; `startPath` is then visited.
+    /// `selectedPath` restores a selection by path (after a rescan).
+    init(session: ScanSession, startPath: String? = nil, history start: NavigationHistory? = nil,
+         selectedPath: String? = nil, ownsSessionHistory: Bool = true, defaults: UserDefaults = .standard) {
         guard let tree = session.tree else { preconditionFailure("ResultViewModel needs a finished scan") }
         self.session = session
         self.tree = tree
         self.defaults = defaults
+        self.ownsSessionHistory = ownsSessionHistory
         expandSmallerObjects = defaults.bool(forKey: Self.alwaysExpandKey)
         let name = FileManager.default.displayName(atPath: tree.rootPath)
         rootName = name.isEmpty ? tree.rootPath : name
 
-        var history = session.history
+        var history = start ?? session.history
         if let startPath { history.visit(startPath) }
         let node = Self.resolve(history.current, in: tree)
         if node == nil { history = NavigationHistory(rootPath: tree.rootPath) }
@@ -85,7 +100,20 @@ import Observation
         currentPath = history.current
         layout = Self.computeLayout(tree: tree, root: node ?? tree.root)
         rebuildSegmentIndex()
+        if let selectedPath, let node = Self.resolve(selectedPath, in: tree), node != currentNode {
+            selected = node
+        }
         loadVolumeSpace()
+    }
+
+    /// A model for `tree` (a rescan of `old`'s session) that keeps `old`'s
+    /// current folder, back/forward history and selection by path; vanished
+    /// paths fall back to their nearest surviving ancestor.
+    convenience init(remapping old: ResultViewModel, to tree: FileTree, ownsSessionHistory: Bool) {
+        var history = old.history
+        history.remap { Self.resolve($0, in: tree) != nil }
+        self.init(session: old.session, history: history, selectedPath: old.selected.map { old.tree.path(of: $0) },
+                  ownsSessionHistory: ownsSessionHistory, defaults: old.defaults)
     }
 
     // MARK: Navigation
@@ -112,6 +140,101 @@ import Observation
 
     /// Goes to an absolute path inside the tree (breadcrumbs).
     func visit(path: String) { history.visit(path) }
+
+    // MARK: Selection (keyboard)
+
+    enum SelectionMove { case up, down, pageUp, pageDown, home, end }
+    enum Traversal { case previous, next, out, into }
+
+    static let pageStep = 10
+
+    /// Rows the list shows for the current folder: its visible children,
+    /// plus the expanded "smaller objects" (capped like the list).
+    var listRowCount: Int {
+        let kids = tree.children(of: currentNode).count
+        let visible = visibleChildCount(of: currentNode)
+        guard isExpanded(currentNode) else { return visible }
+        return min(kids, visible + Self.expandedRowLimit)
+    }
+
+    /// The selection's row in the current folder's list, if it is one.
+    var selectedRow: Int? {
+        guard let selected, tree.parent(of: selected) == currentNode else { return nil }
+        guard let i = tree.children(of: currentNode).firstIndex(of: selected), i < listRowCount else { return nil }
+        return i
+    }
+
+    /// ↑/↓, Page Up/Down, Home/End in the list.
+    func moveSelection(_ move: SelectionMove) {
+        let count = listRowCount
+        guard count > 0 else { return }
+        let row = selectedRow
+        let target: Int
+        switch move {
+        case .down: target = row.map { $0 + 1 } ?? 0
+        case .up: target = row.map { $0 - 1 } ?? count - 1
+        case .pageDown: target = (row ?? -1) + Self.pageStep
+        case .pageUp: target = (row ?? count) - Self.pageStep
+        case .home: target = 0
+        case .end: target = count - 1
+        }
+        selected = tree.children(of: currentNode)[min(max(target, 0), count - 1)]
+    }
+
+    /// Arrow keys in the chart: ←/→ between siblings, ↑ out, ↓ in.
+    func traverse(_ step: Traversal) {
+        guard let selected, selected != currentNode, isInside(selected) else {
+            let kids = tree.children(of: currentNode)
+            if visibleChildCount(of: currentNode) > 0 { self.selected = kids[0] }
+            return
+        }
+        switch step {
+        case .previous, .next:
+            guard let parent = tree.parent(of: selected) else { return }
+            let kids = tree.children(of: parent)
+            guard let i = kids.firstIndex(of: selected) else { return }
+            let count = max(visibleChildCount(of: parent), i + 1)
+            let j = min(max(i + (step == .next ? 1 : -1), 0), count - 1)
+            self.selected = kids[j]
+        case .out:
+            if let parent = tree.parent(of: selected), parent != currentNode { self.selected = parent }
+        case .into:
+            if tree.flags(of: selected).contains(.directory), visibleChildCount(of: selected) > 0 {
+                self.selected = tree.children(of: selected)[0]
+            }
+        }
+    }
+
+    /// Whether `node` lies below the current folder.
+    private func isInside(_ node: NodeID) -> Bool {
+        var n: NodeID? = node
+        while let current = n {
+            if current == currentNode { return true }
+            n = tree.parent(of: current)
+        }
+        return false
+    }
+
+    /// ⌘E: expands (or collapses) "smaller objects" of what the list shows.
+    func toggleSmallerObjects() {
+        let target = listTarget
+        expandedTarget = expandedTarget == target ? nil : target
+    }
+
+    /// Whether the list target has a "smaller objects" row.
+    var hasSmallerObjects: Bool {
+        visibleChildCount(of: listTarget) < tree.children(of: listTarget).count
+    }
+
+    // MARK: Notices
+
+    func reportMissing(_ node: NodeID) {
+        notice = Notice(text: "“\(name(of: node))” no longer exists")
+    }
+
+    func dismissNotice(_ id: UUID? = nil) {
+        if id == nil || notice?.id == id { notice = nil }
+    }
 
     // MARK: Hover
 

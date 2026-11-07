@@ -13,15 +13,16 @@ struct MacleanApp: App {
 
     var body: some Scene {
         Window("Maclean", id: "main") {
-            RootView(model: appDelegate.startModel, registry: appDelegate.registry)
+            RootView(model: appDelegate.startModel, registry: appDelegate.registry, router: appDelegate.router)
         }
         .defaultSize(width: 560, height: 420)
         .windowResizability(.contentMinSize)
         .commands {
-            CommandGroup(replacing: .newItem) {
-                Button("Scan Folder…") { FolderPicker.scan(into: appDelegate.registry) }
-                    .keyboardShortcut("o")
-            }
+            AppCommands(registry: appDelegate.registry, router: appDelegate.router)
+        }
+
+        Settings {
+            SettingsView()
         }
     }
 }
@@ -29,8 +30,11 @@ struct MacleanApp: App {
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
     let registry = SessionRegistry()
     let startModel = StartModel()
+    lazy var router = WindowRouter(registry: registry, startModel: startModel)
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        _ = router   // takes over presenting finished scans before any starts
+        NSWindow.allowsAutomaticWindowTabbing = true
         // Run unbundled (`swift run Maclean`), the process would otherwise get
         // no Dock icon and no focus.
         if Bundle.main.bundleIdentifier == nil {
@@ -55,23 +59,30 @@ struct MacleanApp: App {
 struct RootView: View {
     let model: StartModel
     let registry: SessionRegistry
+    let router: WindowRouter
+    @Environment(\.openWindow) private var openWindow
     // `State` used as a type: the `@State` macro's plugin ships only with Xcode.
     private let dropTargeted = State(initialValue: false)
     private let results = State(initialValue: ResultModelCache())
 
     var body: some View {
         Group {
-            if let session = registry.presented, let tree = session.tree {
-                ResultView(model: results.wrappedValue.model(for: session, tree: tree)) {
-                    registry.presented = nil
-                }
-                .id(ObjectIdentifier(tree))
+            if let session = registry.presented, let tree = session.tree,
+               let result = results.wrappedValue.model(for: session, tree: tree) {
+                ResultView(model: result, router: router) { router.backToDisks(from: result) }
+                    .id(ObjectIdentifier(result))
             } else {
                 StartView(model: model, registry: registry)
             }
         }
         .frame(minWidth: 520, minHeight: 300)
         .background(Color(nsColor: .windowBackgroundColor))
+        .background(MainWindowAccessor(router: router))
+        .environment(\.windowRouter, router)
+        .onAppear {
+            let open = openWindow
+            router.openMainWindow = { open(id: "main") }
+        }
         .overlay {
             if dropTargeted.wrappedValue {
                 RoundedRectangle(cornerRadius: 8)

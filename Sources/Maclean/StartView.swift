@@ -36,6 +36,8 @@ import UniformTypeIdentifiers
 
     private(set) var volumes: [Volume] = []
     private(set) var starred: [Folder] = []
+    /// An inline "… no longer exists" message; `id` restarts its dismiss timer.
+    private(set) var notice: (id: UUID, text: String)?
     @ObservationIgnored private let store: StarredFolders
     @ObservationIgnored private var observers: [any NSObjectProtocol] = []
     @ObservationIgnored private var generation = 0
@@ -67,6 +69,14 @@ import UniformTypeIdentifiers
             guard current == generation else { return }
             starred = paths.map(Folder.init)
         }
+    }
+
+    func reportMissing(_ name: String) {
+        notice = (UUID(), "“\(name)” no longer exists")
+    }
+
+    func dismissNotice(_ id: UUID? = nil) {
+        if id == nil || notice?.id == id { notice = nil }
     }
 
     func star(_ url: URL) {
@@ -136,6 +146,25 @@ struct StartView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                if let notice = model.notice {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle").foregroundStyle(.secondary)
+                        Text(notice.text).lineLimit(1).truncationMode(.middle).help(notice.text)
+                        Spacer(minLength: 8)
+                        Button { model.dismissNotice() } label: { Image(systemName: "xmark") }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Dismiss")
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(height: 32)
+                    .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
+                    .padding(.horizontal, 12)
+                    .accessibilityElement(children: .combine)
+                    .task(id: notice.id) {
+                        try? await Task.sleep(for: .seconds(4))
+                        model.dismissNotice(notice.id)
+                    }
+                }
                 SectionHeader(title: "Disks")
                 ForEach(model.volumes) { volume in
                     VolumeRowView(

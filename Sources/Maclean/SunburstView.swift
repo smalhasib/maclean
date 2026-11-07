@@ -8,21 +8,24 @@ import SwiftUI
 /// exactly the properties the chart depends on.
 struct SunburstView: View {
     let model: ResultViewModel
+    @Environment(\.windowRouter) private var router
 
     var body: some View {
         let node = model.currentNode
-        let listHover = model.hoverSource == .list ? model.hovered : nil
+        // A list-row hover highlights its segment; otherwise the selection does.
+        let external = model.hoverSource == .list ? (model.hovered ?? model.selected) : model.selected
         SunburstRepresentable(
-            model: model, layout: model.layout, generation: model.layoutGeneration,
+            model: model, router: router, layout: model.layout, generation: model.layoutGeneration,
             title: SizeText.string(model.tree.size(of: node)), subtitle: model.name(of: node),
             canGoUp: model.tree.parent(of: node) != nil,
-            listHoverIndex: listHover.flatMap { model.chartIndex(forListItem: $0) })
+            listHoverIndex: external.flatMap { model.chartIndex(forListItem: $0) })
     }
 }
 
 /// `SunburstChartView` (Core Graphics in an NSView) wrapped for SwiftUI.
 private struct SunburstRepresentable: NSViewRepresentable {
     let model: ResultViewModel
+    let router: WindowRouter?
     let layout: SunburstLayout
     let generation: Int
     let title: String
@@ -35,10 +38,29 @@ private struct SunburstRepresentable: NSViewRepresentable {
         view.onHover = { [weak model] segment in
             model?.hover(segment?.node, from: .chart)
         }
-        view.onClick = { [weak model] segment in
+        let router = self.router
+        view.onClick = { [weak model] segment, flags in
             guard let model, let node = segment.node else { return }
+            // ⌘-click: Show in Finder; ⌥-click a folder: Open in New Window.
+            if ResultActions(model: model, router: router).modifiedClick(node, flags: flags) { return }
             if model.isDrillable(node) { model.open(node) } else { model.selected = node }
         }
+        view.onMenu = { [weak model] segment in
+            guard let model, let node = segment.node else { return nil }
+            return ResultActions(model: model, router: router).contextMenu(for: node)
+        }
+        view.onPinch = { [weak model] opening in
+            guard let model else { return }
+            if opening {
+                if let target = model.actionTarget { ResultActions(model: model, router: router).enter(target) }
+            } else {
+                model.goUp()
+            }
+        }
+        view.onSwipe = { [weak model] back in
+            if back { model?.back() } else { model?.forward() }
+        }
+        view.canSwipe = { [weak model] in (model?.history.canGoBack ?? false, model?.history.canGoForward ?? false) }
         view.onCentreClick = { [weak model] in model?.goUp() }
         view.onFirstFrame = { [weak model] in model?.chartDidDrawFirstFrame() }
         apply(to: view, animated: false)
@@ -75,7 +97,14 @@ private struct SunburstRepresentable: NSViewRepresentable {
 /// - Segments are batched into one path per colour for drawing.
 final class SunburstChartView: NSView {
     var onHover: ((Segment?) -> Void)?
-    var onClick: ((Segment) -> Void)?
+    var onClick: ((Segment, NSEvent.ModifierFlags) -> Void)?
+    var onMenu: ((Segment) -> NSMenu?)?
+    /// Pinch: true for pinch-open (enter), false for pinch-close (enclosing folder).
+    var onPinch: ((Bool) -> Void)?
+    /// Swipe: true for back, false for forward.
+    var onSwipe: ((Bool) -> Void)?
+    /// (can go back, can go forward), bounding the swipe.
+    var canSwipe: (() -> (Bool, Bool))?
     var onCentreClick: (() -> Void)?
     var onFirstFrame: (() -> Void)?
 
@@ -96,6 +125,9 @@ final class SunburstChartView: NSView {
     private var shownHighlight: Int?
     private var centreHovered = false
     private var pressedHit: Hit?
+    /// Magnification accumulated in the current pinch; nil once it fired.
+    private var pinch: CGFloat? = 0
+    private static let pinchThreshold: CGFloat = 0.12
 
     private struct Transition {
         enum Kind {
@@ -324,10 +356,65 @@ final class SunburstChartView: NSView {
         let h = hit(at: convert(event.locationInWindow, from: nil))
         defer { pressedHit = nil }
         guard h == pressedHit, transition == nil, let chartLayout else { return }
+        let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
         switch h {
         case .centre: if canGoUp { onCentreClick?() }
-        case .segment(let i): onClick?(chartLayout.segments[i])
+        case .segment(let i): onClick?(chartLayout.segments[i], flags)
         case .none: break
+        }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard transition == nil, let chartLayout,
+              case .segment(let i) = hit(at: convert(event.locationInWindow, from: nil)) else { return nil }
+        return onMenu?(chartLayout.segments[i])
+    }
+
+    // MARK: Gestures
+
+    /// Pinch-open enters the item under the pointer (or the selection);
+    /// pinch-close goes to the enclosing folder. Fires once per gesture.
+    override func magnify(with event: NSEvent) {
+        if event.phase == .began { pinch = 0 }
+        guard var amount = pinch else {
+            if event.phase == .ended || event.phase == .cancelled { pinch = 0 }
+            return
+        }
+        amount += event.magnification
+        if abs(amount) >= Self.pinchThreshold {
+            pinch = nil
+            onPinch?(amount > 0)
+        } else {
+            pinch = amount
+        }
+        if event.phase == .ended || event.phase == .cancelled { pinch = 0 }
+    }
+
+    /// Three-finger (or "swipe between pages") swipes: back / forward.
+    override func swipe(with event: NSEvent) {
+        if event.deltaX > 0 { onSwipe?(true) } else if event.deltaX < 0 { onSwipe?(false) }
+    }
+
+    override func wantsScrollEventsForSwipeTracking(on axis: NSEvent.GestureAxis) -> Bool {
+        axis == .horizontal
+    }
+
+    /// Two-finger horizontal swipes (with "Swipe between pages" on): back / forward.
+    override func scrollWheel(with event: NSEvent) {
+        guard event.phase == .began, NSEvent.isSwipeTrackingFromScrollEventsEnabled,
+              abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) else {
+            super.scrollWheel(with: event)
+            return
+        }
+        let (back, forward) = canSwipe?() ?? (false, false)
+        guard back || forward else { return }
+        var fired = false
+        event.trackSwipeEvent(options: [.lockDirection, .clampGestureAmount],
+                              dampenAmountThresholdMin: forward ? -1 : 0, max: back ? 1 : 0) {
+            [weak self] amount, phase, _, _ in
+            guard phase == .ended, !fired, amount != 0 else { return }
+            fired = true
+            MainActor.assumeIsolated { self?.onSwipe?(amount > 0) }
         }
     }
 

@@ -1,3 +1,4 @@
+import AppKit
 import MacleanCore
 import MacleanKit
 import SwiftUI
@@ -15,11 +16,17 @@ struct SideListView: View {
         VStack(alignment: .leading, spacing: 0) {
             header(target)
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    rows(target)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        rows(target)
+                    }
+                    .padding(.vertical, 6)
                 }
-                .padding(.vertical, 6)
+                // Keyboard selection stays in view (rows are identified by index).
+                .onChange(of: model.selected) { _, _ in
+                    if let row = model.selectedRow { proxy.scrollTo(row) }
+                }
             }
         }
         .font(.body)
@@ -135,6 +142,7 @@ private struct RowBlock: View {
     let model: ResultViewModel
     let target: NodeID
     let range: Range<Int>
+    @Environment(\.windowRouter) private var router
 
     static let rowHeight: CGFloat = 30
 
@@ -160,7 +168,11 @@ private struct RowBlock: View {
             }
         }
         .onTapGesture(coordinateSpace: .local) { point in
-            if let node = node(at: point.y, kids: kids) { model.activate(node) }
+            guard let node = node(at: point.y, kids: kids) else { return }
+            // ⌘-click: Show in Finder; ⌥-click a folder: Open in New Window.
+            let flags = NSEvent.modifierFlags.intersection([.command, .option, .shift, .control])
+            if ResultActions(model: model, router: router).modifiedClick(node, flags: flags) { return }
+            model.activate(node)
         }
     }
 
@@ -199,6 +211,7 @@ private struct RowHost: View {
                 highlighted: model.hoverSource == .list && model.hovered == node,
                 selected: model.selected == node)
             .equatable()
+            .contextMenu { ContextMenuContent(model: model, node: node) }
             .accessibilityAction { model.activate(node) }
     }
 }
