@@ -23,10 +23,9 @@ Maclean is a free, open-source macOS disk-space analyzer and cleaner. It reprodu
 - Selling it, trial/registration/licence screens, "Buy Now" UI.
 - Mac App Store distribution (the sandbox makes full-disk scanning impossible).
 - Windows/Linux.
-- Automatic "smart clean" recommendations. The user decides what goes. DaisyDisk doesn't have this either.
 
 ### Anti-goals (failure even if it "works")
-- Deleting anything the user did not explicitly put in the collector, or deleting a path whose contents changed since the scan without the user knowing.
+- Deleting anything the user did not explicitly approve (put in the collector, or left ticked in the Smart Clean review), or deleting a path whose contents changed since it was measured without the user knowing. (Revised 2026-11-07: Smart Clean added; see `2026-11-07-maclean-collector-cleanup-design.md`.)
 - Damaging macOS: deleting system-protected locations.
 - Copying DaisyDisk's name, icon, logo, wording or exact visual styling. Maclean clones *behaviour*, with its own identity (own palette, icon, copy).
 - Feeling heavy: Electron-class memory, slow launch, janky chart animation.
