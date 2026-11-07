@@ -268,8 +268,23 @@ public enum ArchiveError: Error { case badMagic, unsupportedVersion(UInt32), tru
 
 Built on branch `feat/scanner-core`; 51 tests pass. Benchmark of `/` from a session without Full Disk Access: 28.1 s, 274 GB, 4.32M nodes, peak RSS 1.13 GB. `/System` scans 29.1 GB in 3.6 s.
 
+**Full Disk Access benchmark (owner, 2026-11-07)**
+
+| | DaisyDisk | Maclean, FDA | Maclean, sudo |
+|---|---|---|---|
+| Time | ~30 s | 25.5 s | 25.3 s |
+| Scanned total | 392.8 GB visible + 24.4 hidden = 417.2 | 379.76 GB | 382.11 GB |
+| Users | 305.8 | 306.61 | 306.64 |
+| System | 41.5 | 29.05 | 29.82 |
+| opt / Applications | 14.4 / 14.1 | 14.36 / 14.03 | 14.36 / 14.03 |
+| private / Library | 8.2 / 6.2 | 8.55 / 6.14 | 9.93 / 6.31 |
+| Volumes | 1.6 | — | — |
+| Restricted folders | — | 364 | 87 |
+
+Everything matches except System and Volumes. The difference is exactly the other APFS volumes in the startup container: Preboot 11.3 GB + VM 1.1 GB under `/System/Volumes` (= System's 12.4 GB gap), and Recovery 1.6 GB under `/Volumes` (= DaisyDisk's "Volumes"). DaisyDisk descends into them; Maclean stops at every mount point.
+
 **Before Plan 2**
-- Re-run `maclean-scan /` from a terminal with Full Disk Access, and once with `sudo`; compare with DaisyDisk (417.2 GB; Users 305.8, System 41.5). Without FDA, ~/Library/Group Containers is unreadable (DaisyDisk sees 82.4 GB there); System is 12.4 GB short and ~26 GB of other top-level items are unexplained.
+- Descend into mount points of other APFS volumes in the startup disk's container (Preboot, VM, Recovery, Update…), like DaisyDisk, while still skipping `/System/Volumes/Data` (reached through firmlinks) and still stopping at other disks and network mounts. Detect same-container membership from `statfs` `f_mntfromname` (`/dev/diskNsM` sharing the container `diskN`) or equivalent. Expected after: System ≈ 41.5 GB and Volumes ≈ 1.6 GB.
 - Memory task: peak ~262 B/node (builder staging + `finish()` copies), steady state ~75 B/node; the spec's <64 B/node needs a layout shrink too (e.g. `fileCount` UInt32 or computed lazily), or a revised target.
 - Move blocking reads off Swift's cooperative thread pool; use a process-wide fd budget (concurrent scans, app-held fds).
 
