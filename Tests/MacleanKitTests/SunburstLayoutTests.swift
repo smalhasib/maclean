@@ -118,6 +118,32 @@ private func add(_ b: FileTreeBuilder, _ parent: NodeID, _ name: String, _ size:
         #expect(l.segment(atRadius: 100 + 1.5 * 40, angle: 5.5, innerRadius: 100, ringWidth: 40) == nil)
     }
 
+    @Test func nonPositiveRingsGiveEmptyLayout() {
+        let b = builder()
+        add(b, b.root, "a", 10)
+        let t = b.finish()
+        for rings in [0, -3] {
+            let l = SunburstLayout(tree: t, root: t.root, rings: rings)
+            #expect(l.segments.isEmpty)
+            #expect(l.isEmpty)
+            #expect(l.segment(atRadius: 110, angle: 1, innerRadius: 100, ringWidth: 40) == nil)
+        }
+    }
+
+    @Test func hitTestIsHardened() {
+        let b = builder()
+        add(b, b.root, "a", 300)
+        add(b, b.root, "b", 100)
+        let t = b.finish()
+        let l = SunburstLayout(tree: t, root: t.root)
+        #expect(l.segment(atRadius: 1e300, angle: 1, innerRadius: 100, ringWidth: 40) == nil)
+        #expect(l.segment(atRadius: 1e300, angle: 1, innerRadius: 100, ringWidth: 1e-300) == nil)
+        for angle in [2 * Double.pi, -1e-20, 0] {
+            let hit = l.segment(atRadius: 110, angle: angle, innerRadius: 100, ringWidth: 40)
+            #expect(hit?.startAngle == 0)
+        }
+    }
+
     @Test func layoutIsFast() {
         let b = builder()
         for i in 0..<100 {

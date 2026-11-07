@@ -44,7 +44,7 @@ public struct SunburstLayout: Sendable {
         struct Open { let node: NodeID; let start: Double; let end: Double; let top: Int }
         var frontier = [Open(node: root, start: 0, end: 2 * .pi, top: 0)]
 
-        for ring in 1 ... max(rings, 0) {
+        for ring in 1 ..< max(rings, 0) + 1 {
             guard !frontier.isEmpty else { break }
             var next: [Open] = []
             for open in frontier {
@@ -112,11 +112,15 @@ public struct SunburstLayout: Sendable {
 
     public func segment(atRadius r: Double, angle: Double, innerRadius: Double, ringWidth: Double) -> Segment? {
         guard ringWidth > 0, r >= innerRadius, r.isFinite, angle.isFinite else { return nil }
-        let ring = Int(((r - innerRadius) / ringWidth).rounded(.down)) + 1
+        let ringsDrawn = Double(ringStarts.count - 1)
+        let q = ((r - innerRadius) / ringWidth).rounded(.down)
+        guard q.isFinite, q < ringsDrawn else { return nil }
+        let ring = Int(q) + 1
         guard ring >= 1, ring < ringStarts.count else { return nil }
         let twoPi = 2 * Double.pi
         var a = angle.truncatingRemainder(dividingBy: twoPi)
         if a < 0 { a += twoPi }
+        if a >= twoPi { a = 0 }
 
         // Last segment in the ring whose startAngle <= a.
         var lo = ringStarts[ring - 1], hi = ringStarts[ring]
