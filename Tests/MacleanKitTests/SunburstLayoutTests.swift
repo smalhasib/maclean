@@ -116,6 +116,10 @@ private func add(_ b: FileTreeBuilder, _ parent: NodeID, _ name: String, _ size:
         #expect(l.segment(atRadius: 110, angle: -0.1, innerRadius: 100, ringWidth: 40)?.node != nil)
         // ring 2 has no segment where "b" (a file) would be
         #expect(l.segment(atRadius: 100 + 1.5 * 40, angle: 5.5, innerRadius: 100, ringWidth: 40) == nil)
+        // The index form points at the same segment.
+        let i = l.segmentIndex(atRadius: 100 + 1.5 * 40, angle: .pi / 2, innerRadius: 100, ringWidth: 40)
+        #expect(i.map { l.segments[$0] } == hit)
+        #expect(l.segmentIndex(atRadius: 50, angle: 1, innerRadius: 100, ringWidth: 40) == nil)
     }
 
     @Test func nonPositiveRingsGiveEmptyLayout() {

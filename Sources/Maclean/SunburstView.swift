@@ -16,7 +16,7 @@ struct SunburstView: View {
             model: model, layout: model.layout, generation: model.layoutGeneration,
             title: SizeText.string(model.tree.size(of: node)), subtitle: model.name(of: node),
             canGoUp: model.tree.parent(of: node) != nil,
-            listHover: listHover, listHoverParent: listHover.flatMap { model.tree.parent(of: $0) })
+            listHoverIndex: listHover.flatMap { model.chartIndex(forListItem: $0) })
     }
 }
 
@@ -28,8 +28,7 @@ private struct SunburstRepresentable: NSViewRepresentable {
     let title: String
     let subtitle: String
     let canGoUp: Bool
-    let listHover: NodeID?
-    let listHoverParent: NodeID?
+    let listHoverIndex: Int?
 
     func makeNSView(context: Context) -> SunburstChartView {
         let view = SunburstChartView()
@@ -55,20 +54,24 @@ private struct SunburstRepresentable: NSViewRepresentable {
                         canGoUp: canGoUp, animated: animated)
         // A list-row hover highlights its segment, or the "smaller objects"
         // segment it was merged into.
-        view.setExternalHighlight(node: listHover, parent: listHoverParent)
+        view.setExternalHighlight(index: listHoverIndex)
     }
 }
 
 /// Draws `SunburstLayout.segments` as rings around a centre disc.
 ///
 /// - The resting chart is rendered once into a bitmap (per layout, size,
-///   appearance and contrast setting); hover frames draw that bitmap plus the
-///   highlighted segment, so a hover costs one path fill.
+///   appearance and contrast setting) that becomes the backing layer's
+///   `contents`. Hover never redraws it: the highlighted segment is a
+///   `CAShapeLayer` on top whose path is set on hover (faded in over 0.1 s by
+///   Core Animation, instantly with Reduce Motion) and committed at once,
+///   before the side list is told about the hover.
 /// - Navigation animates over 0.35 s (ease-in-out) on the view's display link:
 ///   drilling in, the new layout starts where its root sat in the old one
 ///   (angles and ring scaled into that slice) and sweeps out to full size while
 ///   the old layout fades; drilling out is the reverse. Unrelated jumps, and
-///   all transitions with Reduce Motion on, crossfade.
+///   all transitions with Reduce Motion on, crossfade. Each frame is rendered
+///   into a reused bitmap and set as the layer's contents.
 /// - Segments are batched into one path per colour for drawing.
 final class SunburstChartView: NSView {
     var onHover: ((Segment?) -> Void)?
@@ -81,7 +84,7 @@ final class SunburstChartView: NSView {
     private static let highlightFade: TimeInterval = 0.1
     private static let padding: CGFloat = 24
 
-    private var layout: SunburstLayout?
+    private var chartLayout: SunburstLayout?
     private var generation = -1
     private var title = ""
     private var subtitle = ""
@@ -89,11 +92,10 @@ final class SunburstChartView: NSView {
 
     private var hoverIndex: Int?
     private var externalIndex: Int?
-    private var highlightedIndex: Int? { transition == nil ? (hoverIndex ?? externalIndex) : nil }
-    private var highlightSince: TimeInterval = 0
+    /// The segment index the highlight layer currently shows.
+    private var shownHighlight: Int?
     private var centreHovered = false
     private var pressedHit: Hit?
-    private var pendingHoverTimestamp: TimeInterval?
 
     private struct Transition {
         enum Kind {
@@ -117,9 +119,14 @@ final class SunburstChartView: NSView {
 
     private var cache: CGImage?
     private var cacheValid = false
+    /// Whether the layer's contents are the resting `cache` (not an animation frame).
+    private var showingCache = false
+    private var frameContext: CGContext?
     private var firstFrameDone = false
     private var trackingArea: NSTrackingArea?
     private var colorCache: [ColorKey: CGColor] = [:]
+    private let highlightLayer = CAShapeLayer()
+    private let centreLayer = CAShapeLayer()
     // Read in deinit, which isn't main-actor isolated; written once in init.
     nonisolated(unsafe) private var accessibilityObserver: (any NSObjectProtocol)?
 
@@ -127,6 +134,12 @@ final class SunburstChartView: NSView {
         super.init(frame: frame)
         wantsLayer = true
         layerContentsRedrawPolicy = .onSetNeedsDisplay
+        layer?.contentsGravity = .resize
+        for sub in [centreLayer, highlightLayer] {
+            sub.actions = ["path": NSNull(), "position": NSNull(), "bounds": NSNull(), "hidden": NSNull()]
+            sub.lineWidth = 1
+            layer?.addSublayer(sub)
+        }
         accessibilityObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -145,7 +158,25 @@ final class SunburstChartView: NSView {
 
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
+    override var wantsUpdateLayer: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        highlightLayer.frame = bounds
+        centreLayer.frame = bounds
+        CATransaction.commit()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil {
+            stopLink()
+            transition = nil
+        }
+    }
 
     // MARK: Content
 
@@ -153,9 +184,9 @@ final class SunburstChartView: NSView {
                     canGoUp: Bool, animated: Bool) {
         self.canGoUp = canGoUp
         guard newGeneration != generation else { return }
-        let old = layout
+        let old = chartLayout
         let oldTitle = self.title, oldSubtitle = self.subtitle
-        layout = new
+        chartLayout = new
         generation = newGeneration
         self.title = title
         self.subtitle = subtitle
@@ -166,21 +197,16 @@ final class SunburstChartView: NSView {
         if animated, let old, window != nil, !bounds.isEmpty {
             startTransition(from: old, to: new, fromTitle: oldTitle, fromSubtitle: oldSubtitle)
         }
+        updateHighlightLayer(animated: false)
         // Re-evaluate what's under a resting pointer once the new chart is in.
         if transition == nil { refreshHoverFromMouse() }
     }
 
-    func setExternalHighlight(node: NodeID?, parent: NodeID?) {
-        var index: Int?
-        if let node, let segments = layout?.segments {
-            index = segments.firstIndex { $0.node == node }
-            if index == nil, let parent {
-                index = segments.firstIndex { $0.node == nil && $0.parent == parent }
-            }
-        }
+    /// A list-row hover: the index of the segment to highlight (nil for none).
+    func setExternalHighlight(index: Int?) {
         guard index != externalIndex else { return }
         externalIndex = index
-        if hoverIndex == nil { highlightChanged() }
+        if hoverIndex == nil { updateHighlightLayer(animated: true) }
     }
 
     private func startTransition(from old: SunburstLayout, to new: SunburstLayout,
@@ -203,7 +229,7 @@ final class SunburstChartView: NSView {
         needsDisplay = true
     }
 
-    // MARK: Display link
+    // MARK: Display link (navigation animation only)
 
     private func startLink() {
         guard link == nil else { return }
@@ -220,20 +246,20 @@ final class SunburstChartView: NSView {
     @objc private func tick(_ link: CADisplayLink) {
         let now = CACurrentMediaTime()
         if let t = transition, now - t.start >= t.duration {
-            finishTransition(now: now)
+            finishTransition()
         }
-        let fading = now - highlightSince < Self.highlightFade
-        if transition == nil && !fading { stopLink() }
+        if transition == nil { stopLink() }
         needsDisplay = true
     }
 
-    private func finishTransition(now: TimeInterval) {
+    private func finishTransition() {
         guard let t = transition else { return }
         if t.frames > 1 {
             let elapsed = t.lastFrame - t.start
             if elapsed > 0 { Timings.mark("drillFPS", Double(t.frames) / elapsed) }
         }
         transition = nil
+        frameContext = nil
         refreshHoverFromMouse()
     }
 
@@ -260,18 +286,14 @@ final class SunburstChartView: NSView {
     private enum Hit: Equatable { case segment(Int), centre, none }
 
     private func hit(at point: CGPoint) -> Hit {
-        guard let layout else { return .none }
+        guard let chartLayout else { return .none }
         let g = geometry
         let dx = Double(point.x - g.center.x), dy = Double(point.y - g.center.y)
         let r = (dx * dx + dy * dy).squareRoot()
         if r <= Double(g.discRadius) { return .centre }
         let angle = atan2(dx, -dy)   // 0 at 12 o'clock, clockwise (flipped view)
-        guard let s = layout.segment(atRadius: r, angle: angle, innerRadius: Double(g.inner),
-                                     ringWidth: Double(g.ringWidth)) else { return .none }
-        // Segments are value types; find the one hit by its position in the ring.
-        guard let i = layout.segments.firstIndex(where: {
-            $0.ring == s.ring && $0.startAngle == s.startAngle
-        }) else { return .none }
+        guard let i = chartLayout.segmentIndex(atRadius: r, angle: angle, innerRadius: Double(g.inner),
+                                          ringWidth: Double(g.ringWidth)) else { return .none }
         return .segment(i)
     }
 
@@ -301,10 +323,10 @@ final class SunburstChartView: NSView {
     override func mouseUp(with event: NSEvent) {
         let h = hit(at: convert(event.locationInWindow, from: nil))
         defer { pressedHit = nil }
-        guard h == pressedHit, transition == nil, let layout else { return }
+        guard h == pressedHit, transition == nil, let chartLayout else { return }
         switch h {
         case .centre: if canGoUp { onCentreClick?() }
-        case .segment(let i): onClick?(layout.segments[i])
+        case .segment(let i): onClick?(chartLayout.segments[i])
         case .none: break
         }
     }
@@ -320,27 +342,57 @@ final class SunburstChartView: NSView {
         setHover(bounds.contains(point) ? hit(at: point) : .none, timestamp: nil)
     }
 
+    /// Updates and commits the highlight first, then tells the model (which
+    /// retargets the side list in a later SwiftUI update).
     private func setHover(_ h: Hit, timestamp: TimeInterval?) {
         let newIndex: Int?
         if case .segment(let i) = h { newIndex = i } else { newIndex = nil }
         let newCentre = h == .centre && canGoUp
-        if newCentre != centreHovered {
-            centreHovered = newCentre
-            needsDisplay = true
-        }
-        guard newIndex != hoverIndex else { return }
+        let centreChanged = newCentre != centreHovered
+        centreHovered = newCentre
+        let changed = newIndex != hoverIndex
+        guard changed || centreChanged else { return }
         hoverIndex = newIndex
-        if let timestamp { pendingHoverTimestamp = timestamp }
-        highlightChanged()
-        onHover?(newIndex.flatMap { layout?.segments[$0] })
+        updateHighlightLayer(animated: true)
+        // Push the highlight to the render server now, ahead of the list update.
+        CATransaction.flush()
+        guard changed else { return }
+        if let timestamp { Timings.mark("hover", (Timings.now - timestamp) * 1000) }
+        onHover?(newIndex.flatMap { chartLayout?.segments[$0] })
     }
 
-    private func highlightChanged() {
-        highlightSince = CACurrentMediaTime()
-        if highlightedIndex != nil && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            startLink()
+    /// Points the highlight layer at the hovered (or list-hovered) segment.
+    private func updateHighlightLayer(animated: Bool) {
+        let g = geometry
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        centreLayer.isHidden = !(centreHovered && transition == nil)
+        if !centreLayer.isHidden { centreLayer.path = CGPath(ellipseIn: discRect(g), transform: nil) }
+
+        let index = transition == nil ? (hoverIndex ?? externalIndex) : nil
+        if index != shownHighlight {
+            shownHighlight = index
+            highlightLayer.removeAnimation(forKey: "fade")
+            if let index, let chartLayout, index < chartLayout.segments.count {
+                let s = chartLayout.segments[index]
+                let path = CGMutablePath()
+                addSegment(to: path, geometry: g, ringPosition: CGFloat(s.ring),
+                           a0: s.startAngle, a1: s.endAngle, gap: gap)
+                highlightLayer.path = path
+                highlightLayer.isHidden = false
+                if animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                    let fade = CABasicAnimation(keyPath: "opacity")
+                    fade.fromValue = 0
+                    fade.toValue = 1
+                    fade.duration = Self.highlightFade
+                    highlightLayer.add(fade, forKey: "fade")
+                }
+            } else {
+                highlightLayer.path = nil
+                highlightLayer.isHidden = true
+            }
         }
-        needsDisplay = true
+        CATransaction.commit()
     }
 
     // MARK: Appearance
@@ -358,12 +410,21 @@ final class SunburstChartView: NSView {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         invalidateCache()
+        shownHighlight = nil   // geometry changed: rebuild the highlight path
+        updateHighlightLayer(animated: false)
     }
 
     private func invalidateCache() {
         cacheValid = false
         colorCache.removeAll()
+        frameContext = nil
         needsDisplay = true
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            let dark = appearanceKind == .dark
+            highlightLayer.fillColor = CGColor(gray: 1, alpha: dark ? 0.28 : 0.45)
+            highlightLayer.strokeColor = NSColor.labelColor.withAlphaComponent(dark ? 0.5 : 0.35).cgColor
+            centreLayer.fillColor = NSColor.labelColor.withAlphaComponent(0.05).cgColor
+        }
     }
 
     private var appearanceKind: Appearance {
@@ -392,92 +453,71 @@ final class SunburstChartView: NSView {
 
     // MARK: Drawing
 
-    override func draw(_ dirtyRect: NSRect) {
-        guard let ctx = NSGraphicsContext.current?.cgContext, let layout, !bounds.isEmpty else { return }
-        let drawStart = Timings.now
+    override func updateLayer() {
+        guard let backing = layer, let chartLayout, !bounds.isEmpty else { return }
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        backing.contentsScale = scale
         let g = geometry
         let now = CACurrentMediaTime()
 
         if var t = transition {
+            let drawStart = Timings.now
             let raw = min(max((now - t.start) / t.duration, 0), 1)
             let e = CGFloat(raw < 0.5 ? 2 * raw * raw : 1 - pow(-2 * raw + 2, 2) / 2)   // ease-in-out
-            drawTransition(t, progress: e, to: layout, in: ctx, geometry: g)
+            let image = render(into: &frameContext, scale: scale) { ctx in
+                drawTransition(t, progress: e, to: chartLayout, in: ctx, geometry: g)
+            }
+            backing.contents = image
+            showingCache = false
             t.frames += 1
             if t.frames > 1 { Timings.mark("frameInterval", (now - t.lastFrame) * 1000) }
             t.lastFrame = now
             transition = t
             Timings.mark("frame", (Timings.now - drawStart) * 1000)
-        } else {
-            if !cacheValid { renderCache(layout: layout, geometry: g) }
-            if let cache {
-                ctx.saveGState()
-                ctx.translateBy(x: 0, y: bounds.height)
-                ctx.scaleBy(x: 1, y: -1)
-                ctx.draw(cache, in: CGRect(origin: .zero, size: bounds.size))
-                ctx.restoreGState()
+        } else if !cacheValid || !showingCache {
+            if !cacheValid {
+                cacheValid = true
+                var context: CGContext?
+                cache = render(into: &context, scale: scale) { ctx in
+                    drawDisc(in: ctx, geometry: g)
+                    drawSegments(chartLayout.segments, in: ctx, geometry: g) { s in
+                        (Double(s.ring), s.startAngle, s.endAngle)
+                    }
+                    drawLabels(title: title, subtitle: subtitle, alpha: 1, geometry: g)
+                }
             }
-            drawOverlay(layout: layout, in: ctx, geometry: g, now: now)
+            backing.contents = cache
+            showingCache = true
+            updateHighlightLayer(animated: false)
         }
 
-        if let ts = pendingHoverTimestamp {
-            pendingHoverTimestamp = nil
-            Timings.mark("hover", (Timings.now - ts) * 1000)
-        }
         if !firstFrameDone {
             firstFrameDone = true
             onFirstFrame?()
         }
     }
 
-    /// Renders the resting chart (segments, disc, labels) at backing scale.
-    private func renderCache(layout: SunburstLayout, geometry g: Geometry) {
-        cacheValid = true
-        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+    /// Renders into a bitmap at backing scale in the view's (flipped)
+    /// coordinates, reusing `context` while its size matches.
+    private func render(into context: inout CGContext?, scale: CGFloat, _ body: (CGContext) -> Void) -> CGImage? {
         let width = Int((bounds.width * scale).rounded(.up)), height = Int((bounds.height * scale).rounded(.up))
-        guard width > 0, height > 0,
-              let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
-                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
-            cache = nil
-            return
+        guard width > 0, height > 0 else { return nil }
+        if context == nil || context?.width != width || context?.height != height {
+            context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
         }
-        // Same coordinates as the flipped view.
+        guard let ctx = context else { return nil }
+        ctx.clear(CGRect(x: 0, y: 0, width: width, height: height))
+        ctx.saveGState()
         ctx.translateBy(x: 0, y: CGFloat(height))
         ctx.scaleBy(x: scale, y: -scale)
         let previous = NSGraphicsContext.current
         NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            drawDisc(in: ctx, geometry: g)
-            drawSegments(layout.segments, in: ctx, geometry: g) { s in
-                (Double(s.ring), s.startAngle, s.endAngle)
-            }
-            drawLabels(title: title, subtitle: subtitle, alpha: 1, geometry: g)
-        }
+        effectiveAppearance.performAsCurrentDrawingAppearance { body(ctx) }
         NSGraphicsContext.current = previous
-        cache = ctx.makeImage()
-    }
-
-    private func drawOverlay(layout: SunburstLayout, in ctx: CGContext, geometry g: Geometry, now: TimeInterval) {
-        let fade = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-            ? 1 : CGFloat(min(max((now - highlightSince) / Self.highlightFade, 0), 1))
-        if let i = highlightedIndex, i < layout.segments.count {
-            let s = layout.segments[i]
-            let path = CGMutablePath()
-            addSegment(to: path, geometry: g, ringPosition: CGFloat(s.ring),
-                       a0: s.startAngle, a1: s.endAngle, gap: gap)
-            let dark = appearanceKind == .dark
-            ctx.addPath(path)
-            ctx.setFillColor(CGColor(gray: 1, alpha: (dark ? 0.28 : 0.45) * fade))
-            ctx.fillPath()
-            ctx.addPath(path)
-            ctx.setStrokeColor(NSColor.labelColor.withAlphaComponent((dark ? 0.5 : 0.35) * fade).cgColor)
-            ctx.setLineWidth(1)
-            ctx.strokePath()
-        }
-        if centreHovered {
-            ctx.setFillColor(NSColor.labelColor.withAlphaComponent(0.05).cgColor)
-            ctx.fillEllipse(in: discRect(g))
-        }
+        ctx.restoreGState()
+        return ctx.makeImage()
     }
 
     private func drawTransition(_ t: Transition, progress e: CGFloat, to new: SunburstLayout,
@@ -597,7 +637,7 @@ final class SunburstChartView: NSView {
         ctx.fillEllipse(in: discRect(g))
     }
 
-    /// Size (large, never truncated: the font shrinks to fit) over the name
+    /// Size (large, never truncated: the font shrinks to fit, down to 13 pt) over the name
     /// (small, truncated in the middle).
     private func drawLabels(title: String, subtitle: String, alpha: CGFloat, geometry g: Geometry) {
         guard alpha > 0.01 else { return }
@@ -610,7 +650,7 @@ final class SunburstChartView: NSView {
                           .foregroundColor: NSColor.labelColor.withAlphaComponent(alpha)]
             titleWidth = (title as NSString).size(withAttributes: titleAttrs).width
             titleSize -= 1
-        } while titleWidth > width && titleSize > 9
+        } while titleWidth > width && titleSize >= 13   // never below 13 pt (may overhang the disc)
 
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center

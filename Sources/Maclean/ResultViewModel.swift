@@ -62,6 +62,8 @@ import Observation
     /// Set by `open(_:)` so the history change doesn't re-resolve the path.
     @ObservationIgnored private var pendingNode: NodeID?
     @ObservationIgnored private var segmentIndex: [NodeID: Int] = [:]
+    /// Parent → index of its merged "smaller objects" segment.
+    @ObservationIgnored private var smallerIndex: [NodeID: Int] = [:]
     @ObservationIgnored let openedAt = Timings.now
     @ObservationIgnored private var firstFrameReported = false
 
@@ -95,6 +97,11 @@ import Observation
         history.visit(tree.path(of: node))
     }
 
+    /// A click or VoiceOver activation on an item: drill into a folder, else select it.
+    func activate(_ node: NodeID) {
+        if isDrillable(node) { open(node) } else { selected = node }
+    }
+
     func goUp() {
         guard let parent = tree.parent(of: currentNode) else { return }
         open(parent)
@@ -113,8 +120,12 @@ import Observation
             // Only clear a hover this source owns.
             guard hoverSource == source else { return }
         }
+        let retargets = source == .chart && (hovered != node || hoverSource != source)
+        let start = Timings.now
         if hovered != node { hovered = node }
         if hoverSource != source { hoverSource = source }
+        // The side list follows chart hovers; time its update through the commit.
+        if retargets { Timings.markAtNextCommit("listUpdate", since: start) }
     }
 
     // MARK: Queries for the views
@@ -139,6 +150,13 @@ import Observation
     /// The chart segment drawn for `node`, if visible.
     func segment(for node: NodeID) -> Segment? {
         segmentIndex[node].map { layout.segments[$0] }
+    }
+
+    /// Chart segment index to highlight for a list row: the item's own
+    /// segment, else the "smaller objects" segment it was merged into.
+    func chartIndex(forListItem node: NodeID) -> Int? {
+        if let i = segmentIndex[node] { return i }
+        return tree.parent(of: node).flatMap { smallerIndex[$0] }
     }
 
     /// Palette inputs for `child` (index `index` among `parent`'s children), as
@@ -201,11 +219,13 @@ import Observation
 
     private func rebuildSegmentIndex() {
         var index: [NodeID: Int] = [:]
+        var smaller: [NodeID: Int] = [:]
         index.reserveCapacity(layout.segments.count)
         for (i, s) in layout.segments.enumerated() {
-            if let node = s.node { index[node] = i }
+            if let node = s.node { index[node] = i } else { smaller[s.parent] = i }
         }
         segmentIndex = index
+        smallerIndex = smaller
     }
 
     private static func computeLayout(tree: FileTree, root: NodeID) -> SunburstLayout {

@@ -111,6 +111,11 @@ public struct SunburstLayout: Sendable {
     }
 
     public func segment(atRadius r: Double, angle: Double, innerRadius: Double, ringWidth: Double) -> Segment? {
+        segmentIndex(atRadius: r, angle: angle, innerRadius: innerRadius, ringWidth: ringWidth).map { segments[$0] }
+    }
+
+    /// Index into `segments` of the segment at polar position (`r`, `angle`), if any.
+    public func segmentIndex(atRadius r: Double, angle: Double, innerRadius: Double, ringWidth: Double) -> Int? {
         guard ringWidth > 0, r >= innerRadius, r.isFinite, angle.isFinite else { return nil }
         let ringsDrawn = Double(ringStarts.count - 1)
         let q = ((r - innerRadius) / ringWidth).rounded(.down)
@@ -129,7 +134,6 @@ public struct SunburstLayout: Sendable {
             if segments[mid].startAngle <= a { lo = mid + 1 } else { hi = mid }
         }
         guard lo > ringStarts[ring - 1] else { return nil }
-        let s = segments[lo - 1]
-        return a < s.endAngle ? s : nil
+        return a < segments[lo - 1].endAngle ? lo - 1 : nil
     }
 }

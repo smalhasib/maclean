@@ -16,7 +16,7 @@ struct SideListView: View {
             header(target)
             Divider()
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 0) {
                     rows(target)
                 }
                 .padding(.vertical, 6)
@@ -42,7 +42,6 @@ struct SideListView: View {
                     .truncationMode(.middle)
                     .help(name)
                 Text(kindText(target, count: count))
-                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -82,23 +81,18 @@ struct SideListView: View {
                 .padding(.vertical, 8)
         }
 
-        ForEach(0 ..< visible, id: \.self) { i in
-            row(kids[i], index: i, parent: target)
-        }
+        RowBlock(model: model, target: target, range: 0 ..< visible)
 
-        if visible < kids.count {
+        let tailSize = max(tree.size(of: target) - (0 ..< visible).reduce(Int64(0)) { $0 + tree.size(of: kids[$1]) }, 0)
+        if visible < kids.count, tailSize > 0 {
             let expanded = model.isExpanded(target)
-            let tail = kids.count - visible
-            let tailSize = max(tree.size(of: target) - (0 ..< visible).reduce(Int64(0)) { $0 + tree.size(of: kids[$1]) }, 0)
-            SmallerObjectsRow(count: tail, size: tailSize, expanded: expanded,
+            SmallerObjectsRow(count: kids.count - visible, size: tailSize, expanded: expanded,
                               color: color(.smallerObjects, top: 0, ring: 1)) {
                 model.expandedTarget = model.expandedTarget == target ? nil : target
             }
             if expanded {
                 let end = min(kids.count, visible + ResultViewModel.expandedRowLimit)
-                ForEach(visible ..< end, id: \.self) { i in
-                    row(kids[i], index: i, parent: target)
-                }
+                RowBlock(model: model, target: target, range: visible ..< end)
                 if end < kids.count {
                     Text("\((kids.count - end).formatted()) more items")
                         .foregroundStyle(.secondary)
@@ -115,23 +109,6 @@ struct SideListView: View {
         }
     }
 
-    private func row(_ node: NodeID, index: Int, parent: NodeID) -> some View {
-        let c = model.colorInputs(child: node, index: index, parent: parent)
-        return ListRow(name: model.tree.name(of: node), size: model.tree.size(of: node),
-                       color: color(c.kind, top: c.top, ring: c.ring), outlined: c.kind == .mountPoint,
-                       drillable: model.isDrillable(node),
-                       highlighted: model.hoverSource == .list && model.hovered == node,
-                       selected: model.selected == node) { inside in
-            if inside {
-                model.hover(node, from: .list)
-            } else if model.hoverSource == .list, model.hovered == node {
-                model.hover(nil, from: .list)
-            }
-        } onTap: {
-            if model.isDrillable(node) { model.open(node) } else { model.selected = node }
-        }
-    }
-
     // MARK: Colours
 
     private func headerColor(_ target: NodeID) -> Color {
@@ -141,15 +118,94 @@ struct SideListView: View {
     }
 
     private func color(_ kind: SegmentKind, top: Int, ring: Int) -> Color {
+        SideListView.color(kind, top: top, ring: ring, dark: colorScheme == .dark, highContrast: contrast == .increased)
+    }
+
+    static func color(_ kind: SegmentKind, top: Int, ring: Int, dark: Bool, highContrast: Bool) -> Color {
         let rgb = Palette.color(kind: kind, topLevelIndex: top, ring: ring,
-                                appearance: colorScheme == .dark ? .dark : .light,
-                                highContrast: contrast == .increased)
+                                appearance: dark ? .dark : .light, highContrast: highContrast)
         return Color(.sRGB, red: rgb.r, green: rgb.g, blue: rgb.b, opacity: kind == .smallerObjects ? 0.6 : 1)
     }
 }
 
-/// Dot, name (middle-truncated, full name in the tooltip) and size (never truncated).
-private struct ListRow: View {
+/// A run of child rows (`range` of `target`'s children) with fixed-height
+/// rows, so one continuous-hover handler and one tap handler map the
+/// pointer's y to a row instead of every row tracking the mouse itself.
+private struct RowBlock: View {
+    let model: ResultViewModel
+    let target: NodeID
+    let range: Range<Int>
+
+    static let rowHeight: CGFloat = 30
+
+    var body: some View {
+        let kids = model.tree.children(of: target)
+        LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(range, id: \.self) { i in
+                RowHost(model: model, node: kids[i], index: i, parent: target)
+                    .frame(height: Self.rowHeight)
+            }
+        }
+        .contentShape(Rectangle())
+        .onContinuousHover(coordinateSpace: .local) { phase in
+            switch phase {
+            case .active(let point):
+                if let node = node(at: point.y, kids: kids) {
+                    model.hover(node, from: .list)
+                } else {
+                    clearHover(kids: kids)
+                }
+            case .ended:
+                clearHover(kids: kids)
+            }
+        }
+        .onTapGesture(coordinateSpace: .local) { point in
+            if let node = node(at: point.y, kids: kids) { model.activate(node) }
+        }
+    }
+
+    private func node(at y: CGFloat, kids: NodeChildren) -> NodeID? {
+        guard y >= 0 else { return nil }
+        let i = range.lowerBound + Int(y / Self.rowHeight)
+        return range.contains(i) ? kids[i] : nil
+    }
+
+    /// Clears a list hover only if it belongs to this block (another block may own it now).
+    private func clearHover(kids: NodeChildren) {
+        guard model.hoverSource == .list, let hovered = model.hovered, let first = kids.first else { return }
+        if range.contains(Int(hovered.index) - Int(first.index)) { model.hover(nil, from: .list) }
+    }
+}
+
+/// Reads the hover/selection state for one row, so the list body doesn't
+/// depend on it; the row itself is `Equatable` and only redraws when its
+/// inputs change.
+private struct RowHost: View {
+    let model: ResultViewModel
+    let node: NodeID
+    let index: Int
+    let parent: NodeID
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        let c = model.colorInputs(child: node, index: index, parent: parent)
+        let tree = model.tree
+        ListRow(name: tree.name(of: node), size: tree.size(of: node),
+                color: SideListView.color(c.kind, top: c.top, ring: c.ring, dark: colorScheme == .dark,
+                                          highContrast: contrast == .increased),
+                outlined: c.kind == .mountPoint, drillable: model.isDrillable(node),
+                // `hovered` is only read for list hovers, so chart hovers don't invalidate rows.
+                highlighted: model.hoverSource == .list && model.hovered == node,
+                selected: model.selected == node)
+            .equatable()
+            .accessibilityAction { model.activate(node) }
+    }
+}
+
+/// Dot, name (middle-truncated; the full name is the tooltip of the hovered
+/// row) and size (never truncated).
+private struct ListRow: View, Equatable {
     let name: String
     let size: Int64
     let color: Color
@@ -157,11 +213,9 @@ private struct ListRow: View {
     let drillable: Bool
     let highlighted: Bool
     let selected: Bool
-    let onHover: (Bool) -> Void
-    let onTap: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
+        let row = HStack(spacing: 10) {
             Group {
                 if outlined {
                     Circle().strokeBorder(color, lineWidth: 1.5)
@@ -173,30 +227,29 @@ private struct ListRow: View {
             Text(name)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .help(name)
             Spacer(minLength: 8)
             Text(SizeText.string(size))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
                 .fixedSize()
             Image(systemName: "chevron.right")
-                .font(.caption)
+                .imageScale(.small)
                 .foregroundStyle(.tertiary)
                 .opacity(drillable ? 1 : 0)
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .frame(maxHeight: .infinity)
         .background {
             RoundedRectangle(cornerRadius: 6)
                 .fill(selected ? Color.accentColor.opacity(0.18)
                       : highlighted ? Color.primary.opacity(0.06) : .clear)
         }
-        .contentShape(Rectangle())
         .padding(.horizontal, 6)
-        .onHover(perform: onHover)
-        .onTapGesture(perform: onTap)
+        .padding(.vertical, 1)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
+
+        if highlighted { row.help(name) } else { row }
     }
 }
 
@@ -220,7 +273,7 @@ private struct SmallerObjectsRow: View {
                 .monospacedDigit()
                 .fixedSize()
             Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                .font(.caption)
+                .imageScale(.small)
                 .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 16)
