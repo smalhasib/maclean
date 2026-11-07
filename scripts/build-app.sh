@@ -1,0 +1,19 @@
+#!/bin/sh
+# Builds Maclean in release and assembles .build/Maclean.app (no Xcode needed).
+# Signs ad hoc unless MACLEAN_SIGN_IDENTITY names a signing identity.
+set -eu
+
+cd "$(dirname "$0")/.."
+
+swift build -c release --product Maclean
+bin_dir="$(swift build -c release --show-bin-path)"
+
+app=".build/Maclean.app"
+rm -rf "$app"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+cp Resources/Info.plist "$app/Contents/Info.plist"
+cp "$bin_dir/Maclean" "$app/Contents/MacOS/Maclean"
+
+codesign --force -s "${MACLEAN_SIGN_IDENTITY:--}" "$app"
+
+echo "Built $app"

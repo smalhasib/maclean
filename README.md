@@ -2,7 +2,7 @@
 
 Maclean is an open-source, native macOS disk analyzer in the spirit of DaisyDisk.
 
-**Status: in development.** Only the scanner core and a command-line scanner exist so far.
+**Status: in development.** The scanner core, a command-line scanner and the start of the app exist so far.
 
 ## Build and test
 
@@ -10,6 +10,20 @@ Maclean is an open-source, native macOS disk analyzer in the spirit of DaisyDisk
 swift build
 swift test
 ```
+
+## Run the app
+
+```sh
+swift run Maclean
+```
+
+or build an app bundle (signed ad hoc, or with `MACLEAN_SIGN_IDENTITY`) and open it:
+
+```sh
+scripts/build-app.sh && open .build/Maclean.app
+```
+
+Both work with the Command Line Tools alone; Xcode isn't needed.
 
 ## maclean-scan
 
