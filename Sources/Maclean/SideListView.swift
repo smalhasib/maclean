@@ -49,7 +49,7 @@ struct SideListView: View {
                     .truncationMode(.middle)
                     .help(name)
                 Text(kindText(target, count: count))
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
@@ -60,6 +60,9 @@ struct SideListView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(name), \(kindText(target, count: count)), \(SizeText.spoken(tree.size(of: target)))")
+        .accessibilityAddTraits(.isHeader)
     }
 
     private func kindText(_ node: NodeID, count: Int) -> String {
@@ -83,7 +86,7 @@ struct SideListView: View {
 
         if isFolder && (kids.isEmpty || tree.size(of: target) == 0) {
             Text("Empty folder")
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
         }
@@ -102,7 +105,7 @@ struct SideListView: View {
                 RowBlock(model: model, target: target, range: visible ..< end)
                 if end < kids.count {
                     Text("\((kids.count - end).formatted()) more items")
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                         .padding(.horizontal, 16)
                         .padding(.vertical, 6)
                 }
@@ -210,6 +213,7 @@ private struct RowHost: View {
         let c = model.colorInputs(child: node, index: index, parent: parent)
         let tree = model.tree
         ListRow(name: tree.name(of: node), size: tree.size(of: node),
+                kind: ResultViewModel.kindWord(model.kind(of: node)),
                 color: SideListView.color(c.kind, top: c.top, ring: c.ring, dark: colorScheme == .dark,
                                           highContrast: contrast == .increased),
                 outlined: c.kind == .mountPoint, drillable: model.isDrillable(node),
@@ -227,6 +231,8 @@ private struct RowHost: View {
 private struct ListRow: View, Equatable {
     let name: String
     let size: Int64
+    /// Spoken kind: "folder", "file" or "package".
+    let kind: String
     let color: Color
     let outlined: Bool
     let drillable: Bool
@@ -248,7 +254,7 @@ private struct ListRow: View, Equatable {
                 .truncationMode(.middle)
             Spacer(minLength: 8)
             Text(SizeText.string(size))
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .monospacedDigit()
                 .fixedSize()
             Image(systemName: "chevron.right")
@@ -265,8 +271,10 @@ private struct ListRow: View, Equatable {
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 1)
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
+        // VoiceOver: "Users, folder, 307.6 gigabytes".
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(name), \(kind), \(SizeText.spoken(size))")
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
 
         if highlighted { row.help(name) } else { row }
     }
@@ -283,12 +291,12 @@ private struct SmallerObjectsRow: View {
         HStack(spacing: 10) {
             Circle().fill(color).frame(width: 9, height: 9)
             Text("smaller objects…")
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .lineLimit(1)
                 .help("\(count.formatted()) items")
             Spacer(minLength: 8)
             Text(SizeText.string(size))
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .monospacedDigit()
                 .fixedSize()
             Image(systemName: expanded ? "chevron.up" : "chevron.down")
@@ -299,8 +307,11 @@ private struct SmallerObjectsRow: View {
         .padding(.vertical, 6)
         .contentShape(Rectangle())
         .onTapGesture(perform: toggle)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("smaller objects, \(count.formatted()) items, \(SizeText.spoken(size))")
+        .accessibilityValue(expanded ? "expanded" : "collapsed")
         .accessibilityAddTraits(.isButton)
+        .accessibilityAction { toggle() }
     }
 }
 
@@ -311,14 +322,29 @@ private struct SpaceRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Circle().strokeBorder(Color.secondary.opacity(0.6), lineWidth: 1.5).frame(width: 9, height: 9)
-            Text(title).foregroundStyle(.secondary)
+            Text(title).secondaryText()
             Spacer(minLength: 8)
             Text(SizeText.string(size))
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .monospacedDigit()
                 .fixedSize()
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title), \(SizeText.spoken(size))")
+    }
+}
+
+extension View {
+    /// Secondary text; with Increase Contrast, full-contrast primary text.
+    func secondaryText() -> some View { modifier(SecondaryText()) }
+}
+
+private struct SecondaryText: ViewModifier {
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        content.foregroundStyle(contrast == .increased ? HierarchicalShapeStyle.primary : .secondary)
     }
 }

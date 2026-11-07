@@ -16,6 +16,8 @@ struct VolumeRowView: View {
     let icon: NSImage
     let title: String
     let detail: Detail?
+    /// The detail as VoiceOver reads it ("494 gigabytes capacity, 77 gigabytes free").
+    var spokenDetail: String?
     /// Used fraction of the volume (0…1), nil for folders.
     let usage: Double?
     /// Canonical path the row scans (the registry key).
@@ -31,21 +33,28 @@ struct VolumeRowView: View {
     var body: some View {
         let session = registry.session(canonical: path)
         HStack(spacing: 12) {
-            Image(nsImage: icon)
-                .resizable()
-                .frame(width: 32, height: 32)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(title)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .help(title)
-                    if let detail, !(session?.isScanning ?? false) {
-                        detailText(detail)
+            HStack(spacing: 12) {
+                Image(nsImage: icon)
+                    .resizable()
+                    .frame(width: 32, height: 32)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(title)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .help(title)
+                        if let detail, !(session?.isScanning ?? false) {
+                            detailText(detail)
+                        }
                     }
+                    status(session)
                 }
-                status(session)
             }
+            // VoiceOver: name, capacity and free space (or path), then state;
+            // the buttons stay separate elements.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(spokenText(session))
+            .accessibilityAddTraits(.isStaticText)
             Spacer(minLength: 8)
             actions(session)
         }
@@ -54,18 +63,30 @@ struct VolumeRowView: View {
         .contentShape(Rectangle())
     }
 
+    private func spokenText(_ session: ScanSession?) -> String {
+        let state: String
+        switch session?.state {
+        case .scanning(let bytes, _):
+            state = session?.isStopping == true ? "stopping" : "scanning, \(SizeText.spoken(bytes)) counted"
+        case .finished(let tree): state = "scanned, \(SizeText.spoken(tree.size(of: tree.root)))"
+        case .failed(let message): state = "error: \(message)"
+        case .cancelled, nil: state = "not scanned"
+        }
+        return [title, spokenDetail, state].compactMap { $0 }.joined(separator: ", ")
+    }
+
     @ViewBuilder
     private func detailText(_ detail: Detail) -> some View {
         switch detail {
         case .size(let text):
             Text(text)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .monospacedDigit()
                 .fixedSize()
                 .layoutPriority(1)
         case .path(let text, let full):
             Text(text)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .help(full)
@@ -83,7 +104,7 @@ struct VolumeRowView: View {
                     ProgressView()
                 }
                 Text(session?.isStopping == true ? "Stopping…" : "Scanning… \(SizeText.string(bytes))")
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .monospacedDigit()
                     .fixedSize()
             }
@@ -91,11 +112,11 @@ struct VolumeRowView: View {
             .controlSize(.small)
         case .failed(let message):
             Label(message, systemImage: "exclamationmark.triangle")
-                .foregroundStyle(.secondary)
+                .secondaryText()
         case .finished(let tree):
             usageBar
             Text("Scanned: \(SizeText.string(tree.size(of: tree.root)))")
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .monospacedDigit()
                 .fixedSize()
         case .cancelled, nil:

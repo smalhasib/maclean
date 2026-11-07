@@ -259,7 +259,7 @@ struct ResultWindowContent: View {
                     .id(ObjectIdentifier(model))
             } else {
                 Text("This result is no longer available")
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }

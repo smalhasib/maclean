@@ -28,7 +28,6 @@ struct ResultView: View {
             HStack(spacing: 0) {
                 SunburstView(model: model)
                     .frame(minWidth: 220, maxWidth: .infinity, maxHeight: .infinity)
-                    .accessibilityLabel("Ring chart")
                 Divider()
                 SideListView(model: model)
                     .frame(width: 280)
@@ -77,7 +76,7 @@ private struct ResultBanners: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 if let icon {
-                    Image(systemName: icon).foregroundStyle(.secondary)
+                    Image(systemName: icon).secondaryText()
                 } else {
                     ProgressView().controlSize(.small)
                 }

@@ -153,7 +153,7 @@ struct StartView: View {
             VStack(alignment: .leading, spacing: 0) {
                 if let notice = model.notice {
                     HStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle").foregroundStyle(.secondary)
+                        Image(systemName: "exclamationmark.triangle").secondaryText()
                         Text(notice.text).lineLimit(1).truncationMode(.middle).help(notice.text)
                         Spacer(minLength: 8)
                         Button { model.dismissNotice() } label: { Image(systemName: "xmark") }
@@ -177,6 +177,9 @@ struct StartView: View {
                         title: volume.entry.name,
                         detail: volume.capacity.map {
                             .size("\(SizeText.string($0.total)) · \(SizeText.string($0.freeIncludingPurgeable)) free")
+                        },
+                        spokenDetail: volume.capacity.map {
+                            "\(SizeText.spoken($0.total)) capacity, \(SizeText.spoken($0.freeIncludingPurgeable)) free"
                         },
                         usage: volume.capacity.flatMap { cap in
                             cap.total > 0 ? Double(volume.usedBytes ?? 0) / Double(cap.total) : nil
@@ -203,7 +206,7 @@ struct StartView: View {
                 HStack(spacing: 12) {
                     Button("Scan Folder…") { FolderPicker.scan(into: registry) }
                     Text("or drop a folder here")
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                     Spacer()
                 }
                 .padding(.horizontal, 20)
@@ -223,7 +226,7 @@ struct StartView: View {
 
     private func folderRow(_ folder: StartModel.Folder, icon: NSImage) -> VolumeRowView {
         VolumeRowView(icon: icon, title: folder.name, detail: .path(folder.detail, full: folder.path),
-                      usage: nil, path: folder.path, expected: nil, registry: registry)
+                      spokenDetail: folder.detail, usage: nil, path: folder.path, expected: nil, registry: registry)
     }
 
     private var starredSection: some View {
@@ -231,7 +234,7 @@ struct StartView: View {
             SectionHeader(title: "Starred")
             if model.starred.isEmpty {
                 Text("Drop a folder here to star it")
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .padding(.horizontal, 20)
                     .padding(.vertical, 10)
             }
@@ -262,7 +265,7 @@ private struct SectionHeader: View {
     var body: some View {
         Text(title)
             .font(.headline)
-            .foregroundStyle(.secondary)
+            .secondaryText()
             .padding(.horizontal, 20)
             .padding(.top, 10)
             .padding(.bottom, 4)

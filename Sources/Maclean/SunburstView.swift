@@ -18,7 +18,8 @@ struct SunburstView: View {
             model: model, router: router, layout: model.layout, generation: model.layoutGeneration,
             title: SizeText.string(model.tree.size(of: node)), subtitle: model.name(of: node),
             canGoUp: model.tree.parent(of: node) != nil,
-            listHoverIndex: external.flatMap { model.chartIndex(forListItem: $0) })
+            listHoverIndex: external.flatMap { model.chartIndex(forListItem: $0) },
+            selectedIndex: model.selected.flatMap { model.chartIndex(forListItem: $0) })
     }
 }
 
@@ -32,6 +33,8 @@ private struct SunburstRepresentable: NSViewRepresentable {
     let subtitle: String
     let canGoUp: Bool
     let listHoverIndex: Int?
+    /// The keyboard-current segment, outlined while the chart has keyboard focus.
+    let selectedIndex: Int?
 
     func makeNSView(context: Context) -> SunburstChartView {
         let view = SunburstChartView()
@@ -67,6 +70,11 @@ private struct SunburstRepresentable: NSViewRepresentable {
         }
         view.onCentreClick = { [weak model] in model?.goUp() }
         view.onFirstFrame = { [weak model] in model?.chartDidDrawFirstFrame() }
+        view.segmentLabel = { [weak model] segment in
+            guard let model else { return "" }
+            guard let node = segment.node else { return "smaller objects, \(SizeText.spoken(segment.mergedSize))" }
+            return model.accessibilityLabel(of: node)
+        }
         apply(to: view, animated: false)
         return view
     }
@@ -81,6 +89,7 @@ private struct SunburstRepresentable: NSViewRepresentable {
         // A list-row hover highlights its segment, or the "smaller objects"
         // segment it was merged into.
         view.setExternalHighlight(index: listHoverIndex)
+        view.setSelectedIndex(selectedIndex)
     }
 }
 
@@ -99,6 +108,11 @@ private struct SunburstRepresentable: NSViewRepresentable {
 ///   all transitions with Reduce Motion on, crossfade. Each frame is rendered
 ///   into a reused bitmap and set as the layer's contents.
 /// - Segments are batched into one path per colour for drawing.
+/// - Accessibility: one group element ("Disk map of <folder>") whose children
+///   are the ring-1 segments, each a pressable element framed on its segment.
+/// - Keyboard focus is shown only when it came from the keyboard: an accent
+///   outline on the keyboard-current segment (or a thin ring hugging the
+///   chart when nothing is selected), never the system's full focus ring.
 final class SunburstChartView: NSView {
     var onHover: ((Segment?) -> Void)?
     var onClick: ((Segment, NSEvent.ModifierFlags) -> Void)?
@@ -111,6 +125,8 @@ final class SunburstChartView: NSView {
     var canSwipe: (() -> (Bool, Bool))?
     var onCentreClick: (() -> Void)?
     var onFirstFrame: (() -> Void)?
+    /// VoiceOver label of a segment: "<name>, <kind>, <size>".
+    var segmentLabel: ((Segment) -> String)?
 
     private static let animationDuration: TimeInterval = 0.35
     private static let crossfadeDuration: TimeInterval = 0.25
@@ -125,6 +141,15 @@ final class SunburstChartView: NSView {
 
     private var hoverIndex: Int?
     private var externalIndex: Int?
+    private var selectedIndex: Int?
+    /// Whether focus arrived (or was last used) from the keyboard, not a click.
+    private var keyboardFocus = false
+    /// Ring-1 accessibility children, rebuilt after a layout or size change.
+    private var accessibilityElements: [SegmentElement]?
+    /// The same elements by segment index; read by the nonisolated hit-test (on the main thread).
+    nonisolated(unsafe) private var elementsByIndex: [Int: SegmentElement] = [:]
+    // Removed in deinit, which isn't main-actor isolated.
+    nonisolated(unsafe) private var windowObservers: [any NSObjectProtocol] = []
     /// The segment index the highlight layer currently shows.
     private var shownHighlight: Int?
     private var centreHovered = false
@@ -163,6 +188,7 @@ final class SunburstChartView: NSView {
     private var colorCache: [ColorKey: CGColor] = [:]
     private let highlightLayer = CAShapeLayer()
     private let centreLayer = CAShapeLayer()
+    private let focusLayer = CAShapeLayer()
     // Read in deinit, which isn't main-actor isolated; written once in init.
     nonisolated(unsafe) private var accessibilityObserver: (any NSObjectProtocol)?
 
@@ -171,15 +197,26 @@ final class SunburstChartView: NSView {
         wantsLayer = true
         layerContentsRedrawPolicy = .onSetNeedsDisplay
         layer?.contentsGravity = .resize
-        for sub in [centreLayer, highlightLayer] {
+        focusRingType = .none   // the focus is drawn on a segment instead (focusLayer)
+        for sub in [centreLayer, highlightLayer, focusLayer] {
             sub.actions = ["path": NSNull(), "position": NSNull(), "bounds": NSNull(), "hidden": NSNull()]
             sub.lineWidth = 1
             layer?.addSublayer(sub)
         }
+        focusLayer.fillColor = nil
+        focusLayer.lineJoin = .round
+        focusLayer.isHidden = true
         accessibilityObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.invalidateCache() }
+            MainActor.assumeIsolated {
+                // Increase Contrast: palette, gaps, label colours and outlines all change.
+                guard let self else { return }
+                self.invalidateCache()
+                self.shownHighlight = nil
+                self.updateHighlightLayer(animated: false)
+                self.invalidateAccessibility()
+            }
         }
     }
 
@@ -190,6 +227,7 @@ final class SunburstChartView: NSView {
         if let accessibilityObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(accessibilityObserver)
         }
+        for observer in windowObservers { NotificationCenter.default.removeObserver(observer) }
     }
 
     override var isFlipped: Bool { true }
@@ -207,17 +245,25 @@ final class SunburstChartView: NSView {
     override var canBecomeKeyView: Bool { true }
 
     override func becomeFirstResponder() -> Bool {
-        noteFocusRingMaskChanged()
+        // Focus from a click shows nothing; from Tab (or VoiceOver) it does.
+        let mouse: Set<NSEvent.EventType> = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        keyboardFocus = !(NSApp.currentEvent.map { mouse.contains($0.type) } ?? false)
+        DispatchQueue.main.async { [weak self] in self?.updateFocusLayer() }
         return true
     }
 
     override func resignFirstResponder() -> Bool {
-        noteFocusRingMaskChanged()
+        keyboardFocus = false
+        DispatchQueue.main.async { [weak self] in self?.updateFocusLayer() }
         return true
     }
 
     override func keyDown(with event: NSEvent) {
-        if onKey?(event) == true { return }
+        if onKey?(event) == true {
+            // Arrow keys after a click: the focus becomes visible (as :focus-visible).
+            if !keyboardFocus { keyboardFocus = true; updateFocusLayer() }
+            return
+        }
         let mods = event.modifierFlags.intersection([.command, .option, .control])
         if Int(event.keyCode) == KeyCode.tab, mods.isEmpty {
             // Tab from the chart gives focus back to the list (the content view).
@@ -227,12 +273,108 @@ final class SunburstChartView: NSView {
         super.keyDown(with: event)
     }
 
-    override var focusRingMaskBounds: NSRect { bounds }
+    /// The keyboard-current segment (nil for none).
+    func setSelectedIndex(_ index: Int?) {
+        guard index != selectedIndex else { return }
+        selectedIndex = index
+        updateFocusLayer()
+    }
 
-    override func drawFocusRingMask() {
+    /// Outlines the keyboard-current segment in the accent colour while the
+    /// chart holds keyboard focus in the key window; with no selection, a thin
+    /// ring just outside the outermost ring.
+    private func updateFocusLayer() {
         let g = geometry
-        NSBezierPath(ovalIn: CGRect(x: g.center.x - g.outer, y: g.center.y - g.outer,
-                                    width: 2 * g.outer, height: 2 * g.outer)).fill()
+        let visible = keyboardFocus && transition == nil && window?.firstResponder === self
+            && (window?.isKeyWindow ?? false) && chartLayout != nil
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        focusLayer.isHidden = !visible
+        if visible, let chartLayout {
+            effectiveAppearance.performAsCurrentDrawingAppearance {
+                focusLayer.strokeColor = NSColor.controlAccentColor.cgColor
+            }
+            if let i = selectedIndex, i < chartLayout.segments.count {
+                let s = chartLayout.segments[i]
+                let path = CGMutablePath()
+                addSegment(to: path, geometry: g, ringPosition: CGFloat(s.ring),
+                           a0: s.startAngle, a1: s.endAngle, gap: gap)
+                focusLayer.path = path
+                focusLayer.lineWidth = highContrast ? 3 : 2
+            } else {
+                let r = g.outer + 3
+                focusLayer.path = CGPath(ellipseIn: CGRect(x: g.center.x - r, y: g.center.y - r,
+                                                          width: 2 * r, height: 2 * r), transform: nil)
+                focusLayer.lineWidth = highContrast ? 2 : 1.5
+            }
+        } else {
+            focusLayer.path = nil
+        }
+        CATransaction.commit()
+    }
+
+    // MARK: Accessibility
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .group }
+    override func accessibilityLabel() -> String? { "Disk map of \(subtitle)" }
+
+    override func accessibilityChildren() -> [Any]? {
+        if let accessibilityElements { return accessibilityElements }
+        guard let chartLayout else { return [] }
+        let g = geometry
+        var elements: [SegmentElement] = []
+        for (i, s) in chartLayout.segments.enumerated() where s.ring == 1 {
+            let path = CGMutablePath()
+            addSegment(to: path, geometry: g, ringPosition: 1, a0: s.startAngle, a1: s.endAngle, gap: gap)
+            let element = SegmentElement()
+            element.setAccessibilityRole(.button)
+            element.setAccessibilityLabel(segmentLabel?(s) ?? "")
+            element.setAccessibilityParent(self)
+            // Parent space is bottom-left based even for a flipped view.
+            var box = path.boundingBoxOfPath
+            box.origin.y = bounds.height - box.maxY
+            element.setAccessibilityFrameInParentSpace(box)
+            element.index = i
+            element.chart = self
+            element.press = { [weak self] in self?.pressSegment(i) ?? false }
+            elements.append(element)
+        }
+        accessibilityElements = elements
+        elementsByIndex = Dictionary(uniqueKeysWithValues: elements.map { ($0.index, $0) })
+        return elements
+    }
+
+    /// VoiceOver's pointer hit-test: the ring-1 segment under `point` (screen
+    /// coordinates), else the chart. AppKit may ask the chart or any child whose
+    /// (rectangular) frame holds the point, so both answer from the real geometry.
+    /// It calls on the main thread, but the SDK declares it nonisolated.
+    override nonisolated func accessibilityHitTest(_ point: NSPoint) -> Any? {
+        accessibilityElement(atScreen: point)
+    }
+
+    nonisolated fileprivate func accessibilityElement(atScreen point: NSPoint) -> Any? {
+        let index: Int? = MainActor.assumeIsolated {
+            guard let window else { return nil }
+            _ = accessibilityChildren()   // builds `elementsByIndex`
+            if case .segment(let i) = hit(at: convert(window.convertPoint(fromScreen: point), from: nil)) { return i }
+            return nil
+        }
+        return index.flatMap { elementsByIndex[$0] } ?? self
+    }
+
+    /// VoiceOver's press on a ring-1 segment: the same as a plain click.
+    private func pressSegment(_ i: Int) -> Bool {
+        guard transition == nil, let chartLayout, i < chartLayout.segments.count else { return false }
+        onClick?(chartLayout.segments[i], [])
+        return true
+    }
+
+    private func invalidateAccessibility() {
+        guard accessibilityElements != nil else { return }
+        accessibilityElements = nil
+        elementsByIndex = [:]
+        NSAccessibility.post(element: self, notification: .layoutChanged)
     }
 
     override func layout() {
@@ -246,7 +388,18 @@ final class SunburstChartView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window == nil {
+        for observer in windowObservers { NotificationCenter.default.removeObserver(observer) }
+        windowObservers = []
+        if let window {
+            // The focus outline shows only in the key window.
+            for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+                windowObservers.append(NotificationCenter.default.addObserver(
+                    forName: name, object: window, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.updateFocusLayer() }
+                })
+            }
+        } else {
             stopLink()
             transition = nil
         }
@@ -266,7 +419,9 @@ final class SunburstChartView: NSView {
         self.subtitle = subtitle
         hoverIndex = nil
         externalIndex = nil
+        selectedIndex = nil
         invalidateCache()
+        invalidateAccessibility()
 
         if animated, let old, window != nil, !bounds.isEmpty {
             startTransition(from: old, to: new, fromTitle: oldTitle, fromSubtitle: oldSubtitle)
@@ -392,6 +547,7 @@ final class SunburstChartView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        if keyboardFocus { keyboardFocus = false; updateFocusLayer() }
         // Control-click is a context-menu click, never a drill.
         if event.modifierFlags.contains(.control) {
             pressedHit = nil
@@ -540,6 +696,7 @@ final class SunburstChartView: NSView {
             }
         }
         CATransaction.commit()
+        updateFocusLayer()
     }
 
     // MARK: Appearance
@@ -559,6 +716,7 @@ final class SunburstChartView: NSView {
         invalidateCache()
         shownHighlight = nil   // geometry changed: rebuild the highlight path
         updateHighlightLayer(animated: false)
+        invalidateAccessibility()
     }
 
     private func invalidateCache() {
@@ -569,7 +727,9 @@ final class SunburstChartView: NSView {
         effectiveAppearance.performAsCurrentDrawingAppearance {
             let dark = appearanceKind == .dark
             highlightLayer.fillColor = CGColor(gray: 1, alpha: dark ? 0.28 : 0.45)
-            highlightLayer.strokeColor = NSColor.labelColor.withAlphaComponent(dark ? 0.5 : 0.35).cgColor
+            highlightLayer.strokeColor = NSColor.labelColor
+                .withAlphaComponent(highContrast ? 0.85 : dark ? 0.5 : 0.35).cgColor
+            highlightLayer.lineWidth = highContrast ? 1.5 : 1
             centreLayer.fillColor = NSColor.labelColor.withAlphaComponent(0.05).cgColor
         }
     }
@@ -804,7 +964,9 @@ final class SunburstChartView: NSView {
         paragraph.lineBreakMode = .byTruncatingMiddle
         let subAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 13),
-            .foregroundColor: NSColor.secondaryLabelColor.withAlphaComponent(alpha),
+            // Increase Contrast: full-contrast text.
+            .foregroundColor: (highContrast ? NSColor.labelColor : NSColor.secondaryLabelColor)
+                .withAlphaComponent(alpha),
             .paragraphStyle: paragraph,
         ]
         let titleHeight = (titleAttrs[.font] as? NSFont).map { $0.ascender - $0.descender + $0.leading } ?? 24
@@ -815,5 +977,20 @@ final class SunburstChartView: NSView {
                                                  width: width, height: subHeight),
                                     options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
                                     attributes: subAttrs)
+    }
+}
+
+/// A ring-1 segment as an accessibility element; VoiceOver's press opens it.
+private final class SegmentElement: NSAccessibilityElement {
+    var index = 0
+    var press: (() -> Bool)?
+    nonisolated(unsafe) weak var chart: SunburstChartView?
+
+    override func accessibilityPerformPress() -> Bool { press?() ?? false }
+
+    /// A segment's frame is its bounding box, which overlaps its neighbours';
+    /// the chart resolves the point against the real ring geometry.
+    override nonisolated func accessibilityHitTest(_ point: NSPoint) -> Any? {
+        chart?.accessibilityElement(atScreen: point) ?? self
     }
 }

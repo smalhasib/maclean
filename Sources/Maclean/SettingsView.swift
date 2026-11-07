@@ -20,7 +20,7 @@ private struct GeneralSettings: View {
             Toggle("Open each scan in its own window", isOn: $ownWindow)
             Text("Applies to the next window opened. Off: the start screen and a result share one window.")
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .fixedSize(horizontal: false, vertical: true)
         }
         .formStyle(.grouped)

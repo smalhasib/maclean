@@ -9,7 +9,7 @@ struct CollectorBar: View {
                 .foregroundStyle(.tertiary)
                 .frame(width: 26, height: 26)
             Text("Drag files here to collect them")
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .lineLimit(1)
             Spacer(minLength: 0)
         }

@@ -267,6 +267,20 @@ import Observation
         return .folder
     }
 
+    /// Spoken kind of an item: "folder", "file" or "package".
+    static func kindWord(_ kind: SegmentKind) -> String {
+        switch kind {
+        case .file: return "file"
+        case .package: return "package"
+        case .folder, .restricted, .mountPoint, .smallerObjects: return "folder"
+        }
+    }
+
+    /// VoiceOver label of a list row or chart segment: "Users, folder, 307.6 gigabytes".
+    func accessibilityLabel(of node: NodeID) -> String {
+        "\(name(of: node)), \(Self.kindWord(kind(of: node))), \(SizeText.spoken(tree.size(of: node)))"
+    }
+
     /// Whether clicking drills in (plain folders only; packages open via Show Package Contents).
     func isDrillable(_ node: NodeID) -> Bool { kind(of: node) == .folder }
 
