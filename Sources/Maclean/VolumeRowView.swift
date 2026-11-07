@@ -6,18 +6,26 @@ import SwiftUI
 /// thin usage bar, Scan/View button and a ▾ menu. While scanning, the bar
 /// becomes a progress bar and Cancel replaces Scan.
 struct VolumeRowView: View {
+    enum Detail {
+        /// Sizes ("494 GB · 77 GB free"): never truncated.
+        case size(String)
+        /// A display path, truncated in the middle with the full path as tooltip.
+        case path(String, full: String)
+    }
+
     let icon: NSImage
     let title: String
-    let detail: String?
+    let detail: Detail?
     /// Used fraction of the volume (0…1), nil for folders.
     let usage: Double?
+    /// Canonical path the row scans (the registry key).
     let path: String
     /// Bytes progress is measured against; nil shows indeterminate progress.
     let expected: Int64?
     let registry: SessionRegistry
 
     var body: some View {
-        let session = registry.session(for: path)
+        let session = registry.session(canonical: path)
         HStack(spacing: 12) {
             Image(nsImage: icon)
                 .resizable()
@@ -29,11 +37,7 @@ struct VolumeRowView: View {
                         .truncationMode(.middle)
                         .help(title)
                     if let detail, !(session?.isScanning ?? false) {
-                        Text(detail)
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                        detailText(detail)
                     }
                 }
                 status(session)
@@ -44,6 +48,24 @@ struct VolumeRowView: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
         .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private func detailText(_ detail: Detail) -> some View {
+        switch detail {
+        case .size(let text):
+            Text(text)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .fixedSize()
+                .layoutPriority(1)
+        case .path(let text, let full):
+            Text(text)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(full)
+        }
     }
 
     @ViewBuilder
@@ -59,6 +81,7 @@ struct VolumeRowView: View {
                 Text(session?.isStopping == true ? "Stopping…" : "Scanning… \(SizeText.string(bytes))")
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
+                    .fixedSize()
             }
             .progressViewStyle(.linear)
             .controlSize(.small)
@@ -70,6 +93,7 @@ struct VolumeRowView: View {
             Text("Scanned: \(SizeText.string(tree.size(of: tree.root)))")
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
+                .fixedSize()
         case .cancelled, nil:
             usageBar
         }
@@ -104,11 +128,15 @@ struct VolumeRowView: View {
             }
             Menu {
                 Button("Rescan") {
-                    if let session { session.rescan() } else { registry.startScan(path: path, expected: expected) }
+                    if session != nil {
+                        registry.rescan(canonical: path)
+                    } else {
+                        registry.startScan(path: path, expected: expected)
+                    }
                 }
                 .disabled(session?.isScanning ?? false)
                 Button("Forget Scan Result") { registry.forget(path: path) }
-                    .disabled(session?.tree == nil)
+                    .disabled(session.map(\.isScanning) ?? true)
             } label: {
                 Image(systemName: "chevron.down")
             }
@@ -116,6 +144,7 @@ struct VolumeRowView: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .help("More")
+            .accessibilityLabel("More")
         }
         .frame(minWidth: 120, alignment: .trailing)
     }

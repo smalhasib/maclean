@@ -6,9 +6,11 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// The start screen's data: listed volumes (refreshed on mount/unmount) and
-/// starred folders.
+/// starred folders. File-system work (capacities, volume names, bookmark
+/// resolution) runs off the main actor; rows carry canonical paths so views
+/// never call `realpath`.
 @MainActor @Observable final class StartModel {
-    struct Volume: Identifiable {
+    struct Volume: Identifiable, Sendable {
         let entry: VolumeEntry
         let capacity: Capacity?
         var id: String { entry.id }
@@ -17,13 +19,31 @@ import UniformTypeIdentifiers
         var usedBytes: Int64? { capacity.map { max(0, $0.total - $0.freeIncludingPurgeable) } }
     }
 
+    /// A folder row (starred or scanned): canonical path plus display text.
+    struct Folder: Identifiable {
+        let path: String
+        let name: String
+        let detail: String
+        var id: String { path }
+
+        init(path: String) {
+            self.path = path
+            let name = (path as NSString).lastPathComponent
+            self.name = name.isEmpty ? path : name
+            detail = (path as NSString).abbreviatingWithTildeInPath
+        }
+    }
+
     private(set) var volumes: [Volume] = []
-    private(set) var starred: [String] = []
+    private(set) var starred: [Folder] = []
     @ObservationIgnored private let store: StarredFolders
     @ObservationIgnored private var observers: [any NSObjectProtocol] = []
+    @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var icons: [String: NSImage] = [:]
 
     init(defaults: UserDefaults = .standard) {
         store = StarredFolders(defaults: defaults)
+        starred = store.paths.map(Folder.init)
         refresh()
         let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
@@ -33,23 +53,46 @@ import UniformTypeIdentifiers
         }
     }
 
+    /// Re-reads volumes and re-resolves starred folders in the background,
+    /// publishing results on the main actor (stale refreshes are dropped).
     func refresh() {
-        let entries = VolumeList.entries(from: ScanBoundary.mounts(), volumeName: Self.volumeName)
-        volumes = entries.map { Volume(entry: $0, capacity: VolumeCapacity.of(path: $0.scanPath)) }
-        starred = store.resolve()
+        generation += 1
+        let current = generation
+        icons.removeAll()
+        Task {
+            let volumes = await Task.detached(priority: .userInitiated) { Self.readVolumes() }.value
+            guard current == generation else { return }
+            self.volumes = volumes
+            let paths = await store.resolveInBackground()
+            guard current == generation else { return }
+            starred = paths.map(Folder.init)
+        }
     }
 
     func star(_ url: URL) {
         store.star(url)
-        starred = store.paths
+        starred = store.paths.map(Folder.init)
     }
 
     func unstar(_ path: String) {
         store.unstar(path)
-        starred = store.paths
+        starred = store.paths.map(Folder.init)
     }
 
-    private static func volumeName(_ path: String) -> String {
+    /// Finder icon for `path`, looked up once per refresh.
+    func icon(for path: String) -> NSImage {
+        if let icon = icons[path] { return icon }
+        let icon = NSWorkspace.shared.icon(forFile: path)
+        icons[path] = icon
+        return icon
+    }
+
+    private nonisolated static func readVolumes() -> [Volume] {
+        VolumeList.entries(from: ScanBoundary.mounts(), volumeName: volumeName)
+            .map { Volume(entry: $0, capacity: VolumeCapacity.of(path: $0.scanPath)) }
+    }
+
+    private nonisolated static func volumeName(_ path: String) -> String {
         let url = URL(fileURLWithPath: path)
         if let name = try? url.resourceValues(forKeys: [.volumeLocalizedNameKey]).volumeLocalizedName {
             return name
@@ -88,6 +131,7 @@ struct StartView: View {
     let registry: SessionRegistry
     // `State` used as a type: the `@State` macro's plugin ships only with Xcode.
     private let starTargeted = State(initialValue: false)
+    private static let folderIcon = NSWorkspace.shared.icon(for: .folder)
 
     var body: some View {
         ScrollView {
@@ -95,10 +139,10 @@ struct StartView: View {
                 SectionHeader(title: "Disks")
                 ForEach(model.volumes) { volume in
                     VolumeRowView(
-                        icon: NSWorkspace.shared.icon(forFile: volume.entry.scanPath),
+                        icon: model.icon(for: volume.entry.scanPath),
                         title: volume.entry.name,
                         detail: volume.capacity.map {
-                            "\(SizeText.string($0.total)) · \(SizeText.string($0.freeIncludingPurgeable)) free"
+                            .size("\(SizeText.string($0.total)) · \(SizeText.string($0.freeIncludingPurgeable)) free")
                         },
                         usage: volume.capacity.flatMap { cap in
                             cap.total > 0 ? Double(volume.usedBytes ?? 0) / Double(cap.total) : nil
@@ -107,6 +151,16 @@ struct StartView: View {
                         expected: volume.usedBytes,
                         registry: registry)
                     Divider().padding(.leading, 64)
+                }
+
+                let folders = scannedFolders
+                if !folders.isEmpty {
+                    SectionHeader(title: "Scanned Folders")
+                        .padding(.top, 12)
+                    ForEach(folders) { folder in
+                        folderRow(folder, icon: Self.folderIcon)
+                        Divider().padding(.leading, 64)
+                    }
                 }
 
                 starredSection
@@ -126,6 +180,18 @@ struct StartView: View {
         .font(.body)
     }
 
+    /// This session's scans that aren't a listed disk or a starred folder.
+    private var scannedFolders: [StartModel.Folder] {
+        var listed = Set(model.volumes.map(\.entry.scanPath))
+        listed.formUnion(model.starred.map(\.path))
+        return registry.all.map(\.rootPath).filter { !listed.contains($0) }.map(StartModel.Folder.init)
+    }
+
+    private func folderRow(_ folder: StartModel.Folder, icon: NSImage) -> VolumeRowView {
+        VolumeRowView(icon: icon, title: folder.name, detail: .path(folder.detail, full: folder.path),
+                      usage: nil, path: folder.path, expected: nil, registry: registry)
+    }
+
     private var starredSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             SectionHeader(title: "Starred")
@@ -135,18 +201,11 @@ struct StartView: View {
                     .padding(.horizontal, 20)
                     .padding(.vertical, 10)
             }
-            ForEach(model.starred, id: \.self) { path in
-                VolumeRowView(
-                    icon: NSWorkspace.shared.icon(forFile: path),
-                    title: FileManager.default.displayName(atPath: path),
-                    detail: (path as NSString).abbreviatingWithTildeInPath,
-                    usage: nil,
-                    path: path,
-                    expected: nil,
-                    registry: registry)
-                .contextMenu {
-                    Button("Unstar") { model.unstar(path) }
-                }
+            ForEach(model.starred) { folder in
+                folderRow(folder, icon: model.icon(for: folder.path))
+                    .contextMenu {
+                        Button("Unstar") { model.unstar(folder.path) }
+                    }
                 Divider().padding(.leading, 64)
             }
         }

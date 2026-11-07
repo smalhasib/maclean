@@ -54,6 +54,18 @@ import Testing
         #expect(f.make().paths == [b.path])
     }
 
+    @Test func backgroundResolveFollowsMovesAndDropsDeleted() async throws {
+        let f = try Fixture()
+        let a = try f.mkdir("a"), b = f.dir.appendingPathComponent("b"), c = try f.mkdir("c")
+        let s = f.make()
+        s.star(a)
+        s.star(c)
+        try FileManager.default.moveItem(at: a, to: b)
+        try FileManager.default.removeItem(at: c)
+        #expect(await s.resolveInBackground() == [b.path])
+        #expect(f.make().paths == [b.path])
+    }
+
     @Test func deletedStarredFolderDropped() throws {
         let f = try Fixture()
         let a = try f.mkdir("a")
