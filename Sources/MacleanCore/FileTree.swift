@@ -87,6 +87,8 @@ public final class FileTree: Sendable {
         return base + "/" + components.reversed().joined(separator: "/")
     }
 
+    /// Allocated bytes of the node. Invariant: a directory's size equals the sum
+    /// of its children's sizes (`SunburstLayout`'s tail math relies on it).
     public func size(of id: NodeID) -> Int64 { sizes[Int(id.index)] }
     public func flags(of id: NodeID) -> NodeFlags { NodeFlags(rawValue: flagBits[Int(id.index)]) }
     public func inode(of id: NodeID) -> UInt64 { inodes[Int(id.index)] }
@@ -108,6 +110,20 @@ public final class FileTree: Sendable {
             if childCount[i] > 0 { stack.append(contentsOf: first ..< first + childCount[i]) }
         }
         return files
+    }
+
+    /// The node at the absolute `path`, walking down from the root by name;
+    /// nil when it is outside the tree or no longer there.
+    public func node(atPath path: String) -> NodeID? {
+        if path == rootPath { return root }
+        guard PathUtil.isInside(path, orEqualTo: rootPath) else { return nil }
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        var node = root
+        for component in path.dropFirst(prefix.count).split(separator: "/") {
+            guard let next = children(of: node).first(where: { name(of: $0) == component }) else { return nil }
+            node = next
+        }
+        return node
     }
 
     public func parent(of id: NodeID) -> NodeID? {

@@ -100,14 +100,14 @@ import Observation
 
         var history = start ?? session.history
         if let startPath { history.visit(startPath) }
-        let node = Self.resolve(history.current, in: tree)
+        let node = tree.node(atPath: history.current)
         if node == nil { history = NavigationHistory(rootPath: tree.rootPath) }
         self.history = history
         currentNode = node ?? tree.root
         currentPath = history.current
         layout = Self.computeLayout(tree: tree, root: node ?? tree.root)
         rebuildSegmentIndex()
-        if let selectedPath, let node = Self.resolve(selectedPath, in: tree), node != currentNode {
+        if let selectedPath, let node = tree.node(atPath: selectedPath), node != currentNode {
             selected = node
         }
         loadVolumeSpace()
@@ -118,7 +118,7 @@ import Observation
     /// paths fall back to their nearest surviving ancestor.
     convenience init(remapping old: ResultViewModel, to tree: FileTree, ownsSessionHistory: Bool) {
         var history = old.history
-        history.remap { Self.resolve($0, in: tree) != nil }
+        history.remap { tree.node(atPath: $0) != nil }
         self.init(session: old.session, history: history, selectedPath: old.selected.map { old.tree.path(of: $0) },
                   ownsSessionHistory: ownsSessionHistory, defaults: old.defaults)
     }
@@ -318,12 +318,7 @@ import Observation
     }
 
     func kind(of node: NodeID) -> SegmentKind {
-        let flags = tree.flags(of: node)
-        guard flags.contains(.directory) else { return .file }
-        if flags.contains(.package) { return .package }
-        if flags.contains(.restricted) { return .restricted }
-        if flags.contains(.mountPoint) { return .mountPoint }
-        return .folder
+        SegmentKind(flags: tree.flags(of: node))
     }
 
     /// Spoken kind of an item: "folder", "file" or "package".
@@ -393,15 +388,22 @@ import Observation
     // MARK: Private
 
     private func syncToHistory() {
-        let path = history.current
-        guard path != currentPath else { return }
-        let node = pendingNode ?? Self.resolve(path, in: tree)
-        pendingNode = nil
-        guard let node else {
-            // Shouldn't happen (history is remapped on rescan); stay at the root.
-            history = NavigationHistory(rootPath: tree.rootPath)
-            return
+        var path = history.current
+        let node: NodeID
+        if let pending = pendingNode {
+            node = pending
+        } else if let found = tree.node(atPath: path) {
+            node = found
+        } else {
+            // The folder vanished: fall back to its nearest surviving ancestor
+            // (assigning inside didSet doesn't re-enter it).
+            path = nearestSurvivingAncestor(of: path)
+            history.replaceCurrent(path)
+            if ownsSessionHistory { session.history = history }
+            node = tree.node(atPath: path) ?? tree.root
         }
+        pendingNode = nil
+        guard path != currentPath else { return }
         currentPath = path
         previousFolder = currentNode
         currentNode = node
@@ -412,6 +414,15 @@ import Observation
         layout = Self.computeLayout(tree: tree, root: node)
         layoutGeneration += 1
         rebuildSegmentIndex()
+    }
+
+    private func nearestSurvivingAncestor(of path: String) -> String {
+        var path = path
+        while path != tree.rootPath, tree.node(atPath: path) == nil {
+            let parent = (path as NSString).deletingLastPathComponent
+            path = PathUtil.isInside(parent, orEqualTo: tree.rootPath) ? parent : tree.rootPath
+        }
+        return path
     }
 
     private func rebuildSegmentIndex() {
@@ -430,22 +441,6 @@ import Observation
         let layout = SunburstLayout(tree: tree, root: root)
         Timings.mark("layout", (Timings.now - t0) * 1000)
         return layout
-    }
-
-    /// The node at `path`, walking down from the root by name.
-    static func resolve(_ path: String, in tree: FileTree) -> NodeID? {
-        let root = tree.rootPath
-        if path == root { return tree.root }
-        let prefix = root.hasSuffix("/") ? root : root + "/"
-        guard path.hasPrefix(prefix) else { return nil }
-        var node = tree.root
-        for component in path.dropFirst(prefix.count).split(separator: "/") {
-            guard let next = tree.children(of: node).first(where: { tree.name(of: $0) == component }) else {
-                return nil
-            }
-            node = next
-        }
-        return node
     }
 
     /// Reads free space off the main actor when the scan root is a volume root.

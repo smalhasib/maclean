@@ -1,4 +1,5 @@
 import Foundation
+import MacleanCore
 
 /// Back/forward stack of absolute paths (paths, not node ids, so a rescan can remap it).
 public struct NavigationHistory: Sendable, Equatable {
@@ -20,6 +21,10 @@ public struct NavigationHistory: Sendable, Equatable {
         forwardStack.removeAll()
     }
 
+    /// Replaces the current entry's path in place (stacks untouched), e.g. with
+    /// its nearest surviving ancestor when the folder has vanished.
+    public mutating func replaceCurrent(_ path: String) { current = path }
+
     public mutating func back() {
         guard let prev = backStack.popLast() else { return }
         forwardStack.append(current)
@@ -34,9 +39,9 @@ public struct NavigationHistory: Sendable, Equatable {
 
     /// The parent directory of `current`, or nil when `current` is the tree root.
     public func enclosing(rootPath: String) -> String? {
-        guard current != rootPath, Self.isInside(current, rootPath) else { return nil }
+        guard current != rootPath, PathUtil.isInside(current, orEqualTo: rootPath) else { return nil }
         let parent = Self.parent(of: current)
-        return Self.isInside(parent, rootPath) ? parent : nil
+        return PathUtil.isInside(parent, orEqualTo: rootPath) ? parent : nil
     }
 
     /// After a rescan: `current` becomes its nearest existing ancestor, never
@@ -46,7 +51,7 @@ public struct NavigationHistory: Sendable, Equatable {
         var path = current
         while path != rootPath, !exists(path) {
             let parent = Self.parent(of: path)
-            path = Self.isInside(parent, rootPath) ? parent : rootPath
+            path = PathUtil.isInside(parent, orEqualTo: rootPath) ? parent : rootPath
         }
         current = path
         func clean(_ stack: [String]) -> [String] {
@@ -60,10 +65,6 @@ public struct NavigationHistory: Sendable, Equatable {
         // Back stack: nearest entry is last, so walk from the end towards the start.
         backStack = clean(backStack)
         forwardStack = clean(forwardStack)
-    }
-
-    private static func isInside(_ path: String, _ root: String) -> Bool {
-        path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
     }
 
     private static func parent(of path: String) -> String {

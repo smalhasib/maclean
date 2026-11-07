@@ -94,7 +94,7 @@ import Observation
         switch result {
         case .success(let tree):
             previousTree = nil
-            history.remap { Self.exists($0, in: tree) }
+            history.remap { tree.node(atPath: $0) != nil }
             state = .finished(tree)
             onFinish?(self)
         case .failure(let error):
@@ -117,22 +117,5 @@ import Observation
         case .notDirectory: "This isn't a folder"
         default: "Couldn't read this folder"
         }
-    }
-
-    /// Whether `path` names a node of `tree`, walking down from the root by
-    /// path components.
-    private static func exists(_ path: String, in tree: FileTree) -> Bool {
-        let root = tree.rootPath
-        if path == root { return true }
-        let prefix = root == "/" ? "/" : root + "/"
-        guard path.hasPrefix(prefix) else { return false }
-        var node = tree.root
-        for component in path.dropFirst(prefix.count).split(separator: "/") {
-            guard let next = tree.children(of: node).first(where: { tree.name(of: $0) == component }) else {
-                return false
-            }
-            node = next
-        }
-        return true
     }
 }

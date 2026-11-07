@@ -195,3 +195,35 @@ import Testing
     #expect(counts.count == t.count)
     for i in 0..<t.count { #expect(counts[i] == t.fileCount(of: NodeID(index: Int32(i)))) }
 }
+
+@Test func nodeAtPathFindsNestedAndRoot() async throws {
+    let t = TempDir()
+    defer { withExtendedLifetime(t) {} }
+    t.file("a/b/c.txt", bytes: 5)
+    let tree = try await Scanner.scan(path: t.path)
+    let root = tree.rootPath
+    let id = try #require(tree.node(atPath: root + "/a/b/c.txt"))
+    #expect(tree.name(of: id) == "c.txt")
+    #expect(tree.node(atPath: root) == tree.root)
+    #expect(tree.node(atPath: "/elsewhere") == nil)
+    #expect(tree.node(atPath: root + "/a/zz") == nil)
+}
+
+@Test func directorySizeIsSumOfChildren() async throws {
+    let t = TempDir()
+    defer { withExtendedLifetime(t) {} }
+    t.file("a/b/one.bin", bytes: 4096)
+    t.file("a/b/two.bin", bytes: 100)
+    t.file("a/three.bin", bytes: 9000)
+    t.dir("empty/deeper")
+    t.file("top.bin", bytes: 1)
+    let tree = try await Scanner.scan(path: t.path)
+    var dirs = 0
+    for i in 0 ..< tree.count {
+        let d = NodeID(index: Int32(i))
+        guard tree.flags(of: d).contains(.directory) else { continue }
+        dirs += 1
+        #expect(tree.size(of: d) == tree.children(of: d).map { tree.size(of: $0) }.reduce(0, +))
+    }
+    #expect(dirs >= 5)
+}

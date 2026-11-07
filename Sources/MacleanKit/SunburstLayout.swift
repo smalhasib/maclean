@@ -3,6 +3,17 @@ import MacleanCore
 
 public enum SegmentKind: Sendable, Equatable { case folder, file, package, restricted, mountPoint, smallerObjects }
 
+extension SegmentKind {
+    /// The kind a node with `flags` is drawn as.
+    public init(flags: NodeFlags) {
+        guard flags.contains(.directory) else { self = .file; return }
+        if flags.contains(.package) { self = .package }
+        else if flags.contains(.restricted) { self = .restricted }
+        else if flags.contains(.mountPoint) { self = .mountPoint }
+        else { self = .folder }
+    }
+}
+
 public struct Segment: Sendable, Equatable {
     /// nil for a merged `smallerObjects` segment.
     public let node: NodeID?
@@ -71,16 +82,7 @@ public struct SunburstLayout: Sendable {
                     let a0 = open.start + Double(cumulative) * scale
                     cumulative += size
                     let a1 = open.start + Double(cumulative) * scale
-                    let flags = tree.flags(of: id)
-                    let kind: SegmentKind
-                    if flags.contains(.directory) {
-                        if flags.contains(.package) { kind = .package }
-                        else if flags.contains(.restricted) { kind = .restricted }
-                        else if flags.contains(.mountPoint) { kind = .mountPoint }
-                        else { kind = .folder }
-                    } else {
-                        kind = .file
-                    }
+                    let kind = SegmentKind(flags: tree.flags(of: id))
                     let top = ring == 1 ? i : open.top
                     out.append(Segment(node: id, parent: open.node, ring: ring, startAngle: a0,
                                        endAngle: a1, topLevelIndex: top, kind: kind, mergedSize: size))

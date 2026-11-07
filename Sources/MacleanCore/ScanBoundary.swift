@@ -60,7 +60,7 @@ public struct ScanBoundary: Sendable {
         if rootsContainingDataVolume.contains(root) {
             boundary.skippedPaths.insert(dataVolume)
         }
-        if let own = mounts.filter({ isInside($0.path, orEqualTo: root) })
+        if let own = mounts.filter({ PathUtil.isInside(root, orEqualTo: $0.path) })
                 .max(by: { $0.path.count < $1.path.count }),
            own.fsType == "apfs", let container = apfsContainer(ofSource: own.source) {
             // Snapshot mounts (e.g. a staged update's, under Update) show
@@ -68,21 +68,16 @@ public struct ScanBoundary: Sendable {
             // snapshot (`/`), so only candidates are filtered.
             for m in mounts where m.fsType == "apfs" && m.path != root && m.path != dataVolume
                 && !isAPFSSnapshot(source: m.source)
-                && isInside(root, orEqualTo: m.path)
+                && PathUtil.isInside(m.path, orEqualTo: root)
                 && apfsContainer(ofSource: m.source) == container {
                 boundary.descendableMounts.insert(m.path)
                 boundary.allowedDevices.insert(m.device)
             }
         }
-        if root != prebootCryptexes && isInside(root, orEqualTo: prebootCryptexes) {
+        if root != prebootCryptexes && PathUtil.isInside(prebootCryptexes, orEqualTo: root) {
             boundary.skippedPaths.insert(prebootCryptexes)
         }
         return boundary
-    }
-
-    /// Whether `path` is `ancestor` or lies below it (component-wise).
-    private static func isInside(_ ancestor: String, orEqualTo path: String) -> Bool {
-        path == ancestor || path.hasPrefix(ancestor == "/" ? "/" : ancestor + "/")
     }
 
     /// Absolute path with symlinks, `.`, `..` and duplicate slashes resolved

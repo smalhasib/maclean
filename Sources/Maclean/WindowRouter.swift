@@ -200,7 +200,7 @@ import SwiftUI
     func rescanDisk(_ model: ResultViewModel) {
         let root = model.tree.rootPath
         let volume = startModel.volumes
-            .filter { Self.isInside(root, $0.entry.scanPath) }
+            .filter { PathUtil.isInside(root, orEqualTo: $0.entry.scanPath) }
             .max { $0.entry.scanPath.count < $1.entry.scanPath.count }
         let path = volume?.entry.scanPath ?? Self.volumePath(of: root) ?? root
         if let session = registry.session(for: path), session.tree != nil {
@@ -301,10 +301,6 @@ import SwiftUI
     static func title(for path: String) -> String {
         let name = FileManager.default.displayName(atPath: path)
         return name.isEmpty ? path : name
-    }
-
-    private static func isInside(_ path: String, _ root: String) -> Bool {
-        path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
     }
 
     private static func volumePath(of path: String) -> String? {
