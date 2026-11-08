@@ -289,7 +289,8 @@ public enum AdminInstall {
               posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0) == 0,
               posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT)) == 0 else { return false }
         let tool = "/usr/bin/ditto"
-        let argv: [UnsafeMutablePointer<CChar>?] = [tool, "-x", "-k", zip, outDir].map { strdup($0) } + [nil]
+        let arguments: [String] = [tool, "-x", "-k", zip, outDir]   // typed first: older Swift can't infer it through `map`
+        let argv: [UnsafeMutablePointer<CChar>?] = arguments.map { strdup($0) } + [nil]
         let envp: [UnsafeMutablePointer<CChar>?] = [strdup("PATH=/usr/bin:/bin:/usr/sbin:/sbin"), nil]
         defer { (argv + envp).forEach { free($0) } }
         var pid: pid_t = 0
