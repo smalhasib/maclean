@@ -1,0 +1,145 @@
+name: Release
+
+# A push to main releases a minor (feat) or patch (fix, perf) version on its own.
+# A breaking change stops here: start this workflow by hand with level "major".
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      level:
+        description: Version bump (major releases are only started by hand)
+        type: choice
+        options: [major, minor, patch]
+        default: major
+
+permissions:
+  contents: write   # tag, release, and the changelog commit
+
+# One release at a time; a later push waits instead of racing the tag.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # The release commit this workflow pushes must not release again.
+    if: github.repository == 'smalhasib/maclean' && !startsWith(github.event.head_commit.message, 'chore(release):')
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Install git-cliff
+        run: brew install git-cliff
+
+      - name: Test
+        run: |
+          swift build
+          swift test
+          sh scripts/test-next-release.sh
+
+      - name: Decide the version
+        id: next
+        env:
+          LEVEL: ${{ inputs.level }}
+        run: |
+          next="$(sh scripts/next-release.sh $LEVEL 2>/dev/null)"
+          case "$next" in
+            none)     echo "Nothing to release." >> "$GITHUB_STEP_SUMMARY" ;;
+            breaking) echo "::warning::Breaking change found. Run the Release workflow by hand with level major."
+                      echo "Breaking change: needs a manual major release." >> "$GITHUB_STEP_SUMMARY" ;;
+            *)        echo "version=$next" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Set the version and write the notes
+        if: steps.next.outputs.version
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+        run: |
+          plist=Resources/Info.plist
+          build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' $plist)"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" $plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $((build + 1))" $plist
+          # Notes first: once the tag exists, these commits are no longer "unreleased".
+          git cliff --config cliff.toml --unreleased --tag "v$VERSION" --strip header -o "$RUNNER_TEMP/notes.md"
+          git cliff --config cliff.toml --tag "v$VERSION" -o CHANGELOG.md
+
+      - name: Import the signing certificate and update key
+        if: steps.next.outputs.version
+        env:
+          P12: ${{ secrets.SIGNING_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.SIGNING_P12_PASSWORD }}
+          UPDATE_KEY: ${{ secrets.UPDATE_KEY }}
+        run: |
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          password="$(uuidgen)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          rm "$RUNNER_TEMP/cert.p12"
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          # By hash: the certificate is self-signed, so only the hash is unambiguous.
+          hash="$(security find-identity -p codesigning "$keychain" | awk '/"Maclean Release"/ { print $2; exit }')"
+          [ -n "$hash" ] || { echo "No \"Maclean Release\" identity in the imported certificate." >&2; exit 1; }
+          echo "MACLEAN_SIGN_IDENTITY=$hash" >> "$GITHUB_ENV"
+          umask 077
+          printf '%s\n' "$UPDATE_KEY" > "$RUNNER_TEMP/update-key"
+          echo "MACLEAN_UPDATE_KEY=$RUNNER_TEMP/update-key" >> "$GITHUB_ENV"
+
+      - name: Build, sign and package
+        if: steps.next.outputs.version
+        id: package
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+        run: |
+          sh scripts/package-release.sh
+          echo "sha256=$(shasum -a 256 ".build/Maclean-$VERSION.zip" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      # Nothing is published before this point. A push that loses a race with
+      # another commit fails here, and the next push to main releases again.
+      - name: Commit, tag and push
+        if: steps.next.outputs.version
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Resources/Info.plist CHANGELOG.md
+          git commit -m "chore(release): v$VERSION"
+          git tag "v$VERSION"
+          git push --atomic origin HEAD:main "v$VERSION"
+
+      - name: Create the GitHub release
+        if: steps.next.outputs.version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.next.outputs.version }}
+        run: |
+          gh release create "v$VERSION" ".build/Maclean-$VERSION.zip" ".build/Maclean-$VERSION.zip.sig" \
+            --title "Maclean $VERSION" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
+
+      - name: Check out the Homebrew tap
+        if: steps.next.outputs.version
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: smalhasib/homebrew-maclean
+          ssh-key: ${{ secrets.TAP_DEPLOY_KEY }}
+          path: tap
+
+      - name: Bump the cask
+        if: steps.next.outputs.version
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+          SHA256: ${{ steps.package.outputs.sha256 }}
+        run: |
+          cd tap
+          sed -i '' -E "s/^  version \".*\"/  version \"$VERSION\"/; s/^  sha256 \".*\"/  sha256 \"$SHA256\"/" Casks/maclean.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore: maclean $VERSION"
+          git push

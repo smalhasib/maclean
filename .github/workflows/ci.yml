@@ -1,0 +1,35 @@
+name: CI
+
+# Pull requests only build, test and preview the release. No secrets are used,
+# so a pull request from a fork can run this safely.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0   # tags and history, for the release preview
+      - name: Install git-cliff
+        run: brew install git-cliff
+      - name: Build and test
+        run: |
+          swift build
+          swift test
+          sh scripts/test-next-release.sh
+      - name: Release preview
+        run: |
+          next="$(sh scripts/next-release.sh 2>/dev/null)"
+          {
+            echo "## Release preview"
+            case "$next" in
+              none)     echo "Merging this releases nothing (no \`feat:\`, \`fix:\` or \`perf:\` commits)." ;;
+              breaking) echo "This has a breaking change. It will **not** release on its own; run the Release workflow with level \`major\`." ;;
+              *)        echo "Merging this releases **v$next**."; echo; git cliff --config cliff.toml --unreleased --tag "v$next" --strip header 2>/dev/null ;;
+            esac
+          } >> "$GITHUB_STEP_SUMMARY"
