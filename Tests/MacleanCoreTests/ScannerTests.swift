@@ -313,7 +313,8 @@ private func node(_ tree: FileTree, _ relative: String) -> NodeID? {
         #expect(!tree.children(of: tree.root).isEmpty)
     }
 
-    @Test(.enabled(if: FileManager.default.fileExists(atPath: "/System/Volumes/VM")))
+    // Skipped where the VM volume is missing or empty (CI runners): an empty one can't show it was read.
+    @Test(.enabled(if: !((try? FileManager.default.contentsOfDirectory(atPath: "/System/Volumes/VM")) ?? []).isEmpty))
     func descendableMountIsOpenedAndKeepsFlag() async throws {
         // Allow only VM's device and mark it descendable: VM is read (it holds
         // at least its own listing) yet keeps .mountPoint; Preboot, also a
@@ -327,8 +328,6 @@ private func node(_ tree: FileTree, _ relative: String) -> NodeID? {
         #expect(tree.device(of: vm) == vmDevice)
         #expect(!tree.flags(of: vm).contains(.restricted))
         // A closed mount-point node has no children, so this proves VM was read.
-        let listing = (try? FileManager.default.contentsOfDirectory(atPath: "/System/Volumes/VM")) ?? []
-        try #require(!listing.isEmpty, "VM volume is empty: cannot tell whether it was read")
         #expect(!tree.children(of: vm).isEmpty)
         if let preboot = node(tree, "Preboot") {
             #expect(tree.flags(of: preboot).contains(.mountPoint))

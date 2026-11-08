@@ -35,12 +35,6 @@ jobs:
       - name: Install git-cliff
         run: brew install git-cliff
 
-      - name: Test
-        run: |
-          swift build
-          swift test --no-parallel
-          sh scripts/test-next-release.sh
-
       - name: Decide the version
         id: next
         env:

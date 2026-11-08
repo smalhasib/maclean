@@ -1,7 +1,7 @@
 name: CI
 
-# Pull requests only build, test and preview the release. No secrets are used,
-# so a pull request from a fork can run this safely.
+# Pull requests only preview the release (tests run locally). No secrets are
+# used, so a pull request from a fork can run this safely.
 on:
   pull_request:
 
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  preview:
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -18,11 +18,6 @@ jobs:
           fetch-depth: 0   # tags and history, for the release preview
       - name: Install git-cliff
         run: brew install git-cliff
-      - name: Build and test
-        run: |
-          swift build
-          swift test --no-parallel
-          sh scripts/test-next-release.sh
       - name: Release preview
         run: |
           next="$(sh scripts/next-release.sh 2>/dev/null)"

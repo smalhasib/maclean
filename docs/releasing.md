@@ -9,13 +9,13 @@ Releases are automatic. Commits follow [Conventional Commits](https://www.conven
 | only `docs:`, `chore:`, `test:`, `ci:` … | nothing |
 | a breaking change (`feat!:` or a `BREAKING CHANGE:` footer) | nothing automatic: start a **major** release by hand |
 
-A pull request builds, tests and shows the release it would cause in the run summary. It never publishes, and it uses no secrets. With squash merges, the pull request title is the commit message, so make it a Conventional Commit.
+A pull request shows the release it would cause in the run summary. It never publishes, and it uses no secrets. Tests are not run in Actions: run `swift test` locally before pushing (and `sh scripts/test-next-release.sh` after touching the release rules). With squash merges, the pull request title is the commit message, so make it a Conventional Commit.
 
 ## What a release does
 
 `.github/workflows/release.yml`, on a macOS runner:
 
-1. Tests, then asks `scripts/next-release.sh` for the version (git-cliff computes it; `cliff.toml` holds the rules).
+1. Asks `scripts/next-release.sh` for the version (git-cliff computes it; `cliff.toml` holds the rules).
 2. Sets the version in `Resources/Info.plist`, bumps the build number, and regenerates `CHANGELOG.md`.
 3. Builds the universal app, signs it with "Maclean Release", and signs the zip with the update key (`scripts/package-release.sh`).
 4. Commits `chore(release): vX.Y.Z`, tags it, and pushes. Nothing is published before this succeeds.
