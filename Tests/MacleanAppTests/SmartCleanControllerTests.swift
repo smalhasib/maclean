@@ -71,7 +71,12 @@ private final class Admin: AdminRunning, @unchecked Sendable {
     private let answer: @Sendable ([String]) throws -> String
     init(_ answer: @escaping @Sendable ([String]) throws -> String = { _ in "" }) { self.answer = answer }
     var arguments: [[String]] { lock.withLock { _arguments } }
-    func run(_ arguments: [String]) async throws -> String {
+    func run(_ invocations: [[String]], prompt: String) async throws -> [String] {
+        var outputs: [String] = []
+        for arguments in invocations { outputs.append(try await runOne(arguments)) }
+        return outputs
+    }
+    private func runOne(_ arguments: [String]) async throws -> String {
         lock.withLock { _arguments.append(arguments) }
         return try answer(arguments)
     }

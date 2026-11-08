@@ -41,7 +41,12 @@ private final class FakeAdmin: AdminRunning, @unchecked Sendable {
     /// The `--items-file` paths passed (the files exist only during `run`).
     var itemsFiles: [String] { lock.withLock { _itemsFiles } }
 
-    func run(_ arguments: [String]) async throws -> String {
+    func run(_ invocations: [[String]], prompt: String) async throws -> [String] {
+        var outputs: [String] = []
+        for arguments in invocations { outputs.append(try await runOne(arguments)) }
+        return outputs
+    }
+    private func runOne(_ arguments: [String]) async throws -> String {
         // Parsed now: the controller removes the items file after the run.
         let items = (try? AdminDelete.parse(arguments).items) ?? []
         lock.withLock {

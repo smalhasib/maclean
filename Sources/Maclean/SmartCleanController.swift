@@ -19,6 +19,10 @@ import Observation
 
     static let checkAtLaunchKey = "smartClean.checkAtLaunch"
     static let neverCleanKey = "smartClean.neverClean"
+    /// The administrator dialog's reason for measuring `count` system items.
+    static func measurePrompt(count: Int) -> String {
+        "Maclean needs to measure \(count) system items for Smart Clean."
+    }
     static let disabledCategoriesKey = "smartClean.disabledCategories"
     static let projectRootsKey = "smartClean.projectRoots"
     /// How often a paused check asks whether the scan is still running.
@@ -230,7 +234,8 @@ import Observation
             var env = ProtectionEnvironment.current()
             env.neverClean = defaults.stringArray(forKey: Self.neverCleanKey) ?? []
             lines = AdminMeasure.decode(try await admin.run(AdminMeasure.arguments(pathsFile: file.path,
-                                                                                   sha256: sha256, environment: env)))
+                                                                                   sha256: sha256, environment: env),
+                                                     prompt: Self.measurePrompt(count: paths.count)))
         } catch {
             return
         }

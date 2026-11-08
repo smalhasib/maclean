@@ -25,7 +25,12 @@ private final class FakeDeleter: DeleterProtocol, @unchecked Sendable {
 private final class FakeAdmin: AdminRunning, @unchecked Sendable {
     private let answer: @Sendable () throws -> String
     init(_ answer: @escaping @Sendable () throws -> String) { self.answer = answer }
-    func run(_ arguments: [String]) async throws -> String { try answer() }
+    func run(_ invocations: [[String]], prompt: String) async throws -> [String] {
+        var outputs: [String] = []
+        for arguments in invocations { outputs.append(try await runOne(arguments)) }
+        return outputs
+    }
+    private func runOne(_ arguments: [String]) async throws -> String { try answer() }
 }
 
 /// Records the (mode, context) pairs the batch asked deleters for.
@@ -88,7 +93,12 @@ private final class RecordingAdmin: AdminRunning, @unchecked Sendable {
     var arguments: [[String]] { lock.withLock { _arguments } }
     /// The items file's contents, read while it still exists.
     var items: [AdminDelete.Item] { lock.withLock { _items } }
-    func run(_ arguments: [String]) async throws -> String {
+    func run(_ invocations: [[String]], prompt: String) async throws -> [String] {
+        var outputs: [String] = []
+        for arguments in invocations { outputs.append(try await runOne(arguments)) }
+        return outputs
+    }
+    private func runOne(_ arguments: [String]) async throws -> String {
         let read = arguments.firstIndex(of: "--items-file")
             .flatMap { FileManager.default.contents(atPath: arguments[$0 + 1]) }
             .flatMap { try? JSONDecoder().decode([AdminDelete.Item].self, from: $0) } ?? []
