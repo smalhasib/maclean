@@ -80,7 +80,7 @@ public enum InstallSource: Equatable, Sendable {
     case homebrew, standalone
 
     /// Homebrew only when `<root>/maclean` exists as a directory in a Caskroom
-    /// and the bundle lives in an Applications folder (where casks put apps).
+    /// and the standardized bundle path is exactly `/Applications/Maclean.app`.
     public static func detect(
         bundlePath: String,
         caskroomRoots: [String] = ["/opt/homebrew/Caskroom", "/usr/local/Caskroom"]
@@ -92,9 +92,8 @@ public enum InstallSource: Equatable, Sendable {
             return fm.fileExists(atPath: p, isDirectory: &isDir) && isDir.boolValue
         }
         guard hasCask else { return .standalone }
-        let home = NSHomeDirectory()
-        let inApplications = PathUtil.isInside(bundlePath, orEqualTo: "/Applications")
-            || PathUtil.isInside(bundlePath, orEqualTo: (home as NSString).appendingPathComponent("Applications"))
+        let standardized = (bundlePath as NSString).standardizingPath
+        let inApplications = standardized == "/Applications/Maclean.app"
         return inApplications ? .homebrew : .standalone
     }
 }

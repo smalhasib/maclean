@@ -63,6 +63,9 @@ private func releaseJSON(assets: [(String, String)]) -> Data {
     let roots = [t.url("emptyroom"), t.url("caskroom")]
     #expect(InstallSource.detect(bundlePath: "/Applications/Maclean.app", caskroomRoots: roots) == .homebrew)
     #expect(InstallSource.detect(bundlePath: "/Users/x/Downloads/Maclean.app", caskroomRoots: roots) == .standalone)
+    #expect(InstallSource.detect(bundlePath: NSHomeDirectory() + "/Applications/Maclean.app", caskroomRoots: roots) == .standalone)
+    #expect(InstallSource.detect(bundlePath: "/Applications/Sub/Maclean.app", caskroomRoots: roots) == .standalone)
+    #expect(InstallSource.detect(bundlePath: "/Applications/../Applications/Maclean.app", caskroomRoots: roots) == .homebrew)
     #expect(InstallSource.detect(bundlePath: "/Applications/Maclean.app", caskroomRoots: [t.url("emptyroom")]) == .standalone)
     #expect(InstallSource.detect(bundlePath: "/Applications/Maclean.app", caskroomRoots: [t.url("fileroom")]) == .standalone)
 }
