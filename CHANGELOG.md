@@ -1,4 +1,9 @@
 # Changelog
+## 0.4.0 - 2026-11-08
+
+### Features
+- Ship a dmg with each release
+
 ## 0.3.0 - 2026-11-08
 
 ### Features
