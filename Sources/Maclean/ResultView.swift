@@ -126,30 +126,30 @@ private struct ResultBanners: View {
         .animation(.easeInOut(duration: 0.15), value: model.notice)
     }
 
-    /// "N folders couldn't be read — Read with administrator rights" before a
-    /// root read (or after a cancelled one); "N folders still need Full Disk
-    /// Access — Grant Access…" for what root couldn't read either (or, with
-    /// access already on, "Relaunch Maclean to read them — Relaunch").
+    /// "N folders couldn't be read — Read with administrator rights" for
+    /// folders root can open, before a root read (or after a cancelled one);
+    /// then "N folders need Full Disk Access — Grant Access…" for privacy
+    /// folders and what root couldn't read either (or, with access already
+    /// on, "Relaunch Maclean to read them — Relaunch").
     @ViewBuilder private var restrictedBanner: some View {
         let session = model.session
         let count = session.restrictedRoots.count
+        let needAccess = session.privacyCount + (session.stillNeedsAccessCount ?? 0)
         if session.isReadingRestricted {
             banner(icon: nil, text: "Reading restricted folders…")
-        } else if count > 0, let batcher = router?.registry.batcher {
-            if let left = session.stillNeedsAccessCount {
-                let coordinator = batcher.coordinator
-                if coordinator.accessIsGranted() {
-                    // Access is on already; only a new process gets it.
-                    banner(icon: "lock",
-                           text: coordinator.relaunchRefusal ?? "Full Disk Access is on. Relaunch Maclean to read them",
-                           action: ("Relaunch", { coordinator.relaunch() }))
-                } else {
-                    banner(icon: "lock", text: "\(Self.folders(left)) still need Full Disk Access",
-                           action: ("Grant Access…", { coordinator.reopenAccessSheet() }))
-                }
-            } else {
+        } else if let batcher = router?.registry.batcher {
+            let coordinator = batcher.coordinator
+            if count > 0, session.stillNeedsAccessCount == nil {
                 banner(icon: "lock", text: "\(Self.folders(count)) couldn’t be read",
                        action: ("Read with administrator rights", { Task { await session.readRestricted(using: batcher) } }))
+            } else if needAccess > 0, coordinator.accessIsGranted() {
+                // Access is on already; only a new process gets it.
+                banner(icon: "lock",
+                       text: coordinator.relaunchRefusal ?? "Full Disk Access is on. Relaunch Maclean to read them",
+                       action: ("Relaunch", { coordinator.relaunch() }))
+            } else if needAccess > 0 {
+                banner(icon: "lock", text: "\(Self.folders(needAccess)) need Full Disk Access",
+                       action: ("Grant Access…", { coordinator.reopenAccessSheet() }))
             }
         }
     }

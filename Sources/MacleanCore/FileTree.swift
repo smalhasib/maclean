@@ -22,6 +22,9 @@ public struct NodeFlags: OptionSet, Sendable {
     public static let cloneExtra = NodeFlags(rawValue: 1 << 6)
     /// A directory that is a mount point (a volume root); recorded empty, never descended.
     public static let mountPoint = NodeFlags(rawValue: 1 << 7)
+    /// With `.restricted`: macOS privacy protection refused it, so only Full
+    /// Disk Access opens it (an administrator password doesn't).
+    public static let privacy = NodeFlags(rawValue: 1 << 8)
 }
 
 /// Immutable, compact (struct-of-arrays) tree of a scanned directory.

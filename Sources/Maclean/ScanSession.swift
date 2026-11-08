@@ -43,6 +43,9 @@ import Observation
     /// with no restricted ancestor, never a mount point. The dialog's and the
     /// banner's count.
     private(set) var restrictedRoots: [String] = []
+    /// Folders macOS privacy protection kept closed (`.privacy`): only Full
+    /// Disk Access opens them, so they are never sent to root.
+    private(set) var privacyCount = 0
     /// After a root read of the restricted folders: how many of them are
     /// still unreadable (root refused, so they need Full Disk Access). Nil
     /// before a read of this tree, or after a cancelled or failed one.
@@ -103,7 +106,8 @@ import Observation
         task = Task {
             let result: Result<FileTree, any Error>
             do {
-                let tree = try await Scanner.scan(path: path) { progress in
+                // Without Full Disk Access, opening the Photos library raises a consent dialog.
+                let tree = try await Scanner.scan(path: path, skipsPhotosLibraries: !FullDiskAccess.isGranted()) { progress in
                     Task { @MainActor in self.report(bytes: progress.bytes) }
                 }
                 result = .success(tree)
@@ -147,6 +151,7 @@ import Observation
             view = carriedOver(to: tree)
             restrictedCount = Self.restrictedCount(in: tree)
             restrictedRoots = Self.restrictedRoots(in: tree)
+            privacyCount = Self.privacyCount(in: tree)
             stillNeedsAccessCount = nil
             state = .finished(tree)
             onFinish?(self)
@@ -236,6 +241,7 @@ import Observation
         view = newView
         restrictedCount = Self.restrictedCount(in: grafted)
         restrictedRoots = remainingRoots
+        privacyCount = Self.privacyCount(in: grafted)
         state = .finished(grafted)
     }
 
@@ -256,14 +262,20 @@ import Observation
         }.value
     }
 
+    static func privacyCount(in tree: FileTree) -> Int {
+        (0..<tree.count).reduce(0) { n, i in
+            tree.flags(of: NodeID(index: Int32(i))).contains(.privacy) ? n + 1 : n
+        }
+    }
+
     static func restrictedCount(in tree: FileTree) -> Int {
         (0..<tree.count).reduce(0) { n, i in
             tree.flags(of: NodeID(index: Int32(i))).contains(.restricted) ? n + 1 : n
         }
     }
 
-    /// Paths of the restricted nodes with no restricted ancestor. Mount
-    /// points are never sent (a mount the scan descended into is still
+    /// Paths of the restricted nodes with no restricted ancestor, privacy
+    /// folders left out (root can't open them either). Mount points are never sent (a mount the scan descended into is still
     /// searched below).
     static func restrictedRoots(in tree: FileTree) -> [String] {
         var paths: [String] = []
@@ -271,7 +283,7 @@ import Observation
         while let id = stack.popLast() {
             let flags = tree.flags(of: id)
             if flags.contains(.restricted), !flags.contains(.mountPoint), id != tree.root {
-                paths.append(tree.path(of: id))
+                if !flags.contains(.privacy) { paths.append(tree.path(of: id)) }
                 continue
             }
             stack.append(contentsOf: tree.children(of: id))

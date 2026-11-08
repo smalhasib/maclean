@@ -438,3 +438,14 @@ private let measureReason1 = "Maclean needs to measure 1 system items for Smart 
     #expect(root.prompts.isEmpty)
     #expect(root.arguments.isEmpty)
 }
+
+/// Privacy-locked folders (`.privacy`) are never sent to root: only Full Disk Access opens them.
+@Test @MainActor func restrictedRootsLeaveOutPrivacyFolders() {
+    let b = FileTreeBuilder(rootPath: "/r", rootInode: 1, rootDevice: 1)
+    let owned = b.add(parent: b.root, name: "owned", size: 0, flags: .directory, inode: 2, device: 1)
+    b.markRestricted(owned)
+    b.add(parent: b.root, name: "Mail", size: 0, flags: [.directory, .restricted, .privacy], inode: 3, device: 1)
+    let t = b.finish()
+    #expect(ScanSession.restrictedRoots(in: t) == ["/r/owned"])
+    #expect(ScanSession.privacyCount(in: t) == 1)
+}

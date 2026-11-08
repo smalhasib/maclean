@@ -12,6 +12,9 @@ public struct ScanBoundary: Sendable {
     public var skippedPaths: Set<String>
     /// Canonical paths of mount points the scan may enter.
     public var descendableMounts: Set<String>
+    /// Record `.photoslibrary` folders as unread privacy folders instead of
+    /// opening them (set without Full Disk Access: opening one prompts).
+    public var skipsPhotosLibraries = false
 
     public init(allowedDevices: Set<Int32>, skippedPaths: Set<String> = [],
                 descendableMounts: Set<String> = []) {

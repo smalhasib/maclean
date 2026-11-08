@@ -203,7 +203,7 @@ public struct Deleter: Sendable {
     private static func scanForRewalk(_ request: DeleteRequest, mode: DeleteMode) async -> Result<FileTree?, Early> {
         do {
             return .success(try await Scanner.scan(path: request.path))
-        } catch ReadError.permissionDenied {
+        } catch let error as ReadError where error == .permissionDenied || error == .notPermitted {
             let verified = request.fileCount == 0 && request.size == 0
             return mode == .trash ? .success(nil) : .failure(Early(outcome: .needsAdmin(started: false, verified: verified)))
         } catch {
@@ -410,7 +410,7 @@ public struct Deleter: Sendable {
     private static func outcome(scanError error: any Error) -> DeleteOutcome {
         switch error as? ReadError {
         case .notFound: .missing
-        case .permissionDenied: .needsAdmin(started: false)
+        case .permissionDenied, .notPermitted: .needsAdmin(started: false)
         case .notDirectory: .replaced
         case .other(let code): .failed(String(cString: strerror(code)))
         case nil: error is CancellationError ? .failed("Cancelled") : .failed(String(describing: error))
