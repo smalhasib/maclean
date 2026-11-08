@@ -17,6 +17,12 @@ import MacleanCore
 // Reads restricted folders of a manual scan as root (see AdminRead), writes one
 // tree archive per path into the out dir for that uid and prints one JSON line
 // per path. Read-only outside the out dir. Same exit codes as --delete.
+//
+// maclean-scan install-update --zip <p> --zip-sha256 <h> --sig <p> --sig-sha256 <h> --version <v> --target <path>
+// Installs a signed update over an existing Maclean bundle as root (see
+// AdminInstall). Writes only its work directory in the target's parent and the
+// target. Prints exactly one JSON line, {"ok":true} or {"error":"<code>"}, and
+// exits 0 either way.
 
 func usage() -> Never {
     fputs("""
@@ -132,6 +138,21 @@ func runAdminRead(_ arguments: [String]) async -> Never {
     exit(0)
 }
 
+/// `install-update` mode: one reply line, exit 0, whatever happens.
+func runAdminInstall(_ arguments: [String]) -> Never {
+    let result: Result<Void, AdminInstall.InstallError>
+    if getuid() != 0 {
+        result = .failure(.notRoot)
+    } else if let request = try? AdminInstall.parse(arguments) {
+        result = AdminInstall.perform(request)
+    } else {
+        result = .failure(.usage)
+    }
+    print(AdminInstall.encode(result))
+    fflush(stdout)
+    exit(0)
+}
+
 // Raise the soft fd limit so the scanner's fd budget (half of it) is large.
 ProcessLimits.raiseOpenFileLimit()
 
@@ -140,6 +161,9 @@ if CommandLine.arguments.dropFirst().first == "--delete" {
 }
 if CommandLine.arguments.dropFirst().first == "smart-measure" {
     runAdminMeasure(Array(CommandLine.arguments.dropFirst()))
+}
+if CommandLine.arguments.dropFirst().first == "install-update" {
+    runAdminInstall(Array(CommandLine.arguments.dropFirst()))
 }
 if CommandLine.arguments.dropFirst().first == "read-restricted" {
     await runAdminRead(Array(CommandLine.arguments.dropFirst()))

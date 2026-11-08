@@ -18,6 +18,8 @@ enum UpdateInstallError: Error, Equatable {
     case privilegedUnavailable
     /// The swap failed and the old app couldn't be put back; it is at this path.
     case rollbackFailed(String)
+    /// The root helper's install failed; its user-facing message.
+    case privileged(String)
 
     var message: String {
         switch self {
@@ -28,6 +30,7 @@ enum UpdateInstallError: Error, Equatable {
         case .swapFailed(let why): "Maclean couldn't replace itself: \(why)"
         case .privilegedUnavailable: "Installing into this folder isn't available yet. Download the update instead."
         case .rollbackFailed(let path): "Maclean couldn't replace itself or put the old version back. The old app is at \(path)."
+        case .privileged(let message): message
         }
     }
 }
@@ -150,5 +153,49 @@ struct UpdateInstaller: UpdateInstalling {
         p.standardError = FileHandle.nullDevice
         guard (try? p.run()) != nil else { return }
         p.waitUntilExit()
+    }
+}
+
+/// The password route (spec §6a.2): for a bundle whose folder the user can't
+/// write, the root helper's `install-update` mode does the install behind the
+/// administrator dialog, re-checking everything itself (`AdminInstall`).
+///
+/// The signature is checked here first, so a bad download never asks for the
+/// password. The zip and signature go to the helper as 0600 files whose
+/// SHA-256 is in argv, and are removed afterwards. A cancelled dialog throws
+/// `AdminRunnerError.cancelled` (the sheet then offers Download).
+struct PrivilegedUpdateInstaller: Sendable {
+    static let prompt = "Maclean needs your password to update itself."
+
+    var runner: any AdminRunning = AdminRunner()
+    var publicKeyBase64: String = UpdateKey.publicKeyBase64
+    var relaunch: @MainActor @Sendable (URL) -> Void = { Relauncher.relaunch(bundleURL: $0) }
+
+    func install(zip: Data, signature: String, release: ReleaseInfo, replacing bundleURL: URL) async throws {
+        guard UpdateSignature.isValid(zip, signatureBase64: signature, publicKeyBase64: publicKeyBase64) else {
+            throw UpdateInstallError.badSignature
+        }
+        // Root requires the canonical path (no symlinked components).
+        let target = ScanBoundary.canonicalPath(bundleURL.path) ?? bundleURL.path
+        let files: AdminInstall.RequestFiles
+        do {
+            files = try AdminInstall.writeRequestFiles(zip: zip, signature: signature)
+        } catch {
+            throw UpdateInstallError.swapFailed(error.localizedDescription)
+        }
+        defer { AdminInstall.removeRequestFiles(files) }
+        let arguments = AdminInstall.arguments(
+            zip: files.zip.path, zipSHA256: files.zipSHA256, signature: files.signature.path,
+            signatureSHA256: files.signatureSHA256, version: release.version.description, target: target)
+        let output: String
+        do {
+            output = try await runner.run(arguments, prompt: Self.prompt)
+        } catch AdminRunnerError.failed(let why) {
+            throw UpdateInstallError.privileged("The update couldn't be installed: \(why)")
+        }
+        if case .failure(let error) = AdminInstall.decode(output) {
+            throw UpdateInstallError.privileged(error.message)
+        }
+        await relaunch(URL(fileURLWithPath: target))
     }
 }

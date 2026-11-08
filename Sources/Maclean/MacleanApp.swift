@@ -71,6 +71,12 @@ struct MacleanApp: App {
             },
             // A sheet set while another (Smart Clean's review) is up may never show.
             canPresent: { NSApp.windows.allSatisfy { $0.attachedSheet == nil } },
+            // Straight to the runner, not the batcher: the coordinator holds admin
+            // jobs while a sheet is up, and the update sheet is.
+            installPrivileged: { zip, signature, release, bundleURL in
+                try await PrivilegedUpdateInstaller().install(zip: zip, signature: signature, release: release,
+                                                             replacing: bundleURL)
+            },
             download: UpdateFetch.download(version: version))
     }()
 

@@ -412,3 +412,88 @@ private func installer(_ f: Fixture, relaunches: Relaunches,
     #expect(UpdateFetch.limit(expected: 10 * mb) == 11 * mb)
     #expect(UpdateFetch.limit(expected: 400 * mb) == 300 * mb)
 }
+
+// MARK: - Password route (Task 6b)
+
+/// Answers `install-update` with `reply`, recording the arguments and that
+/// both request files existed (0600, matching their SHA-256) during the run.
+private final class InstallFake: AdminFake, @unchecked Sendable {
+    let reply: String
+    let error: (any Error)?
+    private let lock = NSLock()
+    private var _args: [String] = []
+    private var _filesOK = false
+    var args: [String] { lock.withLock { _args } }
+    var filesOK: Bool { lock.withLock { _filesOK } }
+
+    init(reply: String = #"{"ok":true}"# + "\n", error: (any Error)? = nil) {
+        self.reply = reply
+        self.error = error
+    }
+
+    override func runOne(_ arguments: [String]) async throws -> String {
+        var ok = false
+        if let request = try? AdminInstall.parse(arguments) {
+            ok = [(request.zip, request.zipSHA256), (request.signature, request.signatureSHA256)].allSatisfy { path, hash in
+                let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+                let data = FileManager.default.contents(atPath: path) ?? Data()
+                let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+                return (attrs?[.posixPermissions] as? Int) == 0o600 && digest == hash
+            }
+        }
+        lock.withLock {
+            _args = arguments
+            _filesOK = ok
+        }
+        if let error { throw error }
+        return reply
+    }
+}
+
+@MainActor private func privileged(_ f: Fixture, _ fake: InstallFake, relaunches: Relaunches)
+    -> PrivilegedUpdateInstaller {
+    PrivilegedUpdateInstaller(runner: fake, publicKeyBase64: f.publicKey, relaunch: { relaunches.add($0) })
+}
+
+@MainActor @Test func passwordInstallRunsHelperThenRelaunches() async throws {
+    let f = Fixture()
+    let fake = InstallFake()
+    let relaunches = Relaunches()
+    let zip = f.zip()
+    try await privileged(f, fake, relaunches: relaunches)
+        .install(zip: zip, signature: f.sign(zip), release: f.release, replacing: f.installed)
+    #expect(fake.prompts == ["Maclean needs your password to update itself."])
+    let request = try AdminInstall.parse(fake.args)
+    #expect(request.version == "0.3.0")
+    #expect(request.target == ScanBoundary.canonicalPath(f.installed.path))
+    #expect(fake.filesOK)
+    // The request files are gone afterwards.
+    #expect(!FileManager.default.fileExists(atPath: request.zip))
+    #expect(!FileManager.default.fileExists(atPath: request.signature))
+    #expect(relaunches.urls.map(\.path) == [ScanBoundary.canonicalPath(f.installed.path)])
+}
+
+@MainActor @Test func passwordInstallMapsHelperErrorAndCancel() async throws {
+    let f = Fixture()
+    let zip = f.zip()
+    let relaunches = Relaunches()
+    let refused = InstallFake(reply: #"{"error":"badTarget"}"# + "\n")
+    await #expect(throws: UpdateInstallError.privileged(AdminInstall.InstallError.badTarget.message)) {
+        try await privileged(f, refused, relaunches: relaunches)
+            .install(zip: zip, signature: f.sign(zip), release: f.release, replacing: f.installed)
+    }
+    let cancelled = InstallFake(error: AdminRunnerError.cancelled)
+    await #expect(throws: AdminRunnerError.cancelled) {
+        try await privileged(f, cancelled, relaunches: relaunches)
+            .install(zip: zip, signature: f.sign(zip), release: f.release, replacing: f.installed)
+    }
+    // A bad signature never reaches the password dialog.
+    let unused = InstallFake()
+    await #expect(throws: UpdateInstallError.badSignature) {
+        try await privileged(f, unused, relaunches: relaunches)
+            .install(zip: zip, signature: f.sign(Data("other".utf8)), release: f.release, replacing: f.installed)
+    }
+    #expect(unused.prompts.isEmpty)
+    #expect(relaunches.urls.isEmpty)
+    #expect(f.installedVersion() == "0.2.0")
+}

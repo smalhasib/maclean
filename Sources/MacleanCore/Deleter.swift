@@ -272,6 +272,23 @@ public struct Deleter: Sendable {
         return .deleted(freed: freed)
     }
 
+    /// Removes directory `name` in `pfd`, which must still have inode
+    /// `expectIno`, with the same walk as a permanent delete: bottom-up,
+    /// every directory opened `O_NOFOLLOW` relative to its parent's fd, never
+    /// leaving the directory's device. False on any failure (part may remain).
+    static func removeDirectory(named name: String, in pfd: Int32, expectIno: UInt64) -> Bool {
+        var st = stat()
+        guard fstatat(pfd, name, &st, AT_SYMLINK_NOFOLLOW) == 0, isDirectory(st),
+              UInt64(st.st_ino) == expectIno else { return false }
+        var remover = Remover(device: st.st_dev)
+        do throws(RemoveError) {
+            try remover.removeTree(pfd, Array(name.utf8CString), expectIno: expectIno, top: true)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     private enum RemoveError: Error { case errno(Int32), replaced, otherDisk(String) }
 
     private struct Remover {
