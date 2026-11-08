@@ -278,3 +278,13 @@ private final class Access: @unchecked Sendable {
     access.granted = true
     #expect(coordinator.accessIsGranted())
 }
+
+/// System Settings' "Quit & Reopen" arrives while the access sheet is up: the
+/// sheet must go away (with nothing queued behind it) so the app can quit.
+@MainActor @Test func dismissForQuitClearsSheetAndQueue() {
+    let (coordinator, _) = make(false)
+    coordinator.launch()
+    coordinator.requestUpdateSheet()
+    coordinator.dismissForQuit()
+    #expect(coordinator.sheet == nil)
+}

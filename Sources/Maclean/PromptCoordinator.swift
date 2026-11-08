@@ -96,6 +96,14 @@ import Observation
         }
     }
 
+    /// The app is quitting: drop the sheet and anything queued behind it.
+    /// SwiftUI sheets block a quit request until their own state lets go.
+    func dismissForQuit() {
+        updatePending = false
+        accessPending = false
+        sheet = nil
+    }
+
     /// Runs `job` once no sheet is up and no other admin job is running. The
     /// job shows the dialog (with `reason`), so the dialogs never overlap.
     /// Throws `CancellationError`, without running `job`, when the calling task

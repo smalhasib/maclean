@@ -100,6 +100,10 @@ struct MacleanApp: App {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.activate()
+        // Installed after AppKit's own handler so ours wins.
+        NSAppleEventManager.shared().setEventHandler(self, andSelector: #selector(handleQuit(_:withReply:)),
+                                                     forEventClass: AEEventClass(kCoreEventClass),
+                                                     andEventID: AEEventID(kAEQuitApplication))
         coordinator.launch()
         // SwiftUI builds the menu bar during launch: add the item after it.
         DispatchQueue.main.async {
@@ -121,6 +125,23 @@ struct MacleanApp: App {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    /// A SwiftUI sheet makes AppKit refuse a quit Apple Event, and AppKit can't
+    /// remove it: only the state that owns it can. System Settings' "Quit &
+    /// Reopen" arrives while the Full Disk Access sheet is up, so drop the
+    /// coordinator's sheets, wait for SwiftUI to take them down, then quit.
+    /// Other sheets (Smart Clean review, summaries) still block, as ⌘Q does.
+    @objc func handleQuit(_ event: NSAppleEventDescriptor, withReply reply: NSAppleEventDescriptor) {
+        coordinator.dismissForQuit()
+        quitWhenSheetsAreGone(attempt: 0)
+    }
+
+    private func quitWhenSheetsAreGone(attempt: Int) {
+        // ponytail: ~1 s of polling; a sheet we don't own stays and the quit is refused as before.
+        let sheetsUp = NSApp.windows.contains { $0.attachedSheet != nil }
+        guard sheetsUp, attempt < 20 else { NSApp.terminate(nil); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { self.quitWhenSheetsAreGone(attempt: attempt + 1) }
+    }
 
     /// Folders dropped on the Dock icon (or opened with the app) are scanned.
     func application(_ application: NSApplication, open urls: [URL]) {
