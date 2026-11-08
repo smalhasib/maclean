@@ -177,7 +177,10 @@
   - New `Refusal` cases, with messages: `criticalRoot`, `personalData`, `neverClean`, `protectedApp`, `appleSystem`.
   - `ProtectionEnvironment.neverClean: [String]`. It's an init parameter with default `[]`, and it's Codable, so it travels in `--env`. Root may take it from the app because it can only deny.
   - `public static let protectedBundlePrefixes: [String]` (password managers, input methods, VPNs, security tools; Maclean's own list).
-  - `public static let appleAllowlist: [String]`: the §6.2 Apple cache list verbatim, plus `com.apple.mail` (for Mail Downloads only).
+  - `public static let appleAllowlist: [String]` contains three groups:
+    - the §6.2 Apple cache list verbatim, where `*` is a glob, as in `com.apple.WebKit.*`;
+    - the §6.2a Apple names: `com.apple.iconservices.store`, `com.apple.metal`, `com.apple.metalfe`, `com.apple.gpuarchiver` and `com.apple.idleassetsd`;
+    - `com.apple.mail`, allowed only when the path continues into `Data/Library/Mail Downloads`.
 - `refusal(for:context: .smartClean, in:)` refuses, in this order (the §6.4 Smart Clean context):
   1. Every collector refusal.
   2. Any ancestor that is a symlink. Resolve with `realpath` on the parent and re-run the checks on the resolved path; the resolved path can only deny.
@@ -186,6 +189,7 @@
   5. Never-clean: the path equals an entry, or is an ancestor or descendant of one, compared NFC and case-insensitively.
   6. A path component that starts with a protected prefix.
   7. A component starting with `com.apple.` that isn't in `appleAllowlist`.
+  8. Anything under `/private` outside the §6.2a `/private` allowlist, which is refused as `.criticalRoot`. The allowlist is `/private/var/log/…`, `/private/var/db/diagnostics/…`, `/private/var/db/reportmemoryexception/…`, and the current user's `/private/var/folders/<x>/<y>/…`, found with `confstr(_CS_DARWIN_USER_CACHE_DIR)` and taking its parent.
 
 - [ ] **Step 1: Tests**
 
@@ -254,6 +258,7 @@ public struct CleanCandidate: Sendable, Identifiable, Equatable {
 public enum SkipReason: Sendable, Equatable { case appRunning(String), ownerUnknown, recent, protected(Refusal), noAccess, neverClean, macOSSystemCache, installedCheckFailed, containsGit, gitTracked, projectInUse, locallyPatched, sameOSInstaller, categoryOff }
 public struct SkippedItem: Sendable, Equatable { public let path: String; public let reason: SkipReason }
 public struct CleanReport: Sendable { public var candidates: [CleanCandidate]; public var skipped: [SkippedItem] }
+public struct ProjectArtifact: Sendable, Equatable { public let path: String; public let project: String; public let projectRoot: String }   // defined here; Task 6 uses it
 public protocol CleanProbes: Sendable {
     var now: Date { get }
     func isRunning(bundleID: String) -> Bool?          // nil = couldn't tell
@@ -262,13 +267,16 @@ public protocol CleanProbes: Sendable {
     func bundleID(appSupportFolder: String) -> String?
     func installedBundleIDs() -> Set<String>?          // Task 5
     func projectArtifacts(roots: [String]) -> [ProjectArtifact]   // Task 6
+    func workingDirectories() -> [String]?             // process cwds; nil = couldn't tell
 }
 public struct CleanEngine {
     public init(rules: [CleanRule], home: String, environment: ProtectionEnvironment,
-                probes: any CleanProbes, disabled: Set<CleanRule.Category> = [], budget: Duration = .seconds(5))
+                probes: any CleanProbes, disabled: Set<CleanRule.Category> = [], projectRoots: [String] = [],
+                budget: Duration = .seconds(5))
     public func run(progress: @Sendable (String) -> Void = { _ in }) async -> CleanReport
     public static func expand(_ pattern: String, home: String) -> [String]   // glob over the real filesystem, no symlink following
     public func rule(matching path: String) -> CleanRule?                    // first rule in catalog order whose pattern+unit covers path
+    public static func rule(matching path: String, in rules: [CleanRule], home: String) -> CleanRule?   // string-only, used by the root helper
 }
 public enum CleanCatalog { public static let rules: [CleanRule] }   // in rule order (§6.2a)
 ```
@@ -378,7 +386,7 @@ public enum CleanCatalog { public static let rules: [CleanRule] }   // in rule o
 
 **Interfaces:**
 - Produces:
-  - `public struct ProjectArtifact: Sendable, Equatable { let path: String; let project: String; let projectRoot: String }`
+  - `ProjectArtifact` is already defined by Task 4 in `CleanRule.swift`. Use it; don't redefine it.
   - `public enum ProjectArtifacts`:
     - `static func searchRoots(home: String, extra: [String]) -> [String]` covers the §6.5 named folders that exist, plus top-level home folders with a marker within depth 2 (excluding Library, Movies, Music, Pictures, Public, Applications and hidden folders), plus `extra`.
     - `static func find(roots: [String], deadline: ContinuousClock.Instant?) -> [ProjectArtifact]` searches depth 1–6, prunes `.git`, `Library` and `.Trash`, skips dataless files (`SF_DATALESS`), and returns only outermost artifacts.
@@ -421,8 +429,8 @@ public enum CleanCatalog { public static let rules: [CleanRule] }   // in rule o
 - Consumes: Task 1 `--context`, Task 2 `Measurer`, Task 4 `CleanEngine.rule(matching:)` and `CleanCatalog.rules`.
 - Produces:
   - In `AdminDelete.perform(_:with:)`, when the deleter's context is `.smartClean`, two checks run before anything else:
-    - The item's path must match a catalog rule with `requiresAdmin`. Otherwise `.refused(.unsafePath)`.
-    - It must still meet that rule's oldest age tier. The age is measured as root; if it's too new, the result is `.changedSinceScan`.
+    - The item's path must match a catalog rule with `requiresAdmin`, using `CleanEngine.rule(matching:in:home:)` with `env.home`. Otherwise `.refused(.unsafePath)`.
+    - It must still be at least as old as the smallest `days` in the rule's `ageTiers`. The age is measured as root; if it's too new, the result is `.changedSinceScan(size:fileCount:)` with the measured values.
   - `AdminMeasure`:
     - `arguments(pathsFile:sha256:environment:)` gives `smart-measure --env <json> --paths-file <p> --paths-sha256 <hex>`.
     - `parse` uses the same `O_NOFOLLOW`, regular-file and hash checks as the items file. Factor out the shared `readVerifiedFile(path:sha256:)`.
@@ -473,7 +481,8 @@ private(set) var report: CleanReport?
 var selected: Set<String>                 // paths; defaults: tier == .safe && measurement != nil
 var selectedSize: Int64 { get }; var foundSize: Int64 { get }
 var needsAdmin: Bool { get }              // any selected requiresAdmin
-init(engine: @escaping () -> CleanEngine, probes: any CleanProbes, makeDeleter: …, admin: any AdminRunning,
+init(engine: @escaping () -> CleanEngine, probes: any CleanProbes,
+     makeDeleter: @escaping (DeleteMode, ProtectionContext) -> any DeleterProtocol, admin: any AdminRunning,
      defaults: UserDefaults = .standard, scanning: @escaping (Int32) -> Bool)   // device → a scan of that volume is running
 func checkAtLaunchIfEnabled()             // reads smartClean.checkAtLaunch
 func check()                              // utility QoS; cancels a running check first
@@ -489,7 +498,7 @@ func dismissSummary()
   - A cancelled check (window closed or app quitting) publishes nothing.
 - **Clean:**
   - Builds `DeleteBatch.Item`s from the selected candidates:
-    - `tolerance: .cache` for Safe-tier caches (the `appCaches`, `browsers`, `logs`, `systemLogs` and `systemCaches` categories), `.strict` for everything else;
+    - `tolerance: .cache` only when the tier is `.safe` and the category is `appCaches`, `browsers`, `logs`, `systemLogs` or `systemCaches`; `.strict` for everything else;
     - `mode: .permanent` for the Trash category;
     - context `.smartClean`.
   - `beforeEach` re-runs `probes.isRunning(owner)` and returns "<App> is open." when it's true or nil.
