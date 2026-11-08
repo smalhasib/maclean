@@ -424,3 +424,32 @@ private func helperRule(_ dir: String) -> CleanRule {
     t.chmod("Applications", 0o000)
     #expect(AdminDelete.installedBundleIDs(systemRoots: system, usersDir: t.url("Users")) == nil)
 }
+
+@Test func rootInstalledSetSkipsUnsafeUserApps() throws {
+    let t = TempDir(); defer { withExtendedLifetime(t) {} }
+    func app(_ dir: String, _ id: String) {
+        let plist = try! PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": id], format: .xml, options: 0)
+        t.dir("\(dir)/Contents")
+        try! plist.write(to: URL(fileURLWithPath: t.url("\(dir)/Contents/Info.plist")))
+    }
+    t.dir("Applications")
+    app("Users/alice/Applications/X.app", "com.x.app")
+    app("Users/alice/Hidden/Y.app", "com.y.app")
+    t.symlink("Users/alice/Applications/Y.app", to: t.url("Users/alice/Hidden/Y.app"))
+    t.dir("Users/alice/Applications/Fifo.app/Contents")
+    #expect(mkfifo(t.url("Users/alice/Applications/Fifo.app/Contents/Info.plist"), 0o600) == 0)
+    t.dir("Users/alice/Applications/Zero.app/Contents")
+    t.symlink("Users/alice/Applications/Zero.app/Contents/Info.plist", to: "/dev/zero")
+    // Returns promptly; the FIFO, the /dev/zero link and the symlinked app are passed over.
+    #expect(AdminDelete.installedBundleIDs(systemRoots: [t.url("Applications")], usersDir: t.url("Users")) == ["com.x.app"])
+}
+
+@Test func rootRefusesProgramOnUnmountedVolume() throws {
+    let t = TempDir(); defer { withExtendedLifetime(t) {} }
+    t.dir("LaunchDaemons")
+    let program = "/Volumes/maclean-test-\(UUID().uuidString)/bin/agent"
+    try plistData(["Label": "com.ext", "Program": program])
+        .write(to: URL(fileURLWithPath: t.url("LaunchDaemons/com.ext.plist")))
+    #expect(AdminDelete.smartCleanVerdict(for: t.url("LaunchDaemons/com.ext.plist"), rules: [launchdRule(t.url("LaunchDaemons"))],
+                                          home: env.home, now: Date(), installed: { [] }) == .refused(.unsafePath))
+}

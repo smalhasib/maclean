@@ -252,13 +252,7 @@ public enum AdminDelete {
     /// without following a symlink; nil if it isn't one, can't be read, or is
     /// larger than `maxSize` bytes.
     static func readRegularEntry(_ name: String, inParent parentFD: Int32, maxSize: Int) -> Data? {
-        let fd = openat(parentFD, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
-        guard fd >= 0 else { return nil }
-        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-        var st = stat()
-        guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG, st.st_size <= maxSize,
-              let data = try? handle.read(upToCount: maxSize + 1) ?? Data(), data.count <= maxSize else { return nil }
-        return data
+        try? PlistReader.readRegularFile(name: name, inDirectory: parentFD, maxSize: maxSize).get()
     }
 
     /// The system search roots for root's installed-apps set. `/Applications`
@@ -269,20 +263,25 @@ public enum AdminDelete {
     /// bundles on disk (no running-app or LaunchServices extras), lowercased.
     /// It never depends on the app-supplied `home`: every user's
     /// `<usersDir>/*/Applications` (and `Applications/Setapp`) is searched
-    /// after `systemRoots`. A user folder that can't be opened (other than
-    /// missing) is skipped; nil if `systemRoots[0]` or `usersDir` can't be
-    /// listed, or anything inside a searched root can't be read.
+    /// after `systemRoots`, with `InstalledApps` `.user` trust (no symlinks
+    /// followed, unreadable apps skipped). A user folder that can't be opened
+    /// or walked is skipped. nil if `systemRoots[0]` or `usersDir` can't be
+    /// listed, or anything inside a system root can't be read.
     static func installedBundleIDs(systemRoots: [String] = systemAppRoots, usersDir: String = "/Users") -> Set<String>? {
         guard case .success(let users) = CleanEngine.list(usersDir) else { return nil }
-        var roots = systemRoots
+        var userRoots: [String] = []
         for user in users.sorted() where !user.hasPrefix(".") {
             let apps = (usersDir as NSString).appendingPathComponent(user) + "/Applications"
             for root in [apps, apps + "/Setapp"] {
                 let fd = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
-                if fd >= 0 { close(fd); roots.append(root) }
+                if fd >= 0 { close(fd); userRoots.append(root) }
             }
         }
-        return InstalledApps.bundleIDs(searchRoots: roots, extra: []).map { Set($0.map { $0.lowercased() }) }
+        guard var ids = InstalledApps.bundleIDs(searchRoots: systemRoots, extra: []) else { return nil }
+        for root in userRoots {
+            ids.formUnion(InstalledApps.apps(searchRoots: [root], trust: .user)?.map(\.bundleID) ?? [])
+        }
+        return Set(ids.map { $0.lowercased() })
     }
 
     /// The first rule in `rules` claiming `path`, if it needs administrator rights.

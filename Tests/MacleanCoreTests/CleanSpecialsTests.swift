@@ -313,3 +313,59 @@ private struct Fixture {
         #expect(InstalledApps.bundleIDs(searchRoots: [t.url("Apps")], extra: []) == nil)
     }
 }
+
+// MARK: - Bounded, no-follow plist reads (root reads user-controlled Info.plist files)
+
+@Suite struct SafePlistReadTests {
+    @Test func fifoPlistIsUnreadableWithoutBlocking() {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        #expect(mkfifo(t.url("Info.plist"), 0o600) == 0)
+        guard case .failure(.unreadable) = PlistReader.dictionary(atPath: t.url("Info.plist")) else {
+            Issue.record("expected unreadable"); return
+        }
+    }
+
+    @Test func symlinkedPlistIsNotFollowed() {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        writePlist(["CFBundleIdentifier": "com.real"], to: t.url("real.plist"))
+        t.symlink("Info.plist", to: t.url("real.plist"))
+        guard case .success = PlistReader.dictionary(atPath: t.url("real.plist")) else { Issue.record("real"); return }
+        guard case .failure(.unreadable) = PlistReader.dictionary(atPath: t.url("Info.plist")) else {
+            Issue.record("expected unreadable"); return
+        }
+    }
+
+    @Test func oversizedPlistIsRejected() throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        let padding = String(repeating: "x", count: PlistReader.maxSize)
+        let big = try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": "com.big", "pad": padding],
+                                                     format: .xml, options: 0)
+        try big.write(to: URL(fileURLWithPath: t.url("Info.plist")))
+        guard case .failure(.unreadable) = PlistReader.dictionary(atPath: t.url("Info.plist")) else {
+            Issue.record("expected unreadable"); return
+        }
+    }
+
+    @Test func installedAppsTrustLevels() {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        writePlist(["CFBundleIdentifier": "com.good"], to: t.url("Apps/Good.app/Contents/Info.plist"))
+        writePlist(["CFBundleIdentifier": "com.elsewhere"], to: t.url("Elsewhere/Real.app/Contents/Info.plist"))
+        writePlist(["CFBundleIdentifier": "com.contents"], to: t.url("Elsewhere/Contents/Info.plist"))
+        t.symlink("Apps/Linked.app", to: t.url("Elsewhere/Real.app"))
+        t.dir("Apps/LinkedContents.app")
+        t.symlink("Apps/LinkedContents.app/Contents", to: t.url("Elsewhere/Contents"))
+        t.symlink("Apps/LinkedDir", to: t.url("Elsewhere"))
+
+        // System trust follows a symlinked `.app` (Safari in /Applications) and its `Contents`.
+        #expect(Set(InstalledApps.apps(searchRoots: [t.url("Apps")])?.map(\.bundleID) ?? [])
+                == ["com.good", "com.elsewhere", "com.contents"])
+        // User trust follows no symlink.
+        #expect(InstalledApps.apps(searchRoots: [t.url("Apps")], trust: .user)?.map(\.bundleID) == ["com.good"])
+
+        // A FIFO Info.plist: system trust fails closed, user trust passes the app over.
+        t.dir("Apps/Fifo.app/Contents")
+        #expect(mkfifo(t.url("Apps/Fifo.app/Contents/Info.plist"), 0o600) == 0)
+        #expect(InstalledApps.apps(searchRoots: [t.url("Apps")]) == nil)
+        #expect(InstalledApps.apps(searchRoots: [t.url("Apps")], trust: .user)?.map(\.bundleID) == ["com.good"])
+    }
+}
