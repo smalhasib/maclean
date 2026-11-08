@@ -325,6 +325,14 @@ import Observation
         mutateView { $0.uncollectAll() }
     }
 
+    /// Size of the scanned root as it is on disk now: the scan's size less what
+    /// was deleted since. Items only collected are still on disk, so they stay in.
+    var sizeOnDisk: Int64? {
+        guard let tree else { return nil }
+        guard let view else { return tree.size(of: tree.root) }
+        return view.size(of: tree.root) + view.collectedSize
+    }
+
     /// Moves deleted items from the collector to the removed set.
     func markRemoved(_ ids: [NodeID]) { mutateView { $0.markRemoved(ids) } }
 

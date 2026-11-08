@@ -298,3 +298,26 @@ import MacleanKit
     #expect(grow.a0 == grow.a1 && abs(grow.a0 - aNew.endAngle) < 1e-9)
     #expect(back.vanished.isEmpty)
 }
+
+/// The Disks screen's "Scanned: N" is the size on disk now: deleted items leave it,
+/// items only collected (still on disk) stay in it.
+@Test @MainActor func sizeOnDiskDropsDeletedButNotCollected() async throws {
+    let s = Scratch()
+    s.file("a/x.bin", bytes: 64 * 1024)
+    s.file("b/y.bin", bytes: 32 * 1024)
+    let session = await scannedSession(s)
+    let tree = try #require(session.tree)
+    let a = try #require(tree.node(atPath: s.path + "/a"))
+    let b = try #require(tree.node(atPath: s.path + "/b"))
+    #expect(session.sizeOnDisk == tree.size(of: tree.root))
+
+    session.collect([a])
+    #expect(session.sizeOnDisk == tree.size(of: tree.root))   // collected is still on disk
+
+    session.markRemoved([a])
+    #expect(session.sizeOnDisk == tree.size(of: tree.root) - tree.size(of: a))
+
+    session.collect([b])
+    session.markRemoved([b])
+    #expect(session.sizeOnDisk == 0)
+}

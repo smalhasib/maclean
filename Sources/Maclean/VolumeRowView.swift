@@ -118,7 +118,7 @@ struct VolumeRowView: View {
                 .secondaryText()
         case .finished(let tree):
             usageBar
-            Text("Scanned: \(SizeText.string(tree.size(of: tree.root)))")
+            Text("Scanned: \(SizeText.string(session?.sizeOnDisk ?? tree.size(of: tree.root)))")
                 .secondaryText()
                 .monospacedDigit()
                 .fixedSize()
