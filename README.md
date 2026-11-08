@@ -24,9 +24,19 @@ brew install --cask maclean
 
 Update with `brew upgrade --cask maclean`.
 
-**Download**
+**Disk image (DMG)**
 
-Get `Maclean-<version>.dmg` from [Releases](https://github.com/smalhasib/maclean/releases), open it and drag Maclean to Applications (or use the `.zip`). The app isn't notarized, so allow the first launch with right-click › Open, or run `xattr -dr com.apple.quarantine /Applications/Maclean.app`.
+1. Download `Maclean-<version>.dmg` from [Releases](https://github.com/smalhasib/maclean/releases) and open it.
+2. Drag **Maclean** onto the **Applications** shortcut, then eject the disk image.
+3. Open Maclean from Applications.
+
+Maclean isn't notarized by Apple, so macOS may block the first launch ("Apple could not verify…"). To allow it, once:
+
+- **macOS 15 or later:** try to open Maclean, then go to System Settings › Privacy & Security, scroll to Security, click **Open Anyway** next to Maclean, and confirm with your password.
+- **macOS 14:** right-click Maclean in Applications and choose **Open**, then **Open** again.
+- **Terminal, any version:** `xattr -dr com.apple.quarantine /Applications/Maclean.app`
+
+Once it opens, updates install themselves from within Maclean. The zip on the same page works the same way.
 
 **From source** (Command Line Tools only, no Xcode needed)
 
