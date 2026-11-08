@@ -18,6 +18,8 @@ public struct RawEntry: Sendable {
     /// True for a directory that is a mount point (`DIR_MNTSTATUS_MNTPOINT`);
     /// always false for non-directories.
     public var isMountPoint: Bool = false
+    /// The larger of the entry's mtime and ctime, in Unix seconds; 0 when not returned.
+    public var modified: Int64 = 0
 }
 
 public enum ReadError: Error, Equatable {
@@ -74,7 +76,8 @@ public enum DirectoryReader {
         var request = attrlist()
         request.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
         request.commonattr = attrgroup_t(ATTR_CMN_RETURNED_ATTRS)
-            | attrgroup_t(ATTR_CMN_NAME | ATTR_CMN_DEVID | ATTR_CMN_OBJTYPE | ATTR_CMN_FILEID)
+            | attrgroup_t(ATTR_CMN_NAME | ATTR_CMN_DEVID | ATTR_CMN_OBJTYPE | ATTR_CMN_MODTIME | ATTR_CMN_CHGTIME
+                | ATTR_CMN_FILEID)
         request.dirattr = attrgroup_t(ATTR_DIR_MOUNTSTATUS)
         request.fileattr = attrgroup_t(ATTR_FILE_LINKCOUNT | ATTR_FILE_ALLOCSIZE)
         request.forkattr = attrgroup_t(ATTR_CMNEXT_CLONEID | ATTR_CMNEXT_CLONE_REFCNT)
@@ -135,6 +138,8 @@ public enum DirectoryReader {
 
         let device = has(returned.commonattr, ATTR_CMN_DEVID) ? try read(dev_t.self) : 0
         let objType = has(returned.commonattr, ATTR_CMN_OBJTYPE) ? try read(fsobj_type_t.self) : VNON.rawValue
+        let mtime = has(returned.commonattr, ATTR_CMN_MODTIME) ? try read(timespec.self) : timespec()
+        let ctime = has(returned.commonattr, ATTR_CMN_CHGTIME) ? try read(timespec.self) : timespec()
         let inode = has(returned.commonattr, ATTR_CMN_FILEID) ? try read(UInt64.self) : 0
 
         let mountStatus = has(returned.dirattr, ATTR_DIR_MOUNTSTATUS) ? try read(UInt32.self) : 0
@@ -156,6 +161,7 @@ public enum DirectoryReader {
             name: name, kind: kind, inode: inode, device: device,
             linkCount: linkCount, allocatedSize: kind == .directory ? 0 : allocated,
             cloneID: cloneID, cloneRefCount: cloneRefCount,
-            isMountPoint: kind == .directory && mountStatus & UInt32(DIR_MNTSTATUS_MNTPOINT) != 0)
+            isMountPoint: kind == .directory && mountStatus & UInt32(DIR_MNTSTATUS_MNTPOINT) != 0,
+            modified: Int64(max(mtime.tv_sec, ctime.tv_sec)))
     }
 }
