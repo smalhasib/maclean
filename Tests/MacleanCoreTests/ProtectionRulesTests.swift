@@ -173,14 +173,26 @@ private struct SmartFixture {
     }
 }
 
-/// Corpus entries Smart Clean does not refuse by rule: user-installed software
-/// outside the sealed volume, which the catalog never targets anyway.
-private let smartCleanUnruled: Set<String> = ["/usr/local/lib", "/usr/local/bin/brew"]
-
+/// Every corpus entry is refused by the rule layer itself (no realpath, so
+/// non-existent parents can't make the test pass), and `.unsafePath` only
+/// for the entries whose shape is unsafe.
 @Test func smartCleanRefusesEveryCorpusEntry() throws {
-    for p in try corpus() where !smartCleanUnruled.contains(p) {
-        #expect(ProtectionRules.refusal(for: p, context: .smartClean, in: env) != nil,
-                "should be refused: \(p.debugDescription)")
+    let expected: [String: Refusal] = [
+        "/Users/me/Library": .criticalRoot, "/Users/me/Library/Keychains": .personalData,
+        "/Users/me/Library/Keychains/login.keychain-db": .personalData, "/users/me/library/KEYCHAINS": .personalData,
+        "/Library/Keychains": .personalData, "/Users/Guest": .criticalRoot, "/Users/other": .criticalRoot,
+        "/Users/me/Pictures/Photos Library.photoslibrary": .personalData, "/Library/Application Support": .criticalRoot,
+        "/Library/Caches": .criticalRoot, "/usr/local/lib": .criticalRoot, "/usr/local/bin/brew": .criticalRoot,
+        "/opt/homebrew": .criticalRoot, "/Volumes/Ext/Movies": .criticalRoot,
+        "/private/var/folders/zz/abc/T": .criticalRoot, "/tmp/scratch": .criticalRoot, "/var/tmp/scratch": .criticalRoot,
+    ]
+    for p in try corpus() {
+        let r = ProtectionRules.ruleRefusal(for: p, in: env)
+        #expect(r != nil, "should be refused: \(p.debugDescription)")
+        if let want = expected[p] { #expect(r == want, "\(p): \(String(describing: r))") }
+        let unsafeShape = !p.hasPrefix("/") || p.contains("..") || p.contains("//") || p.hasSuffix("/")
+            || p.contains("/./") || p.hasSuffix("/.") || p.unicodeScalars.contains { $0.value < 0x20 || (0x7F...0x9F).contains($0.value) }
+        if r == .unsafePath { #expect(unsafeShape || p.contains("\\u{"), "unexpected unsafePath: \(p.debugDescription)") }
     }
 }
 
@@ -296,6 +308,46 @@ private let smartCleanUnruled: Set<String> = ["/usr/local/lib", "/usr/local/bin/
     #expect(f.check(chrome + "/Cache") == nil)
     #expect(f.check(chrome + "/Code Cache/js") == nil)
     #expect(f.check(f.home + "/Library/Containers/com.apple.mail/Data/Library/Mail Downloads") == nil)
+}
+
+@Test func usrAndOtherVolumesAreCriticalButNotAHomeThere() {
+    for p in ["/usr/local/lib", "/usr/local/bin/brew", "/usr/local/Cellar/x"] {
+        #expect(ProtectionRules.ruleRefusal(for: p, in: env) == .criticalRoot, "\(p)")
+    }
+    let onVolume = ProtectionEnvironment(home: "/Volumes/X/home/me", appBundle: "/Applications/Maclean.app",
+                                         mountPoints: ["/"], timeMachineMounts: [])
+    #expect(ProtectionRules.ruleRefusal(for: "/Volumes/X/home/me/Library/Caches/com.example.app", in: onVolume) == nil)
+    #expect(ProtectionRules.ruleRefusal(for: "/Volumes/X/other", in: onVolume) == .criticalRoot)
+}
+
+@Test func ancestorsOfPersonalDataAreRefused() {
+    let h = "/Users/me", a = h + "/Library/Application Support"
+    for p in [h + "/Library/Safari", h + "/Pictures", a + "/Google", a + "/Google/Chrome", a + "/Arc",
+              a + "/BraveSoftware", a + "/BraveSoftware/Brave-Browser", a + "/Microsoft Edge", a + "/Firefox",
+              a + "/Firefox/Profiles", a + "/Firefox/Profiles/abc.default/places.sqlite",
+              h + "/Library/Safari/History.db-wal", h + "/Library/Safari/History.db-shm",
+              h + "/Library/Safari/Bookmarks.plist"] {
+        #expect(ProtectionRules.ruleRefusal(for: p, in: env) == .personalData, "\(p)")
+    }
+    #expect(ProtectionRules.ruleRefusal(for: a + "/Google/Chrome/Default/Cache", in: env) == nil)
+    #expect(ProtectionRules.ruleRefusal(for: a + "/Google/Chrome/Default/GPUCache/x", in: env) == nil)
+    #expect(ProtectionRules.ruleRefusal(for: a + "/Firefox/Profiles/abc.default/Cache/x", in: env) == nil)
+}
+
+@Test func protectedPrefixNeedsDotBoundary() {
+    let c = "/Users/me/Library/Caches/"
+    #expect(ProtectionRules.ruleRefusal(for: c + "com.eset", in: env) == .protectedApp)
+    #expect(ProtectionRules.ruleRefusal(for: c + "com.eset.endpoint", in: env) == .protectedApp)
+    #expect(ProtectionRules.ruleRefusal(for: c + "com.esetfoo", in: env) == nil)
+}
+
+@Test func idleAssetsUnderAnyAccountsFoldersAllowed() {
+    let t = "/private/var/folders/ab/cdef12/T/"
+    #expect(ProtectionRules.ruleRefusal(for: t + "com.apple.idleassetsd/CFNetworkDownload_x.tmp", in: env) == nil)
+    #expect(ProtectionRules.ruleRefusal(for: "/var/folders/ab/cdef12/T/com.apple.idleassetsd/CFNetworkDownload_x.tmp", in: env) == nil)
+    #expect(ProtectionRules.ruleRefusal(for: t + "com.apple.other/x", in: env) == .appleSystem)
+    #expect(ProtectionRules.ruleRefusal(for: t + "foo/x", in: env) == .criticalRoot)
+    #expect(ProtectionRules.ruleRefusal(for: "/private/var/folders/ab/cdef12/C/com.apple.idleassetsd/x", in: env) == .criticalRoot)
 }
 
 @Test func privateIsRefusedOutsideAllowlist() {

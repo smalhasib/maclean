@@ -129,11 +129,15 @@ public enum ProtectionRules {
     /// Browser profile roots, relative to `Application Support`, folded.
     private static let browserRoots: [[String]] = [
         ["google", "chrome"], ["chromium"], ["bravesoftware", "brave-browser"], ["microsoft edge"],
-        ["arc", "user data"], ["vivaldi"], ["com.operasoftware.opera"], ["firefox"],
+        ["arc", "user data"], ["vivaldi"], ["com.operasoftware.opera"], ["firefox", "profiles"],
     ]
     private static let personalNames: Set<String> =
         ["keychains", "accounts", "mail", "messages", "calendars", "contacts", "mobile documents"]
-    private static let safariFiles: Set<String> = ["history.db", "bookmarks.plist", "localstorage"]
+    private static let safariFiles: Set<String> = [
+        "history.db", "history.db-wal", "history.db-shm", "history.db-journal", "bookmarks.plist", "localstorage",
+        "cloudtabs.db", "cloudtabs.db-wal", "cloudtabs.db-shm", "lastsession.plist", "topsites.plist",
+        "downloads.plist",
+    ]
 
     private static let criticalAbsolute = ["/", "/Applications", "/Users", "/Users/Shared", "/Volumes",
                                            "/opt/homebrew", "/etc", "/private/etc", "/private/var/db",
@@ -153,6 +157,12 @@ public enum ProtectionRules {
     }()
 
     /// Rules 3-8 of §6.4 on a path that already passed the collector rules.
+    /// The pure rule layer (collector rules plus rules 3-8): no `realpath`, so
+    /// nothing depends on the path existing. Exposed for tests.
+    static func ruleRefusal(for path: String, in env: ProtectionEnvironment) -> Refusal? {
+        collectorRefusal(for: path, in: env) ?? smartCleanRefusal(for: path, in: env)
+    }
+
     private static func smartCleanRefusal(for path: String, in env: ProtectionEnvironment) -> Refusal? {
         guard var p = components(of: path).map(canonical) else { return .unsafePath }
         if p.count >= 3, p[0] == "system", p[1] == "volumes", p[2] == "data" {
@@ -162,14 +172,17 @@ public enum ProtectionRules {
         let home = env.home
         let critical = criticalAbsolute + criticalInHome.map { home + "/" + $0 }
         if critical.contains(where: { equal(p, $0) }) || (p.count == 2 && p[0] == "users") { return .criticalRoot }
+        // Smart Clean never touches /usr (/usr/local included), nor other volumes (except a home on one).
+        if p.first == "usr" { return .criticalRoot }
+        if p.first == "volumes", !inside(p, root: home) { return .criticalRoot }
 
-        if isPersonalData(p) { return .personalData }
+        if isPersonalData(p, home: home) { return .personalData }
         if env.neverClean.contains(where: { entry in
             let e = normalized(entry.hasPrefix("~/") ? home + entry.dropFirst() : entry == "~" ? home : entry)
             return !e.isEmpty && (p.starts(with: e) || e.starts(with: p))
         }) { return .neverClean }
 
-        if p.contains(where: { c in protectedBundlePrefixes.contains { c.hasPrefix($0.lowercased()) } }) {
+        if p.contains(where: { c in protectedBundlePrefixes.contains { c == $0.lowercased() || c.hasPrefix($0.lowercased() + ".") } }) {
             return .protectedApp
         }
         for (i, c) in p.enumerated() where c.hasPrefix("com.apple.") {
@@ -178,9 +191,14 @@ public enum ProtectionRules {
 
         if p.first == "private" {
             let allowed = privateAllowed.contains { inside(p, root: $0) && p.count > normalized($0).count }
-            if !allowed && !inUserFolders(p) { return .criticalRoot }
+            if !allowed && !inUserFolders(p) && !isIdleAssets(p) { return .criticalRoot }
         }
         return nil
+    }
+
+    /// §6.2a: `/private/var/folders/*/*/T/com.apple.idleassetsd/…`, any account's.
+    private static func isIdleAssets(_ p: [String]) -> Bool {
+        p.count > 7 && p[1] == "var" && p[2] == "folders" && p[5] == "t" && p[6] == "com.apple.idleassetsd"
     }
 
     private static func inUserFolders(_ p: [String]) -> Bool {
@@ -195,15 +213,20 @@ public enum ProtectionRules {
         }
     }
 
-    private static func isPersonalData(_ p: [String]) -> Bool {
+    private static func isPersonalData(_ p: [String], home: String) -> Bool {
+        // Folders that contain protected data are refused too.
+        if p.last == "safari" || equal(p, home + "/Pictures") { return true }
         if p.contains(where: { personalNames.contains($0) || $0.hasSuffix(".photoslibrary") }) { return true }
         if let i = p.firstIndex(where: { $0 == "safari" || $0 == "com.apple.safari" }),
            p[(i + 1)...].contains(where: { safariFiles.contains($0) }) { return true }
         // Browser profile data: refused unless inside a cache folder.
         if let i = p.firstIndex(of: "application support") {
             let below = p[(i + 1)...]
-            for root in browserRoots where below.starts(with: root) {
-                return !below.dropFirst(root.count).contains(where: { browserCacheDirs.contains($0) })
+            for root in browserRoots {
+                if root.starts(with: below), !below.isEmpty { return true }       // ancestor of a profile root
+                if below.starts(with: root) {
+                    return !below.dropFirst(root.count).contains(where: { browserCacheDirs.contains($0) })
+                }
             }
         }
         return false
