@@ -47,6 +47,19 @@ private func entries(_ dir: URL) -> [String] {
     #expect(throws: (any Error).self) { try AdminRead.parse(swapped) }
 }
 
+@Test func readParseRefusesDuplicatesAndTooManyPaths() throws {
+    func parse(_ paths: [String]) throws -> AdminRead.Request {
+        let (file, hash) = try AdminRead.writePathsFile(paths)
+        defer { AdminMeasure.removePathsFile(file) }
+        return try AdminRead.parse(AdminRead.arguments(root: "/r", pathsFile: file.path, sha256: hash,
+                                                       outDir: "/tmp/o", uid: 501))
+    }
+    let max = (0 ..< AdminRead.maxPaths).map { "/r/\($0)" }
+    #expect(try parse(max).paths.count == AdminRead.maxPaths)
+    #expect(throws: (any Error).self) { try parse(max + ["/r/extra"]) }
+    #expect(throws: (any Error).self) { try parse(["/r/a", "/r/b", "/r/a"]) }
+}
+
 @Test func readRefusesTamperedPathsFile() throws {
     let (file, hash) = try AdminRead.writePathsFile(["/Users/me/a"])
     defer { AdminMeasure.removePathsFile(file) }
@@ -112,20 +125,51 @@ private func entries(_ dir: URL) -> [String] {
     defer { withExtendedLifetime(t) {} }
     t.file("r/a/f", bytes: 5000)
     t.file("other/secret", bytes: 5000)
+    t.file("other/sub/secret", bytes: 5000)
     t.symlink("r/link", to: t.url("other"))
     let out = try AdminRead.makeOutDir()
     defer { removeDir(out) }
 
-    let paths = [t.url("other"), t.url("r/../other"), t.url("r/link"), t.url("r"), "/", t.url("r/a/../a"),
-                 t.url("r/missing"), t.url("r/a")]
+    let paths = [t.url("other"), t.url("r/../other"), t.url("r/link"), t.url("r/link/sub"), t.url("r"), "/",
+                 t.url("r/a/../a"), t.url("r/missing"), t.url("r/a"), t.url("r/a")]
     let lines = await AdminRead.perform(request(root: t.url("r"), paths: paths, outDir: out), scan: scanner)
     #expect(lines.map(\.path) == paths)
-    for line in lines.prefix(6) {
+    for line in lines.prefix(7) {
         #expect(line.error == AdminRead.outsideTheScan && line.file == nil, "\(line.path)")
     }
-    #expect(lines[6].error != nil && lines[6].file == nil)
-    #expect(lines[7].error == nil && lines[7].file != nil)
-    #expect(entries(out) == ["7.mtree"])
+    #expect(lines[7].error != nil && lines[7].file == nil)
+    #expect(lines[8].error == nil && lines[8].file != nil)
+    #expect(lines[9].error != nil && lines[9].file == nil)  // listed twice
+    #expect(entries(out) == ["8.mtree"])
+}
+
+@Test func readRefusesFolderSwappedDuringScan() async throws {
+    let t = TempDir()
+    defer { withExtendedLifetime(t) {} }
+    t.file("r/a/f", bytes: 5000)
+    t.file("other/secret", bytes: 5000)
+    let out = try AdminRead.makeOutDir()
+    defer { removeDir(out) }
+    let fm = FileManager.default
+
+    // Swapped for a symlink pointing outside the root, after the checks.
+    let lines = await AdminRead.perform(request(root: t.url("r"), paths: [t.url("r/a")], outDir: out)) { path, b in
+        try fm.moveItem(atPath: t.url("r/a"), toPath: t.url("r/a-moved"))
+        try fm.createSymbolicLink(atPath: t.url("r/a"), withDestinationPath: t.url("other"))
+        return try await Scanner.scan(path: path, boundary: b)
+    }
+    #expect(lines.map(\.error) == [AdminRead.outsideTheScan] && lines[0].file == nil)
+    #expect(entries(out).isEmpty)
+
+    // Swapped for another directory at the same path (same name, same device).
+    t.file("r/c/f", bytes: 5000)
+    let swapped = await AdminRead.perform(request(root: t.url("r"), paths: [t.url("r/c")], outDir: out)) { path, b in
+        try fm.moveItem(atPath: t.url("r/c"), toPath: t.url("r/c-moved"))
+        try fm.createDirectory(atPath: t.url("r/c"), withIntermediateDirectories: false)
+        return try await Scanner.scan(path: path, boundary: b)
+    }
+    #expect(swapped.map(\.error) == [AdminRead.outsideTheScan] && swapped[0].file == nil)
+    #expect(entries(out).isEmpty)
 }
 
 @Test func readWritesArchivePerPath() async throws {

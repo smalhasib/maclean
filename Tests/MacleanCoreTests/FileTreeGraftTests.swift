@@ -72,6 +72,7 @@ private func subtreeA(rootPath: String = "/r/a") -> FileTree {
         #expect(grafted.inode(of: new) == tree.inode(of: old))
         #expect(grafted.device(of: new) == tree.device(of: old))
         #expect(grafted.flags(of: new) == tree.flags(of: old))
+        #expect(grafted.fileCount(of: new) == tree.fileCount(of: old))
         #expect(grafted.path(of: new) == path)
     }
     #expect(grafted.inode(of: grafted.root) == 1 && grafted.device(of: grafted.root) == 1)

@@ -48,6 +48,9 @@ public enum AdminRead {
     static let unresolvable = "not found"
     static let unreadable = "unreadable"
     static let writeFailed = "couldn't save the result"
+    static let duplicate = "listed twice"
+    /// Most paths one request may list.
+    public static let maxPaths = 10_000
 
     public static func arguments(root: String, pathsFile: String, sha256: String, outDir: String,
                                  uid: uid_t) -> [String] {
@@ -69,8 +72,8 @@ public enum AdminRead {
         return URL(fileURLWithPath: String(cString: dir), isDirectory: true)
     }
 
-    /// Parses the argv of `read-restricted`. Refuses uid 0: root never hands
-    /// archives to itself.
+    /// Parses the argv of `read-restricted`. Refuses uid 0 (root never hands
+    /// archives to itself), more than `maxPaths` paths, and duplicate paths.
     public static func parse(_ arguments: [String]) throws -> Request {
         guard arguments.count == 11, arguments[0] == "read-restricted", arguments[1] == "--root",
               arguments[3] == "--paths-file", arguments[5] == "--paths-sha256", arguments[7] == "--out-dir",
@@ -83,6 +86,8 @@ public enum AdminRead {
         do {
             let data = try AdminDelete.readVerifiedFile(path: arguments[4], sha256: arguments[6])
             let paths = try JSONDecoder().decode([String].self, from: data)
+            guard paths.count <= maxPaths else { throw AdminDelete.ParseError.malformed("too many paths") }
+            guard Set(paths).count == paths.count else { throw AdminDelete.ParseError.malformed("duplicate paths") }
             return Request(root: arguments[2], paths: paths, outDir: arguments[8], uid: uid)
         } catch {
             throw AdminDelete.ParseError.malformed(String(describing: error))
@@ -97,7 +102,14 @@ public enum AdminRead {
     /// (`realpath`) form, strictly inside the canonical root, on a device the
     /// root's boundary allows and not under a skipped path; the scanned tree's
     /// root (resolved by the scanner, device from its open fd) is checked
-    /// again before anything is written. Path `i` is written to
+    /// again before anything is written. Before the scan the folder is pinned:
+    /// opened component by component from `/` with `O_NOFOLLOW` (the path is
+    /// canonical, so no component may be a symlink) and held open; the
+    /// scanned tree's root inode and device must equal the pinned folder's
+    /// (directories can't be hard-linked), so a folder swapped after the
+    /// checks, by a symlink anywhere in its path or by another directory, is
+    /// refused. More than `maxPaths` paths refuse the whole request; a repeated
+    /// path gets an error line. Path `i` is written to
     /// `outDir/<i>.mtree`: created `O_EXCL | O_NOFOLLOW` under a temp name,
     /// mode 0600, `fchown`ed to `uid` when running as root, then renamed into
     /// place without replacing anything.
@@ -106,6 +118,7 @@ public enum AdminRead {
         func failAll(_ error: String) -> [Line] {
             request.paths.map { Line(path: $0, file: nil, error: error) }
         }
+        guard request.paths.count <= maxPaths else { return failAll(outsideTheScan) }
         guard request.uid != 0, let dirFD = openOutDir(request.outDir, uid: request.uid) else {
             return failAll(badOutDir)
         }
@@ -120,8 +133,13 @@ public enum AdminRead {
         }
 
         var lines: [Line] = []
+        var seen: Set<String> = []
         for (index, path) in request.paths.enumerated() {
             func failure(_ error: String) -> Line { Line(path: path, file: nil, error: error) }
+            guard seen.insert(path).inserted else {
+                lines.append(failure(duplicate))
+                continue
+            }
             guard let canonical = ScanBoundary.canonicalPath(path) else {
                 lines.append(failure(unresolvable))
                 continue
@@ -131,13 +149,27 @@ public enum AdminRead {
                 lines.append(failure(outsideTheScan))
                 continue
             }
+            let pinned: (fd: Int32, inode: UInt64, device: Int32)
+            switch pin(path) {
+            case .success(let p): pinned = p
+            case .failure(let error):
+                lines.append(failure(error.errno == ELOOP || error.errno == ENOTDIR ? outsideTheScan : unreadable))
+                continue
+            }
+            defer { close(pinned.fd) }  // held open so its inode can't be reused during the scan
+            guard allowed(path, device: pinned.device) else {
+                lines.append(failure(outsideTheScan))
+                continue
+            }
             let tree: FileTree
             do { tree = try await scan(path, boundary) } catch {
                 lines.append(failure(unreadable))
                 continue
             }
-            // The scanner resolved and opened the folder itself: re-check what it read.
-            guard tree.rootPath == path, allowed(tree.rootPath, device: tree.device(of: tree.root)) else {
+            // The scanner resolved and opened the folder itself: it must be the pinned one.
+            guard tree.rootPath == path, tree.inode(of: tree.root) == pinned.inode,
+                  tree.device(of: tree.root) == pinned.device,
+                  allowed(tree.rootPath, device: tree.device(of: tree.root)) else {
                 lines.append(failure(outsideTheScan))
                 continue
             }
@@ -150,6 +182,32 @@ public enum AdminRead {
                               error: nil))
         }
         return lines
+    }
+
+    struct OpenError: Error { let errno: Int32 }
+
+    /// Opens the directory at the absolute `path` one component at a time
+    /// from `/`, never following a symlink, and returns the open fd with its
+    /// inode and device; or the failing `errno` (`ELOOP`/`ENOTDIR` when a
+    /// component is a symlink or not a directory).
+    static func pin(_ path: String) -> Result<(fd: Int32, inode: UInt64, device: Int32), OpenError> {
+        let flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        var fd = open("/", flags)
+        guard fd >= 0 else { return .failure(OpenError(errno: errno)) }
+        for component in path.split(separator: "/") {
+            let next = openat(fd, String(component), flags)
+            let e = errno
+            close(fd)
+            guard next >= 0 else { return .failure(OpenError(errno: e)) }
+            fd = next
+        }
+        var st = stat()
+        guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR else {
+            let e = errno
+            close(fd)
+            return .failure(OpenError(errno: e == 0 ? ENOTDIR : e))
+        }
+        return .success((fd, UInt64(st.st_ino), st.st_dev))
     }
 
     /// The open out dir, or nil unless it is a real directory (not a symlink)
