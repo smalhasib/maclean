@@ -186,6 +186,16 @@ public enum CleanCatalog {
         return dir
     }()
 
+    /// EDR/MDM vendor folders (Maclean's own list). While any exists, the Darwin
+    /// GPU cache rows are skipped: these tools may watch or rely on those caches.
+    public static let securityToolFolders: [String] = [
+        "/Library/Application Support/CrowdStrike",
+        "/Library/Application Support/JAMF",
+        "/Library/Application Support/Microsoft/Defender",
+        "/Library/Application Support/SentinelOne",
+        "/opt/cisco",
+    ]
+
     private static let system: [R] = [
         R(id: "sys.logs.diagnostics", category: .systemLogs, pattern: "/Library/Logs/DiagnosticReports",
           unit: .eachChild, ageTiers: [(7, .safe)], requiresAdmin: true, reason: "Old crash and diagnostic reports"),
@@ -211,7 +221,8 @@ public enum CleanCatalog {
     ] + (darwinCacheDir.map { dir in
         ["com.apple.metal", "com.apple.metalfe", "com.apple.gpuarchiver"].map {
             R(id: "sys.darwin.\($0.dropFirst("com.apple.".count))", category: .systemCaches, pattern: "\(dir)/\($0)",
-              unit: .folder, ageTiers: [(1, .safe)], reason: "Graphics shader cache, rebuilt automatically")
+              unit: .folder, ageTiers: [(1, .safe)], special: .skipIfSecurityTool,
+              reason: "Graphics shader cache, rebuilt automatically")
         }
     } ?? []) + [
         R(id: "sys.idleassets", category: .systemCaches,

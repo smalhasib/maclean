@@ -21,7 +21,18 @@ public struct CleanRule: Sendable, Identifiable {
     /// - `containerBundleID`: the component after `Containers`; also checks open files.
     /// - `appSupportFolder`: the component after `Application Support`, resolved by the probes.
     public enum Owner: Sendable { case none, bundleID(String), childNameIfBundleID, containerBundleID, appSupportFolder, processName(String) }
-    public enum Special: Sendable { case none, keepNewest(Int), derivedData, removedAppLeftover, projectArtifacts, launchdOrphan, macOSInstaller, downloadsInstaller }
+    /// Rule-specific behaviour:
+    /// - `removedAppLeftover`: claims only bundle-id names whose app isn't installed
+    ///   (§6.6); anything else falls through to later rules.
+    /// - `launchdOrphan`: offered only if the program is missing or the helper's app is gone.
+    /// - `macOSInstaller`: offered only for a different macOS version.
+    /// - `downloadsInstaller`: aged by the date it was added (download date).
+    /// - `derivedData`: shown by project name.
+    /// - `skipIfSecurityTool`: skipped while an EDR/MDM tool is installed (§6.2a Darwin caches).
+    public enum Special: Sendable {
+        case none, keepNewest(Int), derivedData, removedAppLeftover, projectArtifacts, launchdOrphan, macOSInstaller,
+             downloadsInstaller, skipIfSecurityTool
+    }
 
     public let id: String
     public let category: Category
@@ -158,4 +169,6 @@ public protocol CleanProbes: Sendable {
     func projectArtifacts(roots: [String]) -> [ProjectArtifact]
     /// Process working directories; nil = couldn't tell.
     func workingDirectories() -> [String]?
+    /// Whether any folder in `CleanCatalog.securityToolFolders` exists.
+    func securityToolInstalled() -> Bool
 }

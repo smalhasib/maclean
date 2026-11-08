@@ -11,6 +11,9 @@ struct FakeProbes: CleanProbes {
     var open: Set<String> = []
     var processes: Set<String> = []
     var appSupport: [String: String] = [:]
+    /// nil = the installed-apps check failed.
+    var installed: Set<String>? = []
+    var securityTool = false
 
     func isRunning(bundleID: String) -> Bool? {
         unknownOwners.contains(bundleID) ? nil : running.contains(bundleID)
@@ -18,9 +21,10 @@ struct FakeProbes: CleanProbes {
     func isOpen(path: String) -> Bool? { open.contains(path) }
     func isProcessRunning(name: String) -> Bool? { processes.contains(name) }
     func bundleID(appSupportFolder: String) -> String? { appSupport[appSupportFolder] }
-    func installedBundleIDs() -> Set<String>? { [] }
+    func installedBundleIDs() -> Set<String>? { installed }
     func projectArtifacts(roots: [String]) -> [ProjectArtifact] { [] }
     func workingDirectories() -> [String]? { [] }
+    func securityToolInstalled() -> Bool { securityTool }
 }
 
 private func days(_ n: Double) -> Date { Date().addingTimeInterval(n * 86400) }
@@ -228,13 +232,14 @@ private struct Fixture {
         #expect(r.candidates.map(\.path) == [f.t.url("home/Library/Logs/Sim/a")])
     }
 
-    @Test func unimplementedSpecialOffersNothing() async {
+    @Test func leftoverOfInstalledAppFallsThrough() async {
         let f = Fixture()
         defer { withExtendedLifetime(f) {} }
-        f.t.file("home/Library/Caches/com.gone.app/x", bytes: 10)
+        f.t.file("home/Library/Caches/com.a.b/x", bytes: 10)
         let leftovers = rule("left", "~/Library/Caches", category: .removedApps, tiers: [(30, .review)],
                              owner: .childNameIfBundleID, special: .removedAppLeftover)
-        let r = await f.run([leftovers, rule("c", "~/Library/Caches", owner: .childNameIfBundleID)])
+        let r = await f.run([leftovers, rule("c", "~/Library/Caches", owner: .childNameIfBundleID)],
+                            probes: FakeProbes(installed: ["com.a.b"]))
         #expect(r.candidates.map(\.ruleID) == ["c"])
     }
 
