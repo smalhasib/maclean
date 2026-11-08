@@ -36,7 +36,7 @@ brew install --cask maclean
 
 `brew trust` is needed once on Homebrew versions that only load casks from taps you've trusted. The cask lives in [smalhasib/homebrew-maclean](https://github.com/smalhasib/homebrew-maclean). This installs `Maclean.app` in `/Applications` and the `maclean-scan` command. To update, run `brew upgrade --cask maclean`. To uninstall, run `brew uninstall --cask maclean`; add `--zap` to also remove its settings.
 
-Maclean is signed ad hoc, not with an Apple Developer ID. The cask clears macOS's download quarantine flag on the installed app so it opens normally.
+Maclean is signed with a self-signed certificate, not an Apple Developer ID, so it isn't notarized. The cask clears macOS's download quarantine flag on the installed app so it opens normally.
 
 ### Download
 
@@ -58,7 +58,11 @@ scripts/build-app.sh && open .build/Maclean.app
 
 ## Getting started
 
-1. **Grant Full Disk Access (recommended).** Without it, macOS hides folders such as Mail, Messages, parts of `~/Library` and other apps' data. Those show up as restricted, counted as empty, so totals come out low. Open System Settings › Privacy & Security › Full Disk Access, add Maclean, then relaunch it.
+1. **Grant Full Disk Access (recommended).** Without it, macOS hides folders such as Mail, Messages, parts of `~/Library` and other apps' data. Those show up as restricted, counted as empty, so totals come out low.
+   - Maclean shows a Full Disk Access sheet on every launch until access is granted. It opens System Settings for you; add Maclean there, then choose **Relaunch**.
+   - Releases are signed with a stable certificate, so the grant survives updates.
+   - **Administrator password for restricted folders.** After a scan finds folders only an administrator can open, and when Smart Clean finds system items it can't measure, Maclean shows the standard macOS password dialog, which names Maclean. One dialog covers everything waiting. Cancel it and the folders stay restricted. Turn this off in Settings › General.
+   - Some privacy-protected folders stay closed even to an administrator without Full Disk Access. Maclean then says how many folders still need it, with a **Grant Access…** button.
 2. **Pick something to scan.** The start screen lists your disks and starred folders. Click a disk, or choose File › Scan Folder… (⌘O). Progress shows while it scans.
 3. **Explore the map.**
    - Click a segment to enter a folder, and click the centre to go back up.
@@ -153,8 +157,20 @@ Smart Clean looks for things that are safe to regenerate or are clearly leftover
 
 ### Settings
 
-- **General:** "Open each scan in its own window", and "Move to Trash instead of deleting permanently" (off by default).
+- **General:**
+  - "Open each scan in its own window".
+  - "Move to Trash instead of deleting permanently" (off by default).
+  - "Ask for the administrator password to read restricted folders" (on by default).
+  - "Check for updates automatically" (on by default).
 - **Smart Clean:** the launch check, a switch per category, the Never clean list, and extra folders to search for projects.
+
+### Updates
+
+- Maclean checks GitHub's releases at launch, at most once a day, unless you switch that off in Settings › General. A newer version opens a sheet with the release notes and **Skip This Version**, **Later** and **Install and Relaunch**.
+- Choose Maclean › Check for Updates… to check at once.
+- An update is downloaded, its Ed25519 signature is verified against the key built into the app, and only then does it replace the app and relaunch. If the app's folder isn't writable by you, Maclean asks for your administrator password instead.
+- Homebrew installs aren't replaced by Maclean. The sheet shows `brew upgrade --cask maclean` with a **Copy Command** button.
+- Updates never start during a delete or a Smart Clean run.
 
 ## maclean-scan (command line)
 
@@ -193,10 +209,19 @@ swift test
 
 ### Releasing
 
+One-time setup, on the release machine:
+
+- **Signing certificate.** Run `sh scripts/make-signing-cert.sh`. It creates a self-signed code-signing certificate, "Maclean Release", in your login Keychain (it may ask for the Keychain password). macOS ties Full Disk Access to the app's code signature, so signing every release with the same certificate keeps the grant across updates. The private key stays in your Keychain.
+- **Update key.** Run `mkdir -p ~/.config/maclean && swift scripts/update-key.swift generate ~/.config/maclean/update-key`. Keep that file private and backed up. Paste the public key it prints into `Sources/MacleanCore/UpdateKey.swift`. Apps already released can only verify updates signed by the key they contain, so don't lose or replace it lightly.
+
+Each release:
+
 1. Bump `CFBundleShortVersionString` in `Resources/Info.plist`.
-2. Run `scripts/package-release.sh`. It prints the zip path and its SHA-256.
-3. Create the release: `gh release create v<version> .build/Maclean-<version>.zip`.
+2. Run `scripts/package-release.sh`. It builds a universal app, signs it with "Maclean Release" (or `MACLEAN_SIGN_IDENTITY`), zips it, and signs the zip with the update key (`MACLEAN_UPDATE_KEY`, default `~/.config/maclean/update-key`). It prints the zip, the `.sig` and the SHA-256.
+3. Create the release with both files: `gh release create v<version> .build/Maclean-<version>.zip .build/Maclean-<version>.zip.sig`. The updater needs the `.sig` asset.
 4. Update `version` and `sha256` in `Casks/maclean.rb` in [smalhasib/homebrew-maclean](https://github.com/smalhasib/homebrew-maclean), then commit and push. Homebrew picks it up on the next `brew update`.
+
+0.2.0 has no updater, so 0.2.0 users move to the first self-updating release by hand (download it) or with `brew upgrade --cask maclean`. Say so in that release's notes.
 
 Bug reports and pull requests are welcome: [Issues](https://github.com/smalhasib/maclean/issues).
 

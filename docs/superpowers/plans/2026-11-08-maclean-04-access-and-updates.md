@@ -423,3 +423,55 @@
   The README's Releasing steps also cover signing, and state that 0.2.0 users move to the first self-updating release by hand or with `brew upgrade` (spec §6a.4).
 - [ ] **Step 3:** Run T and `scripts/build-app.sh`.
 - [ ] **Step 4:** Commit: `docs: access and update guides, release signing tools`.
+
+## Outcome and follow-ups
+
+### Commits
+
+Branch `plan-04-access-updates`, from `2954c6e`:
+- Task 1, admin helper in-process with prompt: `f04a0c7`, `bb134c6` (per-invocation exit status in batches).
+- Task 2, Full Disk Access sheet and prompt coordinator: `554e3fa`, `a2e6826`.
+- Task 3, root read mode and tree graft: `50adb11`, `0c15510` (pin the restricted folder before the root scan).
+- Task 4, admin reads in scans and Smart Clean: `9e801ca`, `ddf530a`.
+- Task 5, update core (versions, signatures, install source): `5a341d9`, `2af1266`.
+- Task 6, auto-update: `52d213e`, `8c8320f` (same-volume staging, safe rollback).
+- Task 6b, root install-update mode: `f04e6f0` (plan), `f56964b`, `18fe74d` (refuse downgrades, strip ACLs).
+- Task 7, release tooling, signing and docs: the commit this section ships in.
+
+Tests at the end of Task 7: 473 pass (44 + 287 + 142 across the three test targets), including the new `UpdateKeyToolTests` (a real `generate`, `sign`, `public` round trip checked with `UpdateSignature.isValid`, and a forged identity-point signature rejected). `scripts/build-app.sh` builds. `package-release.sh` was exercised end to end with a temporary key and `MACLEAN_SIGN_IDENTITY=-`, and its missing-key failure was checked.
+
+### Rulings worth remembering
+
+- R1: `UpdateInstaller` takes injectable relaunch and trash closures. Tests never terminate the process or touch the real Trash.
+- R2: the owner's update key and signing certificate are made by the owner, never by a subagent or the test suite.
+- R3: updates that can't replace the bundle as the user ask for the administrator password (reverses §6a.2). The root helper re-verifies the Ed25519 signature (the public key lives in MacleanCore), unzips into its own 0700 directory, checks the bundle id and version, and swaps only an existing Maclean.app at the requesting app's path.
+- R4: each invocation's exit status travels on its separator line in a batch, and a non-zero status fails that invocation.
+- R5: `PromptCoordinator.admin` is `async throws`, so cancelled waiters never run.
+- R6: Smart Clean's automatic measure runs on the launch check and user-initiated checks only, never the background re-check after a clean. A cancel suppresses it until the next user-initiated check.
+- R7: `UpdateSignature.isValid` rejects an all-zero public key (CryptoKit accepts forged signatures for it), which protects the placeholder period and the root helper.
+- R8: the root install work directory is a root-owned 0700 `mkdtemp` in the target's parent, with renames relative to the opened parent fd (same-volume swap). A hidden `.maclean-update-root-*` directory may remain in `/Applications` if root crashes mid-install.
+- R9: the root install refuses downgrades (request version must exceed the installed one) and strips ACLs on the unpacked bundle.
+
+### Deferred minors
+
+- **Admin dialog and prompts:** NSAppleScript runs on a GCD worker, while Apple's note says main thread (check in the manual dialog checks); duplicated fake batching loop in tests; "1 system items" and "1 folders" are unpluralized.
+- **Sheets and UI (unseen):** the access sheet set while the Smart Clean review sheet is up may not present (ancestor sheet), which gates admin invisibly; the update sheet has the same nesting concern; Clean is disabled while an automatic measure waits behind a sheet; a superseded measure still reaches the dialog and its result is dropped; full-tree walks run on the main actor.
+- **Root read and graft:** hard links crossing a graft boundary are double-counted; stale `errno` in the pin non-directory branch; the over-cap case reuses the "outside the scan" message.
+- **Update core and installer:** homebrew detection uses lexical standardizing (symlinked `/Applications` edge cases); `shouldCheck` lives on the `UpdateCheck` enum; a `Loader` continuation race when cancelled before start; the live `Loader` is untested; the timing-based stale-download test may flake; failed checks retry on each launch; a narrow delete-during-install race.
+- **Root install:** old-bundle deletion as root over a user-owned tree is shared with `--delete`, and the XNU rename semantics are unverified; a leftover `.maclean-update-root-*` after a crash; the ownership test runs non-root only; the `.downgrade` message also covers an unparseable installed version; no test sets an ACL on a symlink entry.
+- **Task 7:** only the all-zero key is refused by `UpdateSignature`. A real key that is a small-order point isn't rejected, but `generate` always makes a valid random key. `scripts/make-signing-cert.sh` was only syntax-checked and never run. It is marked executable in git's index, but run it as `sh scripts/make-signing-cert.sh`.
+
+### Steps still owed by the owner
+
+1. Run `sh scripts/make-signing-cert.sh` to create "Maclean Release" in the login Keychain (it may ask for the Keychain password). Check with `security find-identity -v -p codesigning`.
+2. Generate the update key: `mkdir -p ~/.config/maclean && swift scripts/update-key.swift generate ~/.config/maclean/update-key` (only if absent). Back the file up.
+3. Paste the printed public key into `Sources/MacleanCore/UpdateKey.swift` in place of the all-zero placeholder, and commit. Until then nothing installs.
+4. Release 0.3.0 with `scripts/package-release.sh` and `gh release create` (zip and `.sig`), then bump the cask. Note in the release notes that 0.2.0 users update by hand or with `brew upgrade --cask maclean`.
+5. Run the "Access and updates" section of `docs/manual-checklist.md`, including the root versus privacy-protection spike (record the results here), the 0.3.0 to 0.3.1 update that keeps Full Disk Access, and a real password update into a root-owned folder (the root-only chown and swap branches no automated test reaches).
+
+### Developer ID follow-ups (spec §8)
+
+With a Developer ID:
+- notarize the app, so the quarantine workaround and the cask's postflight step go away;
+- move administrator actions to an `SMAppService` privileged helper with Authorization Services, replacing the per-action AppleScript dialog and the root `install-update` mode;
+- consider the self-declared `--context` (R31) closed at that point.
