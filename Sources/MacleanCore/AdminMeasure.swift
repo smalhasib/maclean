@@ -65,7 +65,7 @@ public enum AdminMeasure {
     /// links and clones are counted once across all paths.
     public static func measureAll(_ paths: [String], environment: ProtectionEnvironment) -> [Line] {
         measureAll(paths, environment: environment, rules: CleanCatalog.rules,
-                   installed: { AdminDelete.installedBundleIDs(home: environment.home) })
+                   installed: { AdminDelete.installedBundleIDs() })
     }
 
     /// `measureAll(_:environment:)` with the rules and installed-apps set as

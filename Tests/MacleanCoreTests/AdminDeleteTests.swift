@@ -391,3 +391,36 @@ private func helperRule(_ dir: String) -> CleanRule {
                                                 now: Date() + eightDays, installed: { [] })
     #expect(verdict == .failed("Couldn't check the item's age"))
 }
+
+@Test func rootInstalledSetSearchesEveryUsersApplications() throws {
+    let t = TempDir(); defer { withExtendedLifetime(t) {} }
+    func app(_ dir: String, _ id: String) {
+        let plist = try! PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": id], format: .xml, options: 0)
+        t.dir("\(dir)/Contents")
+        try! plist.write(to: URL(fileURLWithPath: t.url("\(dir)/Contents/Info.plist")))
+    }
+    t.dir("Applications")
+    app("Users/alice/Applications/X.app", "com.x.app")
+    app("Users/carol/Applications/Setapp/S.app", "com.s.app")
+    t.dir("Users/bob/Applications")
+    t.chmod("Users/bob/Applications", 0o000)   // unreadable: skipped, not fatal
+    t.dir("Users/dave")                         // no Applications folder
+    let system = [t.url("Applications")]
+    let installed = AdminDelete.installedBundleIDs(systemRoots: system, usersDir: t.url("Users"))
+    #expect(installed == ["com.x.app", "com.s.app"])
+
+    // A helper whose app sits in another user's Applications is not an orphan,
+    // whatever home the app sent.
+    t.dir("Helpers")
+    try helperData(clients: ["com.x.app"]).write(to: URL(fileURLWithPath: t.url("Helpers/com.x.helper")))
+    #expect(AdminDelete.smartCleanVerdict(for: t.url("Helpers/com.x.helper"), rules: [helperRule(t.url("Helpers"))],
+                                          home: t.url("Users/dave"), now: Date(),
+                                          installed: { AdminDelete.installedBundleIDs(systemRoots: system,
+                                                                                      usersDir: t.url("Users")) })
+            == .refused(.unsafePath))
+
+    // `/Applications` (the first system root) must be readable.
+    #expect(AdminDelete.installedBundleIDs(systemRoots: [t.url("missing")], usersDir: t.url("Users")) == nil)
+    t.chmod("Applications", 0o000)
+    #expect(AdminDelete.installedBundleIDs(systemRoots: system, usersDir: t.url("Users")) == nil)
+}

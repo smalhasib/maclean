@@ -136,9 +136,8 @@ public enum AdminDelete {
     /// through that same parent fd, still be as old as the rule's smallest age
     /// tier (`smartCleanVerdict`). A tampered request can't reach anything else.
     public static func perform(_ item: Item, with deleter: Deleter) async -> DeleteOutcome {
-        let home = deleter.environment.home
-        return await perform(item, with: deleter, rules: CleanCatalog.rules, now: Date(),
-                             installed: { installedBundleIDs(home: home) })
+        await perform(item, with: deleter, rules: CleanCatalog.rules, now: Date(),
+                      installed: { installedBundleIDs() })
     }
 
     /// `perform(_:with:)` with the rules, clock and installed-apps set as parameters, for tests.
@@ -178,7 +177,7 @@ public enum AdminDelete {
     /// relative to it (`smartCleanVerdict(for:parentFD:rules:home:now:)`).
     public static func smartCleanVerdict(for path: String, rules: [CleanRule], home: String,
                                          now: Date) -> DeleteOutcome? {
-        smartCleanVerdict(for: path, rules: rules, home: home, now: now, installed: { installedBundleIDs(home: home) })
+        smartCleanVerdict(for: path, rules: rules, home: home, now: now, installed: { installedBundleIDs() })
     }
 
     /// `smartCleanVerdict(for:rules:home:now:)` with the installed-apps set as a parameter, for tests.
@@ -262,11 +261,28 @@ public enum AdminDelete {
         return data
     }
 
+    /// The system search roots for root's installed-apps set. `/Applications`
+    /// comes first: if it can't be read, the set is nil (refuse).
+    static let systemAppRoots = ["/Applications", "/System/Applications", "/opt/homebrew/Caskroom", "/usr/local/Caskroom"]
+
     /// Root's installed-apps set for the helper orphan test: the `.app`
     /// bundles on disk (no running-app or LaunchServices extras), lowercased.
-    static func installedBundleIDs(home: String) -> Set<String>? {
-        InstalledApps.bundleIDs(searchRoots: InstalledApps.defaultSearchRoots(home: home), extra: [])
-            .map { Set($0.map { $0.lowercased() }) }
+    /// It never depends on the app-supplied `home`: every user's
+    /// `<usersDir>/*/Applications` (and `Applications/Setapp`) is searched
+    /// after `systemRoots`. A user folder that can't be opened (other than
+    /// missing) is skipped; nil if `systemRoots[0]` or `usersDir` can't be
+    /// listed, or anything inside a searched root can't be read.
+    static func installedBundleIDs(systemRoots: [String] = systemAppRoots, usersDir: String = "/Users") -> Set<String>? {
+        guard case .success(let users) = CleanEngine.list(usersDir) else { return nil }
+        var roots = systemRoots
+        for user in users.sorted() where !user.hasPrefix(".") {
+            let apps = (usersDir as NSString).appendingPathComponent(user) + "/Applications"
+            for root in [apps, apps + "/Setapp"] {
+                let fd = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+                if fd >= 0 { close(fd); roots.append(root) }
+            }
+        }
+        return InstalledApps.bundleIDs(searchRoots: roots, extra: []).map { Set($0.map { $0.lowercased() }) }
     }
 
     /// The first rule in `rules` claiming `path`, if it needs administrator rights.
