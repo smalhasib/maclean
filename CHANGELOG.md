@@ -1,4 +1,13 @@
 # Changelog
+## 0.5.0 - 2026-11-08
+
+### Features
+- Confirm before deleting collected items
+
+
+### Fixes
+- Scanned size drops after a delete
+
 ## 0.4.0 - 2026-11-08
 
 ### Features
