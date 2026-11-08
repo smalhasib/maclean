@@ -115,7 +115,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.next.outputs.version }}
         run: |
-          gh release create "v$VERSION" ".build/Maclean-$VERSION.zip" ".build/Maclean-$VERSION.zip.sig" \
+          gh release create "v$VERSION" ".build/Maclean-$VERSION.zip" ".build/Maclean-$VERSION.zip.sig" ".build/Maclean-$VERSION.dmg" \
             --title "Maclean $VERSION" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
 
       - name: Check out the Homebrew tap

@@ -63,8 +63,19 @@ rm -f "$zip" "$zip.sig"
 ditto -c -k --keepParent .build/Maclean.app "$zip"
 swift scripts/update-key.swift sign "$key" "$zip"
 
+# A disk image for people who download by hand: the app next to an Applications
+# shortcut. The updater and the cask use the zip, so the dmg isn't signed with the update key.
+dmg=".build/Maclean-$version.dmg"
+stage="$(mktemp -d)"
+trap 'rm -rf "$stage"' EXIT
+ditto .build/Maclean.app "$stage/Maclean.app"
+ln -s /Applications "$stage/Applications"
+rm -f "$dmg"
+hdiutil create -quiet -volname Maclean -srcfolder "$stage" -format UDZO -ov "$dmg"
+
 echo "Version:   $version"
 echo "Identity:  $MACLEAN_SIGN_IDENTITY"
 echo "Zip:       $zip"
 echo "Signature: $zip.sig"
+echo "Disk image: $dmg"
 echo "SHA-256:   $(shasum -a 256 "$zip" | cut -d' ' -f1)"

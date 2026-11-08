@@ -19,7 +19,7 @@ A pull request shows the release it would cause in the run summary. It never pub
 2. Sets the version in `Resources/Info.plist`, bumps the build number, and regenerates `CHANGELOG.md`.
 3. Builds the universal app, signs it with "Maclean Release", and signs the zip with the update key (`scripts/package-release.sh`).
 4. Commits `chore(release): vX.Y.Z`, tags it, and pushes. Nothing is published before this succeeds.
-5. Creates the GitHub release (zip, `.sig`, notes from the commits), then bumps the cask in [smalhasib/homebrew-maclean](https://github.com/smalhasib/homebrew-maclean).
+5. Creates the GitHub release (zip, `.sig`, a `.dmg` for manual installs, notes from the commits), then bumps the cask in [smalhasib/homebrew-maclean](https://github.com/smalhasib/homebrew-maclean).
 
 If `main` moves while a release builds, the push fails and nothing is published; the next push to `main` releases again.
 

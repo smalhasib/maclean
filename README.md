@@ -26,7 +26,7 @@ Update with `brew upgrade --cask maclean`.
 
 **Download**
 
-Get `Maclean-<version>.zip` from [Releases](https://github.com/smalhasib/maclean/releases) and move `Maclean.app` to Applications. The app isn't notarized, so allow the first launch with right-click › Open, or run `xattr -dr com.apple.quarantine /Applications/Maclean.app`.
+Get `Maclean-<version>.dmg` from [Releases](https://github.com/smalhasib/maclean/releases), open it and drag Maclean to Applications (or use the `.zip`). The app isn't notarized, so allow the first launch with right-click › Open, or run `xattr -dr com.apple.quarantine /Applications/Maclean.app`.
 
 **From source** (Command Line Tools only, no Xcode needed)
 
