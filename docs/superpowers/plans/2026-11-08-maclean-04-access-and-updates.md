@@ -28,7 +28,7 @@
   - The `read-restricted` mode is **read-only**, requires uid 0, and reads its path list from a 0600 file whose SHA-256 is in argv (`readVerifiedFile`).
   - The `install-update` mode (Task 6b) writes only the verified Maclean bundle over an existing Maclean bundle, under the checks in spec §6a.2.
 - **Copy:**
-  - **FDA sheet:** "Give Maclean Full Disk Access"; the steps "Open System Settings › Privacy & Security › Full Disk Access", "Turn on Maclean" and "Maclean relaunches when you come back"; the button **Open System Settings**; the link "Continue without Full Disk Access".
+  - **FDA sheet:** "Give Maclean Full Disk Access"; the steps "Open System Settings › Privacy & Security › Full Disk Access", "Turn on Maclean" and "Click Relaunch when you come back"; the button **Open System Settings**; the link "Continue without Full Disk Access".
   - **Start-screen notice:** "Scans will miss protected folders — Grant Access…".
   - **After the grant:** "Full Disk Access is on. Relaunch Maclean to use it." with **Relaunch**.
   - **Admin reasons:** "Maclean needs to read N folders that only an administrator can open." and "Maclean needs to measure N system items for Smart Clean.". Joined with a space when one dialog serves both.
@@ -455,15 +455,15 @@ Tests at the end of Task 7: 473 pass (44 + 287 + 142 across the three test targe
 ### Deferred minors
 
 - **Admin dialog and prompts:** NSAppleScript runs on a GCD worker, while Apple's note says main thread (check in the manual dialog checks); duplicated fake batching loop in tests; "1 system items" and "1 folders" are unpluralized.
-- **Sheets and UI (unseen):** the access sheet set while the Smart Clean review sheet is up may not present (ancestor sheet), which gates admin invisibly; the update sheet has the same nesting concern; Clean is disabled while an automatic measure waits behind a sheet; a superseded measure still reaches the dialog and its result is dropped; full-tree walks run on the main actor.
+- **Sheets and UI (unseen):** Clean is disabled while an automatic measure waits behind a sheet; full-tree walks run on the main actor. (Fixed in the final review: the access sheet is no longer raised on activation over another view's sheet (R10), raising a sheet first shows the main window (R11), the update sheet queues in the coordinator behind the access sheet, and a superseded measure is dropped before the dialog.)
 - **Root read and graft:** hard links crossing a graft boundary are double-counted; stale `errno` in the pin non-directory branch; the over-cap case reuses the "outside the scan" message.
 - **Update core and installer:** homebrew detection uses lexical standardizing (symlinked `/Applications` edge cases); `shouldCheck` lives on the `UpdateCheck` enum; a `Loader` continuation race when cancelled before start; the live `Loader` is untested; the timing-based stale-download test may flake; failed checks retry on each launch; a narrow delete-during-install race.
 - **Root install:** old-bundle deletion as root over a user-owned tree is shared with `--delete`, and the XNU rename semantics are unverified; a leftover `.maclean-update-root-*` after a crash; the ownership test runs non-root only; the `.downgrade` message also covers an unparseable installed version; no test sets an ACL on a symlink entry.
-- **Task 7:** only the all-zero key is refused by `UpdateSignature`. A real key that is a small-order point isn't rejected, but `generate` always makes a valid random key. `scripts/make-signing-cert.sh` was only syntax-checked and never run. It is marked executable in git's index, but run it as `sh scripts/make-signing-cert.sh`.
+- **Task 7:** only the all-zero key is refused by `UpdateSignature`. A real key that is a small-order point isn't rejected, but `generate` always makes a valid random key. `scripts/make-signing-cert.sh` was only syntax-checked and never run. Task 7 committed it without the executable bit (mode 100644); the final-review fixes set it to 100755 in git. Running it as `sh scripts/make-signing-cert.sh` works either way.
 
 ### Steps still owed by the owner
 
-1. Run `sh scripts/make-signing-cert.sh` to create "Maclean Release" in the login Keychain (it may ask for the Keychain password). Check with `security find-identity -v -p codesigning`.
+1. Run `sh scripts/make-signing-cert.sh` to create "Maclean Release" in the login Keychain and trust it for code signing (it may ask for the Keychain password, and macOS asks you to authenticate for the trust setting). Check with `security find-identity -v -p codesigning`.
 2. Generate the update key: `mkdir -p ~/.config/maclean && swift scripts/update-key.swift generate ~/.config/maclean/update-key` (only if absent). Back the file up.
 3. Paste the printed public key into `Sources/MacleanCore/UpdateKey.swift` in place of the all-zero placeholder, and commit. Until then nothing installs.
 4. Release 0.3.0 with `scripts/package-release.sh` and `gh release create` (zip and `.sig`), then bump the cask. Note in the release notes that 0.2.0 users update by hand or with `brew upgrade --cask maclean`.

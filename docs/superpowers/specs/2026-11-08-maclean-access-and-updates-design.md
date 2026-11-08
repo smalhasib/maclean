@@ -39,7 +39,7 @@ The owner also wants Maclean to **update itself**, checking automatically and on
 - **Content** (copy as in the mockup):
   - a lock icon and the title "Give Maclean Full Disk Access";
   - one sentence on what is hidden without it;
-  - three numbered steps;
+  - three numbered steps: "Open System Settings › Privacy & Security › Full Disk Access", "Turn on Maclean" and "Click Relaunch when you come back";
   - a primary **Open System Settings** button, which opens `x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles`;
   - a **Continue without Full Disk Access** link.
 - **After Continue:** the start screen shows a small persistent notice, "Scans will miss protected folders — Grant Access…", which reopens the sheet. Smart Clean already lists protected locations under Skipped.
