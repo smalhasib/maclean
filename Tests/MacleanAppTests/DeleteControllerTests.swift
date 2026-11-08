@@ -478,3 +478,66 @@ private struct Fixture {
 @Test @MainActor func trashSettingKey() {
     #expect(DeleteController.trashKey == "MoveToTrashInsteadOfDeleting")
 }
+
+@Test @MainActor func requestDeleteWaitsForConfirmation() async throws {
+    let f = try await fixture(2)
+    let deleter = FakeDeleter(), clock = TestClock()
+    let c = controller(f, deleter, clock: clock)
+    c.requestDelete()
+    #expect(c.phase == .confirming)
+    #expect(c.pendingCount == 2)
+    #expect(!f.session.isDeleting)
+    #expect(clock.sleeperCount == 0)   // no countdown yet
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(deleter.calls.isEmpty)
+
+    c.confirmDelete()
+    #expect(c.phase == .countdown(remaining: 5))
+    #expect(f.session.isDeleting)
+    let report = try #require(await runToSummary(c, clock))
+    #expect(report.deleted.count == 2)
+}
+
+@Test @MainActor func cancellingTheConfirmationDeletesNothing() async throws {
+    let f = try await fixture(2)
+    let deleter = FakeDeleter(), clock = TestClock()
+    let c = controller(f, deleter, clock: clock)
+    c.requestDelete()
+    c.cancelConfirmation()
+    #expect(c.phase == .idle)
+    #expect(!f.session.isDeleting)
+    #expect(collectedPaths(f) == f.paths.sorted())
+    #expect(deleter.calls.isEmpty)
+    // Nothing to confirm any more.
+    c.confirmDelete()
+    #expect(c.phase == .idle)
+}
+
+@Test @MainActor func cancelConfirmationLeavesARunningCountdownAlone() async throws {
+    // The alert reports "dismissed" after its Delete button too: that must not cancel the countdown.
+    let f = try await fixture(1)
+    let deleter = FakeDeleter(), clock = TestClock()
+    let c = controller(f, deleter, clock: clock)
+    c.requestDelete()
+    c.confirmDelete()
+    c.cancelConfirmation()
+    #expect(c.phase == .countdown(remaining: 5))
+    c.cancel()
+}
+
+@Test @MainActor func requestDeleteNeedsCollectedItems() async throws {
+    let f = try await fixture(1)
+    f.session.uncollectAll()
+    let c = controller(f, FakeDeleter(), clock: TestClock())
+    c.requestDelete()
+    #expect(c.phase == .idle)
+}
+
+@Test @MainActor func confirmCopyNamesWhatHappens() {
+    let permanent = DeleteController.confirmCopy(count: 2, size: 1_500_000_000, mode: .permanent)
+    #expect(permanent.title == "Delete 2 items (1.5 GB)?")
+    #expect(permanent.message.contains("permanently"))
+    let trash = DeleteController.confirmCopy(count: 1, size: 4096, mode: .trash)
+    #expect(trash.title.hasPrefix("Move 1 item"))
+    #expect(trash.message.contains("Trash"))
+}

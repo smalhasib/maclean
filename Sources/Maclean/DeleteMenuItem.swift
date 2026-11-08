@@ -48,7 +48,7 @@ import AppKit
 
     @objc private func deleteCollectedItems(_ sender: Any?) {
         guard let session = router.frontModel?.session else { return }
-        session.deletion.start()
+        session.deletion.requestDelete()
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {

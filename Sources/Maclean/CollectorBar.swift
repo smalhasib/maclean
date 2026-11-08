@@ -46,6 +46,16 @@ struct CollectorBar: View {
         .frame(height: Self.height)
         .background(targeted.wrappedValue ? Color.accentColor.opacity(0.08) : Color.clear)
         .contentShape(Rectangle())
+        .alert(confirmCopy.title, isPresented: Binding(
+            get: { model.session.deletion.phase == .confirming },
+            set: { if !$0 { model.session.deletion.cancelConfirmation() } })) {
+            Button(model.session.deletion.mode == .trash ? "Move to Trash" : "Delete", role: .destructive) {
+                model.session.deletion.confirmDelete()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(confirmCopy.message)
+        }
         .onDrop(of: [.macleanNode, .fileURL],
                 delegate: CollectorDropDelegate(model: model, targeted: targeted.projectedValue))
         .onChange(of: model.collectorRefusal?.id) { _, id in
@@ -54,6 +64,12 @@ struct CollectorBar: View {
                                  userInfo: [.announcement: text,
                                             .priority: NSAccessibilityPriorityLevel.high.rawValue])
         }
+    }
+
+    private var confirmCopy: (title: String, message: String) {
+        let controller = model.session.deletion
+        return DeleteController.confirmCopy(count: controller.pendingCount, size: controller.pendingSize,
+                                            mode: controller.mode)
     }
 
     /// The bar's right side: the collected total and Delete, or the
@@ -93,17 +109,17 @@ struct CollectorBar: View {
                     .keyboardShortcut(.cancelAction)
                     .help("Stop after the current item; the rest stay collected")
             }
-        case .idle, .summary:
+        case .idle, .confirming, .summary:
             Text("\(SizeText.string(view.collectedSize)) collected")
                 .monospacedDigit()
                 .lineLimit(1)
                 .accessibilityHidden(true)
             Spacer(minLength: 8)
-            Button("Delete") { controller.start() }
+            Button("Delete") { controller.requestDelete() }
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
                 .disabled(controller.phase != .idle || model.session.isDeleting)
-                .help("Delete the collected items after a 5-second countdown")
+                .help("Delete the collected items, after you confirm and a 5-second countdown")
         }
     }
 

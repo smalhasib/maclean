@@ -14,7 +14,7 @@ extension Notification.Name {
     static let macleanDidDelete = Notification.Name("MacleanDidDelete")
 }
 
-/// Deletes a session's collected items: a 5 s countdown (cancellable), then
+/// Deletes a session's collected items: a confirmation, a 5 s countdown (cancellable), then
 /// one item at a time off the main actor (Stop takes effect between items),
 /// then one administrator batch for the items that need it, then a summary.
 ///
@@ -25,6 +25,8 @@ extension Notification.Name {
 @MainActor @Observable final class DeleteController {
     enum Phase: Equatable {
         case idle
+        /// Asked "Delete N items?"; nothing is snapshotted for deleting yet.
+        case confirming
         case countdown(remaining: Int)
         case running(done: Int, total: Int)
         case summary(DeleteReport)
@@ -90,11 +92,49 @@ extension Notification.Name {
     var isActive: Bool {
         switch phase {
         case .countdown, .running: true
-        case .idle, .summary: false
+        case .idle, .confirming, .summary: false
         }
     }
 
     // MARK: Actions
+
+    /// Every user-facing Delete goes through here: asks for confirmation first
+    /// (the alert reads `pendingCount`, `pendingSize` and `mode`). A no-op
+    /// unless idle with something collected.
+    func requestDelete() {
+        guard phase == .idle, let session, !session.isDeleting, let view = session.view,
+              !view.collected.isEmpty else { return }
+        mode = defaults.bool(forKey: Self.trashKey) ? .trash : .permanent
+        pendingCount = view.collected.count
+        pendingSize = view.collectedSize
+        phase = .confirming
+    }
+
+    /// The confirmation was accepted: starts the countdown.
+    func confirmDelete() {
+        guard phase == .confirming else { return }
+        phase = .idle
+        start()
+    }
+
+    /// The confirmation was dismissed. Only acts while still confirming: the
+    /// alert also reports "dismissed" after its Delete button, by which time
+    /// the countdown is running and must be left alone.
+    func cancelConfirmation() {
+        guard phase == .confirming else { return }
+        phase = .idle
+    }
+
+    /// The alert's wording: what will be deleted and whether it can be undone.
+    static func confirmCopy(count: Int, size: Int64, mode: DeleteMode) -> (title: String, message: String) {
+        let items = count == 1 ? "1 item" : "\(count.formatted()) items"
+        if mode == .trash {
+            return ("Move \(items) (\(SizeText.string(size))) to the Trash?",
+                    "You can restore \(count == 1 ? "it" : "them") from the Trash until it's emptied.")
+        }
+        return ("Delete \(items) (\(SizeText.string(size)))?",
+                "\(count == 1 ? "It" : "They") will be deleted permanently. This can't be undone.")
+    }
 
     /// Snapshots the collected items and starts the countdown. A no-op
     /// unless idle with something collected.
@@ -141,7 +181,7 @@ extension Notification.Name {
             reset()
         case .running:
             if !awaitingAdmin { stopRequested = true }
-        case .idle, .summary:
+        case .idle, .confirming, .summary:
             break
         }
     }
@@ -152,6 +192,7 @@ extension Notification.Name {
     func abandonForForget() -> Bool {
         switch phase {
         case .idle: return true
+        case .confirming: cancelConfirmation(); return true
         case .countdown: cancel(); return true
         case .summary: dismissSummary(); return true
         case .running: return false
@@ -163,6 +204,7 @@ extension Notification.Name {
     /// waits for the next window on the session.
     func noWindowLeft() {
         switch phase {
+        case .confirming: cancelConfirmation()
         case .countdown: cancel()
         case .running: stopRequested = true
         case .idle, .summary: break
