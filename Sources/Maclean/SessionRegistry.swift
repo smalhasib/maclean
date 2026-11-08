@@ -109,6 +109,22 @@ import Observation
         return true
     }
 
+    /// Spec §5.3: in every session whose tree holds a deleted request's path
+    /// with the same inode and device, that node is marked removed, so the
+    /// map shrinks without a rescan.
+    func markRemoved(_ requests: [DeleteRequest]) {
+        guard !requests.isEmpty else { return }
+        for session in all {
+            guard let tree = session.view?.tree else { continue }
+            let ids = requests.compactMap { r -> NodeID? in
+                guard let id = tree.node(atPath: r.path), tree.inode(of: id) == r.inode,
+                      tree.device(of: id) == r.device else { return nil }
+                return id
+            }
+            if !ids.isEmpty { session.markDeleted(ids) }
+        }
+    }
+
     private func finished(_ session: ScanSession) {
         guard latest === session else { return }
         latest = nil

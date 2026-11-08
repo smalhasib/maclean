@@ -4,7 +4,7 @@ import Foundation
 /// Runs a rule catalog against the filesystem (spec §6.1–6.3): expands each
 /// pattern, applies conditions, measures and classifies. Rules run in order and
 /// the first rule to claim a path wins.
-public struct CleanEngine {
+public struct CleanEngine: Sendable {
     public let rules: [CleanRule]
     public let home: String
     public let environment: ProtectionEnvironment
@@ -27,8 +27,11 @@ public struct CleanEngine {
 
     // MARK: - Run
 
-    /// Checks every rule. `progress` receives each item's path before it is measured.
-    public func run(progress: @Sendable (String) -> Void = { _ in }) async -> CleanReport {
+    /// Checks every rule. `progress` receives each item's path before it is
+    /// measured. `beforeRule` is awaited before each rule (and not after the
+    /// run is cancelled), so a caller can pause between targets.
+    public func run(progress: @Sendable (String) -> Void = { _ in },
+                    beforeRule: @Sendable (CleanRule) async -> Void = { _ in }) async -> CleanReport {
         var report = CleanReport()
         var claimed: [String] = []      // items an earlier rule took (offered or skipped)
         var roots: [String] = []        // folders earlier rules target; later rules never offer their ancestors
@@ -39,6 +42,8 @@ public struct CleanEngine {
             ? probes.installedBundleIDs().map { Set($0.map { $0.lowercased() }) } : []
 
         for rule in rules {
+            if Task.isCancelled { break }
+            await beforeRule(rule)
             if Task.isCancelled { break }
             if case .projectArtifacts = rule.special {
                 if !disabled.contains(rule.category) { runProjectArtifacts(rule, context: context, progress: progress, into: &report) }

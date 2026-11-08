@@ -32,6 +32,20 @@ struct MacleanApp: App {
     let startModel = StartModel()
     lazy var router = WindowRouter(registry: registry, startModel: startModel)
     private lazy var deleteMenuItem = DeleteMenuItem(router: router)
+    lazy var smartClean: SmartCleanController = {
+        let controller = SmartCleanController(
+            // A fresh probe per check: it caches the open-files snapshot.
+            engine: { CleanEngine(rules: CleanCatalog.rules, home: NSHomeDirectory(), environment: .current(),
+                                  probes: LiveCleanProbes()) },
+            probes: LiveCleanProbes(),
+            makeDeleter: { Deleter(mode: $0, environment: .current(), context: $1) },
+            admin: AdminRunner(),
+            scanning: { [registry] device in
+                registry.all.contains { $0.isScanning && ScanBoundary.forRoot($0.rootPath).allowedDevices.contains(device) }
+            })
+        controller.registry = registry
+        return controller
+    }()
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         _ = router   // takes over presenting finished scans before any starts
@@ -46,7 +60,15 @@ struct MacleanApp: App {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.activate()
         // SwiftUI builds the menu bar during launch: add the item after it.
-        DispatchQueue.main.async { self.deleteMenuItem.install() }
+        DispatchQueue.main.async {
+            self.deleteMenuItem.install()
+            // The start window is up by now: check in the background (spec §5.1).
+            self.smartClean.checkAtLaunchIfEnabled()
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        smartClean.cancelCheck()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

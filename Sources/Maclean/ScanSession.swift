@@ -203,6 +203,9 @@ import Observation
     /// Moves deleted items from the collector to the removed set.
     func markRemoved(_ ids: [NodeID]) { mutateView { $0.markRemoved(ids) } }
 
+    /// Marks items deleted elsewhere (Smart Clean) removed, collected or not.
+    func markDeleted(_ ids: [NodeID]) { mutateView { $0.markDeleted(ids) } }
+
     func clearCarryOverDropped() { carryOverDropped = nil }
 
     /// Applies `change` and publishes the overlay only if it changed.

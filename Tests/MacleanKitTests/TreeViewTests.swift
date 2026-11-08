@@ -117,6 +117,28 @@ private func allNodes(_ t: FileTree) -> [NodeID] { (0 ..< t.count).map { NodeID(
         #expect(v.isHidden(f))
     }
 
+    @Test func markDeletedHidesUncollectedAndCollectedNodes() {
+        let t = sample()
+        var v = TreeView(tree: t)
+        let (f, g, h, bb, a) = (id(t, "a/b/f"), id(t, "a/b/g"), id(t, "a/h"), id(t, "a/b"), id(t, "a"))
+        v.collect([h])
+        v.markDeleted([f, h, t.root])
+        #expect(v.removed == [f, h])
+        #expect(v.collected.isEmpty)
+        #expect(v.size(of: bb) == 50)
+        #expect(v.size(of: a) == 50)
+        // Already hidden: ignored.
+        let generation = v.generation
+        v.markDeleted([f])
+        #expect(v.generation == generation)
+        // A collected descendant of a deleted folder goes with it.
+        v.collect([g])
+        v.markDeleted([bb])
+        #expect(v.collected.isEmpty)
+        #expect(v.removed == [f, h, bb])
+        #expect(v.size(of: a) == 0)
+    }
+
     @Test func layoutTailMatchesEffectiveSizes() {
         let t = sample()
         var v = TreeView(tree: t)

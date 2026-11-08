@@ -145,6 +145,14 @@ public struct TreeView: Sendable {
         generation += 1
     }
 
+    /// Marks nodes deleted outside the collector (Smart Clean) as removed: a
+    /// visible node is hidden first (absorbing collected descendants), a
+    /// collected one moves over. The root and already hidden nodes are ignored.
+    public mutating func markDeleted(_ ids: [NodeID]) {
+        collect(ids.filter { !collectedSet.contains($0) })
+        markRemoved(ids)
+    }
+
     // MARK: - Internals
 
     /// Size a node contributes to its ancestors: raw minus hidden nodes already beneath it.

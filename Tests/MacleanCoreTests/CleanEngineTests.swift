@@ -104,6 +104,33 @@ private struct Fixture {
         #expect(r.candidates.first { $0.path == yarnPath }?.category == .developer)
     }
 
+    @Test func beforeRuleAwaitedPerRuleAndStopsWhenCancelled() async {
+        let f = Fixture()
+        defer { withExtendedLifetime(f) {} }
+        f.t.file("home/Library/Caches/a/x", bytes: 10)
+        f.t.file("home/Library/Logs/b/y", bytes: 10)
+        let rules = [rule("c", "~/Library/Caches"), rule("l", "~/Library/Logs", category: .logs)]
+        let engine = CleanEngine(rules: rules, home: f.home, environment: f.env(), probes: FakeProbes())
+        let seen = Seen()
+        let report = await engine.run(beforeRule: { seen.add($0.id) })
+        #expect(seen.ids == ["c", "l"])
+        #expect(report.candidates.count == 2)
+
+        // Cancelled while paused before the first rule: nothing runs.
+        let paused = Seen()
+        let task = Task {
+            await engine.run(beforeRule: { rule in
+                paused.add(rule.id)
+                while !Task.isCancelled { try? await Task.sleep(for: .milliseconds(5)) }
+            })
+        }
+        while paused.ids.isEmpty { try? await Task.sleep(for: .milliseconds(5)) }
+        task.cancel()
+        let cancelled = await task.value
+        #expect(paused.ids == ["c"])
+        #expect(cancelled.candidates.isEmpty)
+    }
+
     @Test func runningOwnerSkipped() async {
         let f = Fixture()
         defer { withExtendedLifetime(f) {} }
@@ -330,4 +357,12 @@ private struct Fixture {
         #expect(CleanEngine.rule(matching: "/h/Library/Caches/com.gone.app", in: [leftovers, generic], home: "/h")?.id == "c")
         #expect(CleanEngine.rule(matching: "/h/Library/Caches/com.gone.app", in: [leftovers], home: "/h") == nil)
     }
+}
+
+/// Rule ids seen by a `beforeRule` hook.
+private final class Seen: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _ids: [String] = []
+    var ids: [String] { lock.withLock { _ids } }
+    func add(_ id: String) { lock.withLock { _ids.append(id) } }
 }
