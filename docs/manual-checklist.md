@@ -116,6 +116,21 @@ Only ever delete inside a scratch folder you create, and remove it afterwards.
 - [ ] 6. Delete Collected Items in the Action menu is disabled with an empty collector and during a run.
 - [ ] 7. Scan `/`, collect `/Library/Caches/<some folder>`, start Delete, and **Cancel during the countdown**. Only the prompt path is exercised; nothing outside the scratch folder is ever deleted.
 
+## Smart Clean
+
+Use `~/maclean-scratch` or read-only checks only. Never clean real data.
+
+- [ ] 1. Launch the app. The Smart Clean card appears under the disks and finishes ("… can be cleaned" or "Nothing to clean right now") within about 10 s.
+- [ ] 2. Review: Safe items are ticked, Review items are unticked, and Info items (such as large data) have no checkbox.
+- [ ] 3. With an app open (for example Safari), its cache is listed under Skipped as "… is open", not offered.
+- [ ] 4. Create `~/maclean-scratch/proj/package.json` and `~/maclean-scratch/proj/node_modules/x/file` (add `~/maclean-scratch` under Settings › Smart Clean › project folders, or work in a searched folder), then check again. Maclean's age includes ctime, which `touch -t` can't backdate, so a fresh `node_modules` must be listed under Skipped as "Used recently" and not offered. Don't try to backdate it.
+- [ ] 5. "Never clean this" on a row hides it and lists it in Settings › Smart Clean. Removing it there brings it back on the next check.
+- [ ] 6. "Measure with administrator rights" asks for the password once and fills in the sizes of system items.
+- [ ] 7. Cancel that password prompt: the system items stay listed as "administrator password not given".
+- [ ] 8. ⇧⌘K re-runs the check and shows the start screen with the card.
+- [ ] 9. Turn off the launch check in Settings › Smart Clean and relaunch: no check runs until you ask for one. The launch check never shows a password prompt.
+- [ ] 10. Untick everything and check that Clean is disabled. Read the confirmation text (permanent or Trash wording, and the administrator note) without confirming, then Cancel.
+
 ## Settings
 
 - [ ] ⌘, opens Settings with a General tab only, holding "Open each scan in its own window" and "Move to Trash instead of deleting permanently" (off by default).

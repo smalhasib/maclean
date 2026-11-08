@@ -606,3 +606,35 @@ func dismissSummary()
   - Turning the setting off stops the launch check.
 - [ ] **Step 2:** Run T and `scripts/build-app.sh`, and record the counts in the outcome.
 - [ ] **Step 3:** Commit: `docs: smart clean readme, checklist, plan outcome`.
+
+---
+
+## Outcome and follow-ups (recorded after execution)
+
+Built on branch `plan-03b-smart-clean`, 20 commits from main 44023c3 (1 preflight docs commit, 9 feature commits, 9 fix commits, and this docs commit); 363 tests (44 MacleanKit + 244 MacleanCore + 75 MacleanApp), all passing, and `scripts/build-app.sh` builds and signs the bundle. Shipped: `DeleteBatch` extracted from the collector with a `ProtectionContext` threaded through `Deleter` and `AdminDelete` (`--context`), the timestamp-aware `Measurer`, the `.smartClean` protection context with its own dangerous-path corpus, the catalog of rules and `CleanEngine`, live probes (open files, running owners, installed apps), leftovers of removed apps, project build artifacts with a hardened Git probe, the root-side re-checks (`AdminMeasure`, launchd orphan re-check, bounded no-follow plist reads), `SmartCleanController`, `TreeView.markDeleted`, the start-screen card, the review sheet (tiers, Skipped, Never clean this, Measure with administrator rights), Settings › Smart Clean, and Action › Check for Cleanable Items (⇧⌘K). The README and manual checklist cover Smart Clean.
+
+**Rulings worth remembering** (the full list is R1–R26 in the SDD ledger)
+- **Unknown means keep:** a failed probe goes to Skipped; a size-unknown item is capped at Review and never ticked.
+- **Protection:** smartClean refuses everything under `/private` outside the §6.2a allowlist, under `/usr` and under `/Volumes` unless inside home (R1, R2, R8, R10, R11); Apple names are allowed only where the spec lists them.
+- **ctime:** `Measurement.newest` is max(mtime, ctime), and tests can't backdate ctime, so tests inject `now` instead (R7).
+- **Root trust:** root re-runs the age check (smallest tier) and the launchd-orphan check before measuring or deleting system items, and uses its own installed-apps set that ignores the app-supplied home (R4, R22, R23).
+- **Tolerance:** Safe-tier cache and log rows tolerate content changes between check and clean; everything else is strict (R5). The Trash category is always permanent.
+- **Git probe:** `git ls-files` runs with fsmonitor, hooks and global config disabled, because the repository is untrusted.
+- **Admin:** system rows reuse the collector's single-prompt admin batch; measuring with administrator rights is a separate single prompt.
+- **⇧⌘K** brings the main window back to the start screen, where the card is the result surface (R26).
+
+**Deferred minors**
+- Interface: collector items leave at the end of a run, not per item; `AdminDelete.resolvedRefusal` keeps a default context; `publish()` is an internal test seam; `isChecking`, `requestClean`, `cancelClean` and `stop` have thin test coverage.
+- Measurer and engine: the clone test passes silently on non-APFS; recursion holds one fd per depth; a vanished-after-timeout item reports `.noAccess`; size-unknown age uses top-level times only; installed-app probing runs even with categories off.
+- Protection: any path ending in a `Safari` component is refused; personal-data names match at any depth.
+- Catalog and probes: Trash offers `.DS_Store` as separate rows; Gradle's owner is any `java` process and isn't re-checked at delete time; the macOS installer version check is best effort (R16); EDR skip says "protected" (R17); App Support leftovers match only by bundle-id name.
+- Projects: the `locallyPatched` doc says oldest record but the code uses the newest; `node_modules/.cache` can give false positives; measuring happens before the keep checks.
+- Root helper: a user-root walk error drops that root's ids; errno isn't reset per `readdir`; Caskroom is walked with system trust; a symlinked user Applications root is followed; no deadline on the root age measure; root doesn't re-check open files, running owners or installer versions.
+- UI: the card's faded state is view-local; the review regroups rows on every body pass; the Smart Clean summary has no Keep/Delete Anyway for changed items; the card sits on the start screen only, so a one-window result view hides it.
+
+**Manual checks still pending with the owner (before merge)**
+- GUI pass: the UI was never launched. Run the Smart Clean section of `docs/manual-checklist.md` in light and dark mode (card, review, Skipped, Never clean this, Settings tab, ⇧⌘K, Quick Look from the sheet).
+- The admin password step: Measure with administrator rights, and a real clean of system items through the osascript prompt, plus a cancelled prompt.
+
+**Before the next plan**
+- The helper-replacement caveat from Plan 3a still applies to the root batch (a signed `SMAppService` helper is the fix).

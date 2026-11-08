@@ -2,7 +2,7 @@
 
 Maclean is an open-source, native macOS disk analyzer in the spirit of DaisyDisk.
 
-**Status: in development.** The scanner core, a command-line scanner, the app and the collector with delete exist so far.
+**Status: in development.** The scanner core, a command-line scanner, the app, the collector with delete and Smart Clean exist so far.
 
 ## Build and test
 
@@ -56,6 +56,27 @@ Collect the items you want gone, then delete them in one go.
 **Trash instead.** Settings › "Move to Trash instead of deleting permanently" moves items to the Trash instead. Items that need administrator rights to remove (for example, ones owned by root in a folder you can't write to) can't be moved to the Trash: they stay collected with a note. A folder with unreadable contents can still be moved when you can write to the folder it is in.
 
 **What the collector refuses.** System locations (such as `/System`, `/usr` apart from `/usr/local`, and `/Library` essentials), your home folder and the folders that contain it, Maclean itself and the folders that contain it, and other protected paths. It tells you why when you try. Deletion also re-checks each item right before removing it and never crosses onto another disk.
+
+## Smart Clean
+
+Smart Clean looks for things that are safe to regenerate or are clearly leftovers, and lists them for review. It runs a check when the app launches (switch it off in Settings › Smart Clean) and on demand with Action › Check for Cleanable Items (⇧⌘K). The result appears as a card under the disk list on the start screen.
+
+**What it checks.**
+- *User-level:* app caches and logs, browser caches (Safari, Chromium-based browsers, Firefox), developer files (Xcode derived data, old device support, simulator caches and logs, package-manager caches), build leftovers in your projects (such as `node_modules`, `target`, `build`), old installers in Downloads, saved window state, leftovers of apps you've removed, Mail attachments Mail saved and the Trash.
+- *System-wide:* system logs and caches, launch services and helper tools whose program or app is gone, and old macOS installers.
+- *Large data it only points at:* iOS backups, Docker and OrbStack data, Maven and Gradle caches, local AI models and similar. These are shown for information with no checkbox, and Smart Clean never deletes them; use the map to review them.
+
+**Three tiers.** *Safe* items are ticked by default, *Review* items are listed unticked, and *Info* items have no checkbox. Items whose size or age couldn't be measured are never ticked. Project folders appear grouped by project, and only when the project has no Git repository inside the item, nothing in it is tracked by Git, nothing in it has local changes, and it isn't in use.
+
+**The launch check never asks for a password and never deletes.** It only reads. Sizes of system items it can't read stay unknown until you choose Measure with administrator rights in the review, which asks for your password once. Cancel the prompt and those items stay listed as "administrator password not given".
+
+**Skipped.** Anything found but not offered goes under a collapsed Skipped section with the reason: the owning app is open, used recently, protected, needs Full Disk Access, tracked by Git, and so on. If Smart Clean can't tell whether an item is safe, it keeps it.
+
+**Never clean this.** The row context menu hides a row and adds it to a list in Settings › Smart Clean, where you can take it off again. Settings also has a switch per category and the folders searched for projects.
+
+**Cleaning.** Clean confirms first, then deletes with the same engine as the collector (the same re-checks right before removing, the same refusals), using the Trash setting, except for the Trash itself, which is always deleted permanently. Items in system locations are removed in one batch after a single administrator password prompt. Apps are re-checked when you clean, and an item whose owner has opened it since is skipped. The result is a summary, and the map shrinks to match.
+
+Smart Clean's rules and protected lists are Maclean's own; nothing is copied from [mole](https://github.com/tw93/mole) (GPL-3.0).
 
 ## License
 
