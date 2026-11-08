@@ -155,3 +155,165 @@ private func env(home: String = "/Users/me", app: String = "/Applications/Maclea
     #expect(refusal("/System/Volumes/Data/Users/me/Documents") == nil)
     #expect(refusal("/System/Volumes/Data/System/Library") == .systemProtected)
 }
+
+// MARK: - Smart Clean context
+
+/// A fake home inside a TempDir (so every ancestor exists and is a real directory).
+private struct SmartFixture {
+    let t = TempDir()
+    var home: String { t.url("home") }
+    func env(neverClean: [String] = []) -> ProtectionEnvironment {
+        ProtectionEnvironment(home: home, appBundle: "/Applications/Maclean.app",
+                              mountPoints: ["/"], timeMachineMounts: [], neverClean: neverClean)
+    }
+    /// Creates `home/<rel>` and returns its path.
+    @discardableResult func make(_ rel: String) -> String { t.dir("home/" + rel); return home + "/" + rel }
+    func check(_ path: String, _ e: ProtectionEnvironment? = nil) -> Refusal? {
+        ProtectionRules.refusal(for: path, context: .smartClean, in: e ?? env())
+    }
+}
+
+/// Corpus entries Smart Clean does not refuse by rule: user-installed software
+/// outside the sealed volume, which the catalog never targets anyway.
+private let smartCleanUnruled: Set<String> = ["/usr/local/lib", "/usr/local/bin/brew"]
+
+@Test func smartCleanRefusesEveryCorpusEntry() throws {
+    for p in try corpus() where !smartCleanUnruled.contains(p) {
+        #expect(ProtectionRules.refusal(for: p, context: .smartClean, in: env) != nil,
+                "should be refused: \(p.debugDescription)")
+    }
+}
+
+@Test func smartCleanAllowsCatalogShapes() {
+    let f = SmartFixture()
+    f.make("Library/Caches/com.example.app"); f.make("Library/Logs/x"); f.make("Library/Caches/com.apple.Safari")
+    for rel in ["Library/Caches/com.example.app", "Library/Logs/x", "Library/Caches/com.apple.Safari"] {
+        #expect(f.check(f.home + "/" + rel) == nil, "\(rel)")
+    }
+    #expect(f.check("/Library/Logs/DiagnosticReports/a.ips") == nil)
+}
+
+@Test func criticalRootsRefusedChildrenAllowed() {
+    let f = SmartFixture()
+    f.make("Library/Caches/foo"); f.make("Library/Containers"); f.make("Library/Application Support")
+    f.make("Library/Logs"); f.make("Library/Developer")
+    for rel in ["Library", "Library/Caches", "Library/Containers", "Library/Application Support",
+                "Library/Logs", "Library/Developer"] {
+        #expect(f.check(f.home + "/" + rel) == .criticalRoot, "\(rel)")
+    }
+    #expect(f.check(f.home + "/Library/Caches/foo") == nil)
+    for p in ["/Applications", "/Users", "/Users/anyone", "/Users/Shared", "/Volumes", "/opt/homebrew",
+              "/Library/Caches", "/Library/Logs", "/private/var/log", "/etc", "/private/etc", "/private/var/db"] {
+        #expect(ProtectionRules.refusal(for: p, context: .smartClean, in: env) != nil, "\(p)")
+    }
+}
+
+@Test func neverCleanCoversAncestorsAndDescendants() {
+    let f = SmartFixture()
+    f.make("Library/Caches/A/b/c"); f.make("Library/Caches/B")
+    let e = f.env(neverClean: ["~/Library/Caches/a/B"])
+    let c = f.home + "/Library/Caches"
+    #expect(f.check(c + "/A", e) == .neverClean)
+    #expect(f.check(c + "/A/b", e) == .neverClean)
+    #expect(f.check(c + "/A/b/c", e) == .neverClean)
+    #expect(f.check(c + "/B", e) == nil)
+    let e2 = f.env(neverClean: ["~/Library/Caches/A/b"])
+    #expect(f.check(c + "/A", e2) == .neverClean)
+    #expect(f.check(c + "/A/b/c", e2) == .neverClean)
+    #expect(f.check(c + "/B", e2) == nil)
+    #expect(f.check(c + "/B", f.env()) == nil)
+}
+
+@Test func collectorIgnoresNeverClean() {
+    let f = SmartFixture()
+    let e = f.env(neverClean: ["~/Library/Caches"])
+    #expect(ProtectionRules.refusal(for: f.home + "/Library/Caches/x", in: e) == nil)
+}
+
+@Test func symlinkedAncestorRefused() {
+    let f = SmartFixture()
+    f.make("Library")
+    f.t.symlink("home/Library/Caches", to: "/")
+    #expect(f.check(f.home + "/Library/Caches/System") != nil)
+    // A symlink to an innocuous directory is still refused.
+    f.make("real/x")
+    f.t.symlink("home/link", to: f.home + "/real")
+    #expect(f.check(f.home + "/link/x") != nil)
+    // A symlink at the leaf is fine: the deleter removes the link itself.
+    f.t.symlink("home/real/leaf", to: "/")
+    #expect(f.check(f.home + "/real/leaf") == nil)
+}
+
+@Test func appleComponentsNeedAllowlist() {
+    let f = SmartFixture()
+    for n in ["com.apple.Safari", "com.apple.WebKit.Networking", "com.apple.bird", "GeoServices", "com.apple.dt.Xcode",
+              "com.apple.iconservices.store"] { f.make("Library/Caches/" + n) }
+    let c = f.home + "/Library/Caches/"
+    for ok in ["com.apple.Safari", "com.apple.WebKit.Networking", "GeoServices", "com.apple.dt.Xcode",
+               "com.apple.iconservices.store"] { #expect(f.check(c + ok) == nil, "\(ok)") }
+    #expect(f.check(c + "com.apple.bird") == .appleSystem)
+    #expect(f.check(c + "COM.APPLE.BIRD") == .appleSystem)
+    #expect(ProtectionRules.appleAllowlist.contains("com.apple.WebKit.*"))
+    for n in ["com.apple.metal", "com.apple.metalfe", "com.apple.gpuarchiver", "com.apple.idleassetsd"] {
+        #expect(ProtectionRules.appleAllowlist.contains(n), "\(n)")
+    }
+}
+
+@Test func appleMailOnlyForMailDownloads() {
+    let f = SmartFixture()
+    f.make("Library/Containers/com.apple.mail/Data/Library/Mail Downloads/x")
+    f.make("Library/Containers/com.apple.mail/Data/Documents")
+    let m = f.home + "/Library/Containers/com.apple.mail"
+    #expect(f.check(m + "/Data/Library/Mail Downloads/x") == nil)
+    #expect(f.check(m + "/Data/Library/Mail Downloads") == nil)
+    #expect(f.check(m + "/Data/Documents") == .appleSystem)
+    #expect(f.check(m) == .appleSystem)
+}
+
+@Test func protectedAppRefused() {
+    let f = SmartFixture()
+    f.make("Library/Caches/com.1password.1password"); f.make("Library/Caches/com.example.app")
+    #expect(f.check(f.home + "/Library/Caches/com.1password.1password") == .protectedApp)
+    #expect(f.check(f.home + "/Library/Caches/com.example.app") == nil)
+    #expect(ProtectionRules.protectedBundlePrefixes.contains("com.1password"))
+}
+
+@Test func personalDataRefused() {
+    let f = SmartFixture()
+    for rel in ["Library/Mail/V10", "Library/Keychains", "Library/Messages/Attachments", "Library/Calendars",
+                "Library/Mobile Documents", "Pictures/X.photoslibrary/database", "Library/Safari/LocalStorage",
+                "Library/Application Support/Google/Chrome/Default/History",
+                "Library/Application Support/Google/Chrome/Default/Cache",
+                "Library/Application Support/Google/Chrome/Default/Code Cache/js",
+                "Library/Containers/com.apple.mail/Data/Library/Mail Downloads"] { f.make(rel) }
+    f.make("Library/Safari"); f.t.file("home/Library/Safari/History.db")
+    for rel in ["Library/Mail/V10", "Library/Keychains", "Library/Messages/Attachments", "Library/Calendars",
+                "Library/Mobile Documents", "Pictures/X.photoslibrary/database", "Library/Safari/LocalStorage",
+                "Library/Safari/History.db", "Library/Application Support/Google/Chrome/Default/History"] {
+        #expect(f.check(f.home + "/" + rel) == .personalData, "\(rel)")
+    }
+    let chrome = f.home + "/Library/Application Support/Google/Chrome/Default"
+    #expect(f.check(chrome + "/Cache") == nil)
+    #expect(f.check(chrome + "/Code Cache/js") == nil)
+    #expect(f.check(f.home + "/Library/Containers/com.apple.mail/Data/Library/Mail Downloads") == nil)
+}
+
+@Test func privateIsRefusedOutsideAllowlist() {
+    #expect(ProtectionRules.refusal(for: "/private/var/db/uuidtext/x", context: .smartClean, in: env) != nil)
+    #expect(ProtectionRules.refusal(for: "/tmp/x", context: .smartClean, in: env) == .criticalRoot)
+    #expect(ProtectionRules.refusal(for: "/var/tmp/x", context: .smartClean, in: env) == .criticalRoot)
+    // The test machine's own user folder is allowed in both spellings.
+    let f = SmartFixture()                               // lives under the user's $TMPDIR
+    f.make("Library/Caches/com.example.app")
+    #expect(f.check(f.home + "/Library/Caches/com.example.app") == nil)
+}
+
+@Test func environmentDecodesWithoutNeverClean() throws {
+    let json = #"{"home":"/Users/me","appBundle":"/A.app","mountPoints":["/"],"timeMachineMounts":[]}"#
+    let e = try JSONDecoder().decode(ProtectionEnvironment.self, from: Data(json.utf8))
+    #expect(e.neverClean == [])
+    let withList = ProtectionEnvironment(home: "/h", appBundle: "/a", mountPoints: [], timeMachineMounts: [],
+                                         neverClean: ["~/x"])
+    let round = try JSONDecoder().decode(ProtectionEnvironment.self, from: JSONEncoder().encode(withList))
+    #expect(round == withList)
+}
