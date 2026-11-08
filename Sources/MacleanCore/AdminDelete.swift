@@ -136,11 +136,14 @@ public enum AdminDelete {
     /// through that same parent fd, still be as old as the rule's smallest age
     /// tier (`smartCleanVerdict`). A tampered request can't reach anything else.
     public static func perform(_ item: Item, with deleter: Deleter) async -> DeleteOutcome {
-        await perform(item, with: deleter, rules: CleanCatalog.rules, now: Date())
+        let home = deleter.environment.home
+        return await perform(item, with: deleter, rules: CleanCatalog.rules, now: Date(),
+                             installed: { installedBundleIDs(home: home) })
     }
 
-    /// `perform(_:with:)` with the rules and clock as parameters, for tests.
-    static func perform(_ item: Item, with deleter: Deleter, rules: [CleanRule], now: Date) async -> DeleteOutcome {
+    /// `perform(_:with:)` with the rules, clock and installed-apps set as parameters, for tests.
+    static func perform(_ item: Item, with deleter: Deleter, rules: [CleanRule], now: Date,
+                        installed: () -> Set<String>?) async -> DeleteOutcome {
         let path = item.request.path
         let smartClean = deleter.context == .smartClean
         if smartClean, adminRule(for: path, rules: rules, home: deleter.environment.home) == nil {
@@ -159,7 +162,7 @@ public enum AdminDelete {
             return .refused(refusal)
         }
         if smartClean, let verdict = smartCleanVerdict(for: path, parentFD: fd, rules: rules,
-                                                       home: deleter.environment.home, now: now) {
+                                                       home: deleter.environment.home, now: now, installed: installed) {
             return verdict
         }
         return await deleter.delete(item.request, force: item.force, parentFD: fd)
@@ -175,6 +178,12 @@ public enum AdminDelete {
     /// relative to it (`smartCleanVerdict(for:parentFD:rules:home:now:)`).
     public static func smartCleanVerdict(for path: String, rules: [CleanRule], home: String,
                                          now: Date) -> DeleteOutcome? {
+        smartCleanVerdict(for: path, rules: rules, home: home, now: now, installed: { installedBundleIDs(home: home) })
+    }
+
+    /// `smartCleanVerdict(for:rules:home:now:)` with the installed-apps set as a parameter, for tests.
+    static func smartCleanVerdict(for path: String, rules: [CleanRule], home: String, now: Date,
+                                  installed: () -> Set<String>?) -> DeleteOutcome? {
         guard adminRule(for: path, rules: rules, home: home) != nil else { return .refused(.unsafePath) }
         let fd: Int32
         switch Deleter.openParent(of: path) {
@@ -182,19 +191,17 @@ public enum AdminDelete {
         case .success(let opened): fd = opened
         }
         defer { close(fd) }
-        return smartCleanVerdict(for: path, parentFD: fd, rules: rules, home: home, now: now)
+        return smartCleanVerdict(for: path, parentFD: fd, rules: rules, home: home, now: now, installed: installed)
     }
 
     /// `smartCleanVerdict(for:rules:home:now:)` for `path` whose parent is
-    /// open as `parentFD`. The parent's real location (`F_GETPATH`) plus the
-    /// name must be claimed by the same admin rule (a symlinked ancestor can
-    /// only deny), and the age is measured relative to `parentFD`, the fd the
-    /// protection check and the delete use too.
+    /// open as `parentFD`: the catalog guard (`catalogTarget`), then the age,
+    /// measured relative to `parentFD`, the fd the protection check and the
+    /// delete use too.
     static func smartCleanVerdict(for path: String, parentFD: Int32, rules: [CleanRule], home: String,
-                                  now: Date) -> DeleteOutcome? {
-        guard let rule = adminRule(for: path, rules: rules, home: home),
-              let (name, resolved) = resolvedPath(of: path, parentFD: parentFD),
-              adminRule(for: resolved, rules: rules, home: home)?.id == rule.id,
+                                  now: Date, installed: () -> Set<String>?) -> DeleteOutcome? {
+        guard let (rule, name) = catalogTarget(for: path, parentFD: parentFD, rules: rules, home: home,
+                                               installed: installed),
               let minDays = rule.ageTiers.map(\.days).min() else {
             return .refused(.unsafePath)
         }
@@ -211,6 +218,55 @@ public enum AdminDelete {
             return .changedSinceScan(size: m.size, fileCount: m.fileCount)
         }
         return nil
+    }
+
+    /// Root's catalog guard for `path` whose parent is open as `parentFD`,
+    /// shared by `--delete` (Smart Clean) and `smart-measure`. Returns the rule
+    /// and the item's name only when all of these hold, else nil (refuse):
+    /// - the first rule claiming `path` `requiresAdmin`, and the parent's real
+    ///   location (`F_GETPATH`) plus the name is claimed by that same rule (a
+    ///   symlinked ancestor can only deny);
+    /// - for a `fileFilter` rule, the entry is a regular file;
+    /// - for a `.launchdOrphan` rule, the item, read through `parentFD`, is
+    ///   still an orphan (`CleanEngine.orphanCheck`): a launchd plist's absolute
+    ///   program is missing, or none of a helper's owning apps is in
+    ///   `installed()` (lowercased; nil means refuse).
+    static func catalogTarget(for path: String, parentFD: Int32, rules: [CleanRule], home: String,
+                              installed: () -> Set<String>?) -> (rule: CleanRule, name: String)? {
+        guard let rule = adminRule(for: path, rules: rules, home: home),
+              let (name, resolved) = resolvedPath(of: path, parentFD: parentFD),
+              adminRule(for: resolved, rules: rules, home: home)?.id == rule.id else { return nil }
+        if rule.fileFilter != nil {
+            var st = stat()
+            guard fstatat(parentFD, name, &st, AT_SYMLINK_NOFOLLOW) == 0, st.st_mode & S_IFMT == S_IFREG else { return nil }
+        }
+        if case .launchdOrphan = rule.special {
+            let isPlist = name.hasSuffix(".plist")
+            guard let data = readRegularEntry(name, inParent: parentFD, maxSize: isPlist ? 1 << 20 : 64 << 20),
+                  case .orphan = CleanEngine.orphanCheck(isPlist: isPlist, data: data, installed: isPlist ? nil : installed())
+            else { return nil }
+        }
+        return (rule, name)
+    }
+
+    /// The contents of regular file `name` in directory `parentFD`, opened
+    /// without following a symlink; nil if it isn't one, can't be read, or is
+    /// larger than `maxSize` bytes.
+    static func readRegularEntry(_ name: String, inParent parentFD: Int32, maxSize: Int) -> Data? {
+        let fd = openat(parentFD, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        var st = stat()
+        guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG, st.st_size <= maxSize,
+              let data = try? handle.read(upToCount: maxSize + 1) ?? Data(), data.count <= maxSize else { return nil }
+        return data
+    }
+
+    /// Root's installed-apps set for the helper orphan test: the `.app`
+    /// bundles on disk (no running-app or LaunchServices extras), lowercased.
+    static func installedBundleIDs(home: String) -> Set<String>? {
+        InstalledApps.bundleIDs(searchRoots: InstalledApps.defaultSearchRoots(home: home), extra: [])
+            .map { Set($0.map { $0.lowercased() }) }
     }
 
     /// The first rule in `rules` claiming `path`, if it needs administrator rights.

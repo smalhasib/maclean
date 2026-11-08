@@ -84,19 +84,21 @@ extension CleanEngine {
     static func orphanCheck(_ path: String, installed: Set<String>?) -> Orphan {
         var st = stat()
         guard lstat(path, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { return .unknown(.ownerUnknown) }
-        if path.hasSuffix(".plist") {
-            let dict: [String: Any]
-            switch PlistReader.dictionary(atPath: path) {
-            case .success(let d): dict = d
-            case .failure(.malformed): return .unknown(.ownerUnknown)
-            case .failure: return .unknown(.noAccess)
-            }
+        let isPlist = path.hasSuffix(".plist")
+        guard st.st_size <= 64 << 20, let data = FileManager.default.contents(atPath: path) else {
+            return .unknown(.noAccess)
+        }
+        return orphanCheck(isPlist: isPlist, data: data, installed: installed)
+    }
+
+    /// `orphanCheck` on contents already read: a launchd plist (`isPlist`) or
+    /// a helper binary. Root reads them through the parent fd and calls this.
+    static func orphanCheck(isPlist: Bool, data: Data, installed: Set<String>?) -> Orphan {
+        if isPlist {
+            guard let dict = PlistReader.dictionary(from: data) else { return .unknown(.ownerUnknown) }
             let program = dict["Program"] as? String ?? (dict["ProgramArguments"] as? [String])?.first
             guard let program, program.hasPrefix("/") else { return .notOrphan }
             return programMissing(program)
-        }
-        guard st.st_size <= 64 << 20, let data = FileManager.default.contents(atPath: path) else {
-            return .unknown(.noAccess)
         }
         let owners = helperOwnerIDs(data)
         guard !owners.isEmpty else { return .unknown(.ownerUnknown) }

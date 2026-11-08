@@ -57,20 +57,32 @@ public enum AdminMeasure {
         }
     }
 
-    /// One line per path, in order. A path is measured only if the first
-    /// catalog rule claiming it `requiresAdmin` and the Smart Clean protection
-    /// rules allow it, both for the path and for its parent's real location.
-    /// The item is measured relative to its opened parent, never through a
-    /// symlink. Hard links and clones are counted once across all paths.
+    /// One line per path, in order. A path is measured only if the Smart
+    /// Clean protection rules allow it, both for the path and for its parent's
+    /// real location, and root's catalog guard (`AdminDelete.catalogTarget`:
+    /// an admin rule, file type, launchd orphan) accepts it. The item is
+    /// measured relative to its opened parent, never through a symlink. Hard
+    /// links and clones are counted once across all paths.
     public static func measureAll(_ paths: [String], environment: ProtectionEnvironment) -> [Line] {
-        measureAll(paths, environment: environment, rules: CleanCatalog.rules)
+        measureAll(paths, environment: environment, rules: CleanCatalog.rules,
+                   installed: { AdminDelete.installedBundleIDs(home: environment.home) })
     }
 
-    static func measureAll(_ paths: [String], environment env: ProtectionEnvironment, rules: [CleanRule]) -> [Line] {
+    /// `measureAll(_:environment:)` with the rules and installed-apps set as
+    /// parameters, for tests. The set is computed at most once.
+    static func measureAll(_ paths: [String], environment env: ProtectionEnvironment, rules: [CleanRule],
+                           installed: () -> Set<String>?) -> [Line] {
         let context = MeasureContext()
+        var cachedInstalled: Set<String>??
+        func installedOnce() -> Set<String>? {
+            if let cachedInstalled { return cachedInstalled }
+            let value = installed()
+            cachedInstalled = .some(value)
+            return value
+        }
         return paths.map { path in
             func failure(_ error: String) -> Line { Line(path: path, measurement: nil, error: error) }
-            guard let rule = AdminDelete.adminRule(for: path, rules: rules, home: env.home),
+            guard AdminDelete.adminRule(for: path, rules: rules, home: env.home) != nil,
                   ProtectionRules.refusal(for: path, context: .smartClean, in: env) == nil else {
                 return failure(notATarget)
             }
@@ -81,8 +93,8 @@ public enum AdminMeasure {
             }
             defer { close(fd) }
             guard AdminDelete.resolvedRefusal(for: path, parentFD: fd, context: .smartClean, in: env) == nil,
-                  let (name, resolved) = AdminDelete.resolvedPath(of: path, parentFD: fd),
-                  AdminDelete.adminRule(for: resolved, rules: rules, home: env.home)?.id == rule.id else {
+                  let (_, name) = AdminDelete.catalogTarget(for: path, parentFD: fd, rules: rules, home: env.home,
+                                                            installed: installedOnce) else {
                 return failure(notATarget)
             }
             do throws(MeasureError) {

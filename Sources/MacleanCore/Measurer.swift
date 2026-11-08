@@ -85,7 +85,7 @@ public enum Measurer {
         let handle = DirectoryHandle(fd: fd)
         // The directory opened must be the one just examined.
         var opened = stat()
-        guard fstat(fd, &opened) == 0, opened.st_ino == st.st_ino, opened.st_dev == st.st_dev else { throw .notFound }
+        guard fstat(fd, &opened) == 0, opened.st_ino == st.st_ino, opened.st_dev == st.st_dev else { throw .unreadable }
         var newest = Int64(result.newest.timeIntervalSince1970)
         let entries: [RawEntry]
         do { entries = try DirectoryReader.entries(of: handle) } catch { throw .unreadable }

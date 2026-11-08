@@ -285,11 +285,109 @@ private let eightDays: TimeInterval = 8 * 86400
     let deleter = Deleter(mode: .permanent, environment: env, context: .smartClean)
     let item = AdminDelete.Item(request: try await scannedRequest(path), force: false)
 
-    let tooNew = await AdminDelete.perform(item, with: deleter, rules: rules, now: Date())
+    let tooNew = await AdminDelete.perform(item, with: deleter, rules: rules, now: Date(), installed: { [] })
     guard case .changedSinceScan = tooNew else { Issue.record("expected changedSinceScan, got \(tooNew)"); return }
     #expect(exists(path))
 
-    #expect(await AdminDelete.perform(item, with: deleter, rules: rules, now: Date() + eightDays)
+    #expect(await AdminDelete.perform(item, with: deleter, rules: rules, now: Date() + eightDays, installed: { [] })
             == .deleted(freed: item.request.size))
     #expect(!exists(path))
+}
+
+// MARK: - Root re-checks launchd orphans and file type (R22)
+
+private func plistData(_ dict: [String: Any]) -> Data {
+    try! PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0)
+}
+
+/// A fake helper binary with an embedded Info.plist authorizing `clients`.
+private func helperData(clients: [String]) -> Data {
+    let reqs = clients.map { "identifier \"\($0)\" and anchor apple generic" }
+    return Data([0xCF, 0xFA, 0xED, 0xFE, 0, 1, 2]) + plistData(["CFBundleIdentifier": "com.x.helper",
+                                                                 "SMAuthorizedClients": reqs]) + Data([0, 0, 9])
+}
+
+private func launchdRule(_ dir: String) -> CleanRule {
+    CleanRule(id: "test.launchd", category: .systemServices, pattern: dir + "/*.plist", unit: .folder,
+              ageTiers: [(0, .review)], requiresAdmin: true, special: .launchdOrphan, reason: "test")
+}
+
+private func helperRule(_ dir: String) -> CleanRule {
+    CleanRule(id: "test.helpers", category: .systemServices, pattern: dir, unit: .eachChild,
+              ageTiers: [(0, .review)], requiresAdmin: true, special: .launchdOrphan, reason: "test")
+}
+
+@Test func rootRechecksLaunchdPlistOrphan() async throws {
+    let t = TempDir(); defer { withExtendedLifetime(t) {} }
+    t.file("bin/agent")
+    t.dir("LaunchDaemons")
+    func write(_ name: String, _ data: Data) { try! data.write(to: URL(fileURLWithPath: t.url("LaunchDaemons/\(name)"))) }
+    write("com.sec.agent.plist", plistData(["Label": "com.sec.agent", "Program": t.url("bin/agent")]))
+    write("com.sec.args.plist", plistData(["Label": "com.sec.args", "ProgramArguments": [t.url("bin/agent"), "-d"]]))
+    write("com.gone.plist", plistData(["Label": "com.gone", "ProgramArguments": [t.url("bin/gone")]]))
+    write("com.rel.plist", plistData(["Label": "com.rel", "Program": "bin/gone"]))
+    write("com.bad.plist", Data("not a plist".utf8))
+    t.symlink("LaunchDaemons/com.link.plist", to: t.url("LaunchDaemons/com.gone.plist"))
+    let rules = [launchdRule(t.url("LaunchDaemons"))]
+    func verdict(_ name: String) -> DeleteOutcome? {
+        AdminDelete.smartCleanVerdict(for: t.url("LaunchDaemons/\(name)"), rules: rules, home: env.home, now: Date(),
+                                      installed: { [] })
+    }
+    // Program present, relative, unreadable plist, or a symlink: refused.
+    for name in ["com.sec.agent.plist", "com.sec.args.plist", "com.rel.plist", "com.bad.plist", "com.link.plist"] {
+        #expect(verdict(name) == .refused(.unsafePath), "\(name)")
+    }
+    // Program missing: an orphan.
+    #expect(verdict("com.gone.plist") == nil)
+
+    // Through perform, a live daemon's plist is refused and left in place; an orphan's is deleted.
+    let deleter = Deleter(mode: .permanent, environment: env, context: .smartClean)
+    let live = AdminDelete.Item(request: try await scannedRequest(t.url("LaunchDaemons/com.sec.agent.plist")), force: false)
+    #expect(await AdminDelete.perform(live, with: deleter, rules: rules, now: Date(), installed: { [] })
+            == .refused(.unsafePath))
+    #expect(exists(t.url("LaunchDaemons/com.sec.agent.plist")))
+    let gone = AdminDelete.Item(request: try await scannedRequest(t.url("LaunchDaemons/com.gone.plist")), force: false)
+    #expect(await AdminDelete.perform(gone, with: deleter, rules: rules, now: Date(), installed: { [] })
+            == .deleted(freed: gone.request.size))
+    #expect(!exists(t.url("LaunchDaemons/com.gone.plist")))
+}
+
+@Test func rootRechecksHelperOrphan() throws {
+    let t = TempDir(); defer { withExtendedLifetime(t) {} }
+    t.dir("Helpers")
+    try helperData(clients: ["com.x.app"]).write(to: URL(fileURLWithPath: t.url("Helpers/com.x.helper")))
+    try Data([0xCF, 0xFA, 0xED, 0xFE, 1, 2, 3]).write(to: URL(fileURLWithPath: t.url("Helpers/com.y.helper")))
+    let rules = [helperRule(t.url("Helpers"))]
+    func verdict(_ name: String, _ installed: Set<String>?) -> DeleteOutcome? {
+        AdminDelete.smartCleanVerdict(for: t.url("Helpers/\(name)"), rules: rules, home: env.home, now: Date(),
+                                      installed: { installed })
+    }
+    #expect(verdict("com.x.helper", ["com.x.app"]) == .refused(.unsafePath))     // owner installed
+    #expect(verdict("com.x.helper", nil) == .refused(.unsafePath))               // couldn't tell
+    #expect(verdict("com.x.helper", ["com.other.app"]) == nil)                   // owner gone
+    #expect(verdict("com.y.helper", []) == .refused(.unsafePath))                // no owner ids
+}
+
+@Test func rootRequiresRegularFileForFileFilterRules() throws {
+    let t = TempDir(); defer { withExtendedLifetime(t) {} }
+    t.dir("logs/x.log")
+    t.file("logs/a.log", bytes: 4096)
+    let rules = [CleanRule(id: "test.files", category: .systemLogs, pattern: t.url("logs"), unit: .eachChild,
+                           ageTiers: [(7, .safe)], fileFilter: ["*.log"], requiresAdmin: true, reason: "test")]
+    func verdict(_ name: String) -> DeleteOutcome? {
+        AdminDelete.smartCleanVerdict(for: t.url("logs/\(name)"), rules: rules, home: env.home,
+                                      now: Date() + eightDays, installed: { [] })
+    }
+    #expect(verdict("x.log") == .refused(.unsafePath))
+    #expect(exists(t.url("logs/x.log")))
+    #expect(verdict("a.log") == nil)
+}
+
+@Test func ageCheckFailsWhenItemUnreadable() throws {
+    let t = TempDir(); defer { withExtendedLifetime(t) {} }
+    t.file("logs/d/a.log")
+    t.chmod("logs/d", 0o000)
+    let verdict = AdminDelete.smartCleanVerdict(for: t.url("logs/d"), rules: [fakeRule(t.url("logs"))], home: env.home,
+                                                now: Date() + eightDays, installed: { [] })
+    #expect(verdict == .failed("Couldn't check the item's age"))
 }
