@@ -24,8 +24,12 @@ struct AppCommands: Commands {
     let registry: SessionRegistry
     let router: WindowRouter
     let smartClean: SmartCleanController
+    let updates: UpdateController
 
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") { updates.checkNow() }
+        }
         CommandGroup(replacing: .newItem) {
             Button("Scan Folder…") { FolderPicker.scan(into: registry) }
                 .keyboardShortcut("o")

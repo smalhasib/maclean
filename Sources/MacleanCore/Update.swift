@@ -67,10 +67,13 @@ public struct ReleaseInfo: Sendable, Equatable {
 }
 
 /// Ed25519 verification. Key (32 bytes) and signature (64 bytes) are base64 of raw bytes.
+/// The all-zero key (`UpdateKey`'s placeholder) is refused: it is a small-order
+/// point, and CryptoKit accepts forged signatures for it.
 public enum UpdateSignature {
     public static func isValid(_ data: Data, signatureBase64: String, publicKeyBase64: String) -> Bool {
         func b64(_ s: String) -> Data? { Data(base64Encoded: s.trimmingCharacters(in: .whitespacesAndNewlines)) }
         guard let sig = b64(signatureBase64), let keyData = b64(publicKeyBase64),
+              keyData.contains(where: { $0 != 0 }),
               let key = try? Curve25519.Signing.PublicKey(rawRepresentation: keyData) else { return false }
         return key.isValidSignature(sig, for: data)
     }

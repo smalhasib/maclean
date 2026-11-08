@@ -177,7 +177,7 @@ Exit codes:
 
 ## Safety and privacy
 
-- Nothing leaves your Mac: no network access, analytics or accounts.
+- Nothing leaves your Mac: no analytics or accounts. The only network access is the update check against GitHub's releases API, plus the update download when you accept one. Switch automatic checks off in Settings.
 - Deletion only happens after you collect items, or tick them in Smart Clean, and confirm.
 - Administrator actions go through the bundled `maclean-scan` helper behind the standard macOS password prompt. The helper re-checks every item itself, refuses anything outside its rules, and verifies a fingerprint of the item list it was given.
 - Smart Clean's rules and protected lists are Maclean's own. Nothing is copied from [mole](https://github.com/tw93/mole) (GPL-3.0), which inspired it.

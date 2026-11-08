@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Settings (spec §5.5): a General tab with the window-mode, Trash and
-/// administrator-read toggles, and the Smart Clean tab.
+/// Settings (spec §5.5): a General tab with the window-mode, Trash,
+/// administrator-read and automatic-update toggles, and the Smart Clean tab.
 struct SettingsView: View {
     var body: some View {
         TabView {
@@ -19,6 +19,7 @@ private struct GeneralSettings: View {
     @AppStorage(WindowRouter.ownWindowKey) private var ownWindow = false
     @AppStorage(DeleteController.trashKey) private var moveToTrash = false
     @AppStorage(AdminBatcher.askKey) private var askForAdminReads = true
+    @AppStorage(UpdateController.automaticKey) private var checkForUpdates = true
 
     var body: some View {
         Form {
@@ -34,6 +35,11 @@ private struct GeneralSettings: View {
                 .fixedSize(horizontal: false, vertical: true)
             Toggle("Ask for the administrator password to read restricted folders", isOn: $askForAdminReads)
             Text("Asked once after a scan finds folders only an administrator can open, and when Smart Clean finds system items it can't measure.")
+                .font(.callout)
+                .secondaryText()
+                .fixedSize(horizontal: false, vertical: true)
+            Toggle("Check for updates automatically", isOn: $checkForUpdates)
+            Text("At launch, at most once a day, against GitHub's releases. Nothing about you is sent.")
                 .font(.callout)
                 .secondaryText()
                 .fixedSize(horizontal: false, vertical: true)

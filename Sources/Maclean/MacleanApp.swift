@@ -14,12 +14,14 @@ struct MacleanApp: App {
     var body: some Scene {
         Window("Maclean", id: "main") {
             RootView(model: appDelegate.startModel, registry: appDelegate.registry, router: appDelegate.router,
-                     smartClean: appDelegate.smartClean, coordinator: appDelegate.coordinator)
+                     smartClean: appDelegate.smartClean, coordinator: appDelegate.coordinator,
+                     updates: appDelegate.updates)
         }
         .defaultSize(WindowRouter.startSize)
         .windowResizability(.contentMinSize)
         .commands {
-            AppCommands(registry: appDelegate.registry, router: appDelegate.router, smartClean: appDelegate.smartClean)
+            AppCommands(registry: appDelegate.registry, router: appDelegate.router, smartClean: appDelegate.smartClean,
+                        updates: appDelegate.updates)
         }
 
         Settings {
@@ -57,6 +59,21 @@ struct MacleanApp: App {
         return controller
     }()
 
+    lazy var updates: UpdateController = {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
+        return UpdateController(
+            currentVersion: version, bundleURL: Bundle.main.bundleURL, fetch: UpdateFetch.fetch(version: version),
+            defaults: .standard, coordinator: coordinator, installer: UpdateInstaller(),
+            // Spec §5.3: never during a delete or a Smart Clean run.
+            isBusy: { [unowned self] in
+                if case .cleaning = smartClean.phase { return true }
+                return registry.all.contains { $0.isDeleting }
+            },
+            // A sheet set while another (Smart Clean's review) is up may never show.
+            canPresent: { NSApp.windows.allSatisfy { $0.attachedSheet == nil } },
+            download: UpdateFetch.download(version: version))
+    }()
+
     func applicationWillFinishLaunching(_ notification: Notification) {
         _ = router   // takes over presenting finished scans before any starts
         registry.batcher = adminBatcher
@@ -76,6 +93,9 @@ struct MacleanApp: App {
             self.deleteMenuItem.install()
             // The start window is up by now: check in the background (spec §5.1).
             self.smartClean.checkAtLaunchIfEnabled()
+            // Spec §5.1; the sheet waits behind the Full Disk Access sheet. Not unbundled
+            // (`swift run`): there is no version to compare and no bundle to update.
+            if Bundle.main.bundleIdentifier != nil { self.updates.checkAutomatically() }
         }
     }
 
@@ -103,14 +123,14 @@ struct RootView: View {
     let router: WindowRouter
     let smartClean: SmartCleanController
     let coordinator: PromptCoordinator
+    let updates: UpdateController
     @Environment(\.openWindow) private var openWindow
     // `State` used as a type: the `@State` macro's plugin ships only with Xcode.
     private let dropTargeted = State(initialValue: false)
 
-    /// The update sheet has its own presentation (a later task).
-    private static func showsAccessSheet(_ sheet: PromptCoordinator.Sheet?) -> Bool {
-        if case .fullDiskAccess = sheet { return true }
-        return false
+    /// Escape or a click outside; the update sheet also stops its check or download.
+    private func dismissSheet() {
+        if coordinator.sheet == .update { updates.later() } else { coordinator.dismissSheet() }
     }
 
     var body: some View {
@@ -130,12 +150,21 @@ struct RootView: View {
         // The coordinator's sheet gates admin jobs app-wide, so it is presented here, on
         // whatever fills the main window (start screen or a result), never on one view.
         // Result windows need none: the main window is always open while the app runs.
-        .sheet(isPresented: Binding(get: { Self.showsAccessSheet(coordinator.sheet) },
-                                    set: { if !$0 { coordinator.dismissSheet() } })) {
-            let granted = coordinator.sheet == .fullDiskAccess(granted: true)
-            FullDiskAccessSheet(granted: granted, onContinue: coordinator.continueWithoutAccess,
-                                onDismissGranted: coordinator.dismissSheet)
-                .interactiveDismissDisabled(!granted)
+        // One sheet for both kinds: going from one straight to the other swaps its
+        // content instead of dismissing and presenting in one update.
+        .sheet(isPresented: Binding(get: { coordinator.sheet != nil },
+                                    set: { if !$0 { dismissSheet() } })) {
+            switch coordinator.sheet {
+            case .fullDiskAccess(let granted):
+                FullDiskAccessSheet(granted: granted, onContinue: coordinator.continueWithoutAccess,
+                                    onDismissGranted: coordinator.dismissSheet)
+                    .interactiveDismissDisabled(!granted)
+            case .update:
+                UpdateSheet(controller: updates)
+                    .interactiveDismissDisabled(updates.state == .installing)
+            case nil:
+                EmptyView()
+            }
         }
         .onAppear {
             let open = openWindow
