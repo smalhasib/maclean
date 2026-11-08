@@ -170,6 +170,10 @@ struct PrivilegedUpdateInstaller: Sendable {
     var runner: any AdminRunning = AdminRunner()
     var publicKeyBase64: String = UpdateKey.publicKeyBase64
     var relaunch: @MainActor @Sendable (URL) -> Void = { Relauncher.relaunch(bundleURL: $0) }
+    /// Writes the 0600 request files; injectable so tests can fail it.
+    var writeFiles: @Sendable (Data, String) throws -> AdminInstall.RequestFiles = {
+        try AdminInstall.writeRequestFiles(zip: $0, signature: $1)
+    }
 
     func install(zip: Data, signature: String, release: ReleaseInfo, replacing bundleURL: URL) async throws {
         guard UpdateSignature.isValid(zip, signatureBase64: signature, publicKeyBase64: publicKeyBase64) else {
@@ -179,9 +183,9 @@ struct PrivilegedUpdateInstaller: Sendable {
         let target = ScanBoundary.canonicalPath(bundleURL.path) ?? bundleURL.path
         let files: AdminInstall.RequestFiles
         do {
-            files = try AdminInstall.writeRequestFiles(zip: zip, signature: signature)
+            files = try writeFiles(zip, signature)
         } catch {
-            throw UpdateInstallError.swapFailed(error.localizedDescription)
+            throw UpdateInstallError.privileged("The update couldn't be prepared: \(error.localizedDescription)")
         }
         defer { AdminInstall.removeRequestFiles(files) }
         let arguments = AdminInstall.arguments(

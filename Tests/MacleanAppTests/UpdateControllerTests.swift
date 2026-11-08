@@ -497,3 +497,20 @@ private final class InstallFake: AdminFake, @unchecked Sendable {
     #expect(relaunches.urls.isEmpty)
     #expect(f.installedVersion() == "0.2.0")
 }
+
+@MainActor @Test func passwordInstallReportsUnwritableRequestFiles() async {
+    let f = Fixture()
+    let zip = f.zip()
+    let fake = InstallFake()
+    var installer = PrivilegedUpdateInstaller(runner: fake, publicKeyBase64: f.publicKey, relaunch: { _ in })
+    installer.writeFiles = { _, _ in throw POSIXError(.ENOSPC) }
+    do {
+        try await installer.install(zip: zip, signature: f.sign(zip), release: f.release, replacing: f.installed)
+        Issue.record("expected a failure")
+    } catch let UpdateInstallError.privileged(message) {
+        #expect(message.hasPrefix("The update couldn't be prepared"))
+    } catch {
+        Issue.record("unexpected error \(error)")
+    }
+    #expect(fake.prompts.isEmpty)
+}

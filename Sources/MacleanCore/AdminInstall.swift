@@ -43,7 +43,7 @@ public enum AdminInstall {
 
     /// Why root refused or failed; the raw value is the reply's `error` code.
     public enum InstallError: String, Error, Sendable, CaseIterable {
-        case usage, notRoot, unreadableFiles, badSignature, unpackFailed, wrongBundle, wrongVersion,
+        case usage, notRoot, unreadableFiles, badSignature, downgrade, unpackFailed, wrongBundle, wrongVersion,
              unsafeBundle, badTarget, swapFailed, rollbackFailed
         /// The helper's reply was missing, malformed or unknown.
         case noReply
@@ -54,6 +54,7 @@ public enum AdminInstall {
             case .notRoot: "The update helper didn't get administrator rights, so nothing was installed."
             case .unreadableFiles: "The downloaded update changed before it could be installed, so it wasn't installed."
             case .badSignature: "The download isn't signed by Maclean's release key, so it wasn't installed."
+            case .downgrade: "This update isn't newer than the installed Maclean, so it wasn't installed."
             case .unpackFailed: "The download couldn't be unpacked."
             case .wrongBundle: "The download doesn't contain Maclean, so it wasn't installed."
             case .wrongVersion: "The download isn't the version announced, so it wasn't installed."
@@ -154,7 +155,9 @@ public enum AdminInstall {
     ///    component at a time from `/` with `O_NOFOLLOW`; the target opened
     ///    relative to that fd as a directory (not a symlink) on the parent's
     ///    device (not a volume root), whose `Contents/Info.plist` (bounded,
-    ///    no-follow read) has bundle id `org.maclean.Maclean`.
+    ///    no-follow read) has bundle id `org.maclean.Maclean` and a
+    ///    `CFBundleShortVersionString` older than the request's version (an
+    ///    equal, newer or unparseable one is `.downgrade`).
     /// 4. Creates the work directory: `mkdtemp` in the target's parent
     ///    (`.maclean-update-root-XXXXXX`, mode 0700, ours), so every rename
     ///    stays on one volume.
@@ -166,7 +169,8 @@ public enum AdminInstall {
     /// 7. Walks the new bundle by fd: refuses any symlink that is absolute or
     ///    climbs out of the bundle, and anything but files, directories and
     ///    links; takes the old bundle's owner and group (`lchown`-style, only
-    ///    as root) and clears set-id bits; the bundle gets the old one's mode.
+    ///    as root), clears set-id bits and strips ACLs (never following a
+    ///    link); the bundle gets the old one's mode. Extended attributes stay.
     /// 8. Renames the old bundle into the work directory and checks it is the
     ///    inode checked in step 3 (else puts it back and refuses), then renames
     ///    the new one into place without replacing anything. If that fails the
@@ -203,6 +207,8 @@ public enum AdminInstall {
             close(target.fd)
             close(target.parentFD)
         }
+        // Never a downgrade or a reinstall; an unreadable installed version refuses too.
+        guard let installed = target.version, version > installed else { return .failure(.downgrade) }
 
         // 4: the work directory, next to the target.
         guard let work = makeWorkDir(in: target.parentFD) else { return .failure(.swapFailed) }
@@ -234,7 +240,8 @@ public enum AdminInstall {
 
         // 7: links stay inside; the old bundle's owner, group and mode.
         let owner = geteuid() == 0 ? (target.stat.st_uid, target.stat.st_gid) : nil
-        guard prepare(appFD, depth: 0, owner: owner) else { return .failure(.unsafeBundle) }
+        if let refusal = prepare(appFD, depth: 0, owner: owner) { return .failure(refusal) }
+        guard stripACL(appFD) else { return .failure(.swapFailed) }
         if let (uid, gid) = owner, fchown(appFD, uid, gid) != 0 { return .failure(.swapFailed) }
         guard fchmod(appFD, target.stat.st_mode & 0o1777) == 0 else { return .failure(.swapFailed) }
 
@@ -301,6 +308,8 @@ public enum AdminInstall {
         let fd: Int32
         let name: String
         let stat: stat
+        /// The installed `CFBundleShortVersionString`, nil if missing or unparseable.
+        let version: SemanticVersion?
     }
 
     /// The open target and its parent, or nil unless every target check holds.
@@ -312,12 +321,13 @@ public enum AdminInstall {
         let fd = openat(parent.fd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         var st = stat()
         guard fd >= 0, fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFDIR, st.st_dev == parent.device,
-              infoPlist(of: fd)?["CFBundleIdentifier"] as? String == bundleIdentifier else {
+              let info = infoPlist(of: fd), info["CFBundleIdentifier"] as? String == bundleIdentifier else {
             if fd >= 0 { close(fd) }
             close(parent.fd)
             return nil
         }
-        return Target(parentFD: parent.fd, fd: fd, name: name, stat: st)
+        let version = (info["CFBundleShortVersionString"] as? String).flatMap(SemanticVersion.init)
+        return Target(parentFD: parent.fd, fd: fd, name: name, stat: st, version: version)
     }
 
     /// `Contents/Info.plist` of the bundle open as `bundleFD`, read without
@@ -387,35 +397,52 @@ public enum AdminInstall {
     /// Walks the directory `fd`, `depth` levels below the bundle root, by fd
     /// and without following links. False on a link that is absolute or
     /// climbs out of the bundle (`linkStaysInside`), on anything but a file,
-    /// directory or link, or on any error. Gives each entry `owner` (with
-    /// `AT_SYMLINK_NOFOLLOW`) when set, and clears set-id bits.
-    static func prepare(_ fd: Int32, depth: Int, owner: (uid_t, gid_t)?) -> Bool {
-        guard let names = entries(fd) else { return false }
+    /// directory or link (`.unsafeBundle`). Gives each entry `owner` (with
+    /// `AT_SYMLINK_NOFOLLOW`) when set, clears set-id bits and strips every
+    /// ACL (`stripACL`, links included, through an `O_SYMLINK` fd so none is
+    /// followed); any of those failing, or any other error, is `.swapFailed`.
+    /// nil when the whole tree passed.
+    static func prepare(_ fd: Int32, depth: Int, owner: (uid_t, gid_t)?) -> InstallError? {
+        guard let names = entries(fd) else { return .swapFailed }
         for name in names {
             var st = stat()
-            guard fstatat(fd, name, &st, AT_SYMLINK_NOFOLLOW) == 0 else { return false }
+            guard fstatat(fd, name, &st, AT_SYMLINK_NOFOLLOW) == 0 else { return .swapFailed }
             switch st.st_mode & S_IFMT {
             case S_IFLNK:
                 var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN) + 1)
                 let n = readlinkat(fd, name, &buffer, Int(MAXPATHLEN))
                 guard n > 0, let link = String(bytes: buffer.prefix(n).map { UInt8(bitPattern: $0) }, encoding: .utf8),
-                      linkStaysInside(link, depth: depth) else { return false }
+                      linkStaysInside(link, depth: depth) else { return .unsafeBundle }
             case S_IFDIR:
                 let child = openat(fd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-                guard child >= 0 else { return false }
-                let ok = prepare(child, depth: depth + 1, owner: owner)
+                guard child >= 0 else { return .swapFailed }
+                let refusal = prepare(child, depth: depth + 1, owner: owner)
                 close(child)
-                guard ok else { return false }
+                if let refusal { return refusal }
             case S_IFREG:
                 break
             default:
-                return false
+                return .unsafeBundle
             }
-            if let (uid, gid) = owner, fchownat(fd, name, uid, gid, AT_SYMLINK_NOFOLLOW) != 0 { return false }
+            if let (uid, gid) = owner, fchownat(fd, name, uid, gid, AT_SYMLINK_NOFOLLOW) != 0 { return .swapFailed }
             if st.st_mode & S_IFMT != S_IFLNK, st.st_mode & (S_ISUID | S_ISGID) != 0,
-               fchmodat(fd, name, st.st_mode & 0o1777, 0) != 0 { return false }
+               fchmodat(fd, name, st.st_mode & 0o1777, 0) != 0 { return .swapFailed }
+            // O_SYMLINK opens a link itself, never its target; the inode must be the one just checked.
+            let entryFD = openat(fd, name, O_RDONLY | O_SYMLINK | O_NONBLOCK | O_CLOEXEC)
+            guard entryFD >= 0 else { return .swapFailed }
+            defer { close(entryFD) }
+            var est = stat()
+            guard fstat(entryFD, &est) == 0, est.st_ino == st.st_ino, est.st_dev == st.st_dev,
+                  stripACL(entryFD) else { return .swapFailed }
         }
-        return true
+        return nil
+    }
+
+    /// Replaces the extended ACL of the item open as `fd` with an empty one.
+    static func stripACL(_ fd: Int32) -> Bool {
+        guard let empty = acl_init(0) else { return false }
+        defer { acl_free(UnsafeMutableRawPointer(empty)) }
+        return acl_set_fd_np(fd, empty, ACL_TYPE_EXTENDED) == 0
     }
 
     /// Whether symlink text `link`, in a directory `depth` levels below the

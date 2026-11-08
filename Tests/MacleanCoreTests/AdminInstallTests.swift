@@ -263,3 +263,60 @@ private func failure(_ result: Result<Void, AdminInstall.InstallError>) -> Admin
     #expect(failure(AdminInstall.decode(#"{"error":"somethingNew"}"#)) == .noReply)
     for e in AdminInstall.InstallError.allCases { #expect(!e.message.isEmpty) }
 }
+
+@Test func refusesDowngradeOrReinstall() {
+    let f = Fixture()
+    // Equal and older versions, each a correctly signed Maclean of that version.
+    for version in ["0.2.0", "0.1.9"] {
+        var unzipped = false
+        let result = perform(f, f.request(zip: f.zip(version: version), version: version),
+                             unzip: { _, _, _ in unzipped = true; return true })
+        #expect(failure(result) == .downgrade, "version \(version)")
+        #expect(!unzipped)
+    }
+    #expect(f.version() == "0.2.0")
+    #expect(f.parentEntries() == ["Maclean.app"])
+    // An installed version that can't be parsed refuses too.
+    let g = Fixture()
+    try! FileManager.default.removeItem(atPath: g.installed)
+    g.makeApp(at: g.installed, id: "org.maclean.Maclean", version: "dev-build")
+    #expect(failure(perform(g, g.request(zip: g.zip()))) == .downgrade)
+    #expect(g.version() == "dev-build")
+}
+
+@Test func stripsACLsFromNewBundle() throws {
+    let f = Fixture()
+    func addACL(_ path: String, follow: Bool = true) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/chmod")
+        p.arguments = (follow ? [] : ["-h"]) + ["+a", "everyone allow write", path]
+        try! p.run()
+        p.waitUntilExit()
+        #expect(p.terminationStatus == 0, "chmod +a \(path)")
+    }
+    let zip = f.zip { app in
+        addACL(app)
+        addACL(app + "/Contents")
+        addACL(app + "/Contents/MacOS/Maclean")
+    }
+    // The zip really carries the ACLs (ditto keeps them).
+    let check = f.t.url("check")
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+    p.arguments = ["-x", "-k", f.request(zip: zip).zip, check]
+    try p.run()
+    p.waitUntilExit()
+    #expect(hasACL(check + "/Maclean.app/Contents/MacOS/Maclean"))
+
+    #expect(failure(perform(f, f.request(zip: zip))) == nil)
+    for path in [f.installed, f.installed + "/Contents", f.installed + "/Contents/MacOS/Maclean"] {
+        #expect(!hasACL(path), "ACL left on \(path)")
+    }
+}
+
+private func hasACL(_ path: String) -> Bool {
+    guard let acl = acl_get_link_np(path, ACL_TYPE_EXTENDED) else { return false }
+    defer { acl_free(UnsafeMutableRawPointer(acl)) }
+    var entry: acl_entry_t?
+    return acl_get_entry(acl, ACL_FIRST_ENTRY.rawValue, &entry) == 0
+}
