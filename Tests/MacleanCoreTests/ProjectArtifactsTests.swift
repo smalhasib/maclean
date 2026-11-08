@@ -72,7 +72,7 @@ private func found(_ t: TempDir) -> [String] {
         git(t.url("app"), "add", "package.json", "dist/a.js")
         git(t.url("app"), "commit", "-q", "-m", "init")
         #expect(ProjectArtifacts.keepReason(artifact(t, "app", "dist"), cwds: []) == .gitTracked)
-        // Untracked in a repo: free to go.
+        // No install record, so the keep check falls through to the local-patch rule.
         #expect(ProjectArtifacts.keepReason(artifact(t, "app", "node_modules"), cwds: []) == .locallyPatched)
     }
 
@@ -107,9 +107,83 @@ private func found(_ t: TempDir) -> [String] {
         #expect(ProjectArtifacts.keepReason(a, cwds: []) == .locallyPatched)      // no install record
         t.file("app/node_modules/.package-lock.json")
         setMtime(t.url("app/node_modules/.package-lock.json"), secondsAgo: 100)
+        setMtime(t.url("app/node_modules/x/index.js"), secondsAgo: 200)
         #expect(ProjectArtifacts.keepReason(a, cwds: []) == nil)
-        t.file("app/node_modules/patched.js")                                     // newer than the record
+        t.file("app/node_modules/x/index.js", bytes: 1)                           // edited after the install
         #expect(ProjectArtifacts.keepReason(a, cwds: []) == .locallyPatched)
+    }
+
+    @Test func scopedPackageFilePatchDetected() {
+        let t = TempDir()
+        t.file("app/package.json"); t.file("app/node_modules/@s/pkg/lib.js")
+        t.file("app/node_modules/.package-lock.json")
+        setMtime(t.url("app/node_modules/.package-lock.json"), secondsAgo: 100)
+        setMtime(t.url("app/node_modules/@s/pkg/lib.js"), secondsAgo: 200)
+        let a = artifact(t, "app", "node_modules")
+        #expect(ProjectArtifacts.keepReason(a, cwds: []) == nil)
+        setMtime(t.url("app/node_modules/@s/pkg/lib.js"), secondsAgo: 10)
+        #expect(ProjectArtifacts.keepReason(a, cwds: []) == .locallyPatched)
+    }
+
+    @Test func otherInstallRecordsCount() {
+        for record in [".yarn-integrity", ".yarn-state.yml", ".modules.yaml"] {
+            let t = TempDir()
+            t.file("app/package.json"); t.file("app/node_modules/x/index.js")
+            t.file("app/node_modules/\(record)")
+            setMtime(t.url("app/node_modules/\(record)"), secondsAgo: 100)
+            setMtime(t.url("app/node_modules/x/index.js"), secondsAgo: 200)
+            #expect(ProjectArtifacts.keepReason(artifact(t, "app", "node_modules"), cwds: []) == nil, "\(record)")
+        }
+    }
+
+    @Test func gitFailureMeansTracked() {
+        let t = TempDir()
+        t.file("app/package.json"); t.file("app/dist/a.js")
+        initRepo(t.url("app"))
+        git(t.url("app"), "add", "package.json")
+        git(t.url("app"), "commit", "-q", "-m", "init")
+        try! Data("garbage".utf8).write(to: URL(fileURLWithPath: t.url("app/.git/index")))
+        #expect(ProjectArtifacts.keepReason(artifact(t, "app", "dist"), cwds: []) == .gitTracked)
+    }
+
+    @Test func gitInvocationIsHardened() {
+        let inherited = ["PATH": "/usr/bin", "GIT_DIR": "/x", "GIT_WORK_TREE": "/y", "GIT_INDEX_FILE": "/z",
+                         "GIT_CONFIG": "/c", "GIT_CONFIG_COUNT": "1", "GIT_EXEC_PATH": "/e", "HOME": "/h"]
+        let (args, env) = ProjectArtifacts.gitInvocation(root: "/r", artifact: "/r/dist", inherited: inherited)
+        let cIndex = args.firstIndex(of: "-C")!
+        let before = Array(args[..<cIndex])
+        for opt in ["core.fsmonitor=false", "core.hooksPath=/dev/null", "core.untrackedCache=false", "protocol.allow=never"] {
+            #expect(before.contains(opt))
+        }
+        #expect(before.contains("--literal-pathspecs"))
+        #expect(Array(args[cIndex...]) == ["-C", "/r", "ls-files", "-z", "--", "/r/dist"])
+        #expect(env["GIT_CONFIG_NOSYSTEM"] == "1")
+        #expect(env["GIT_CONFIG_GLOBAL"] == "/dev/null")
+        for k in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_EXEC_PATH"] {
+            #expect(env[k] == nil, "\(k)")
+        }
+        #expect(env["PATH"] == "/usr/bin")
+    }
+
+    @Test func maliciousRepoConfigDoesNotRunCode() {
+        let t = TempDir()
+        t.file("app/package.json"); t.file("app/dist/a.js")
+        initRepo(t.url("app"))
+        git(t.url("app"), "add", "package.json", "dist/a.js")
+        git(t.url("app"), "commit", "-q", "-m", "init")
+        let marker = t.url("marker")
+        let script = t.url("hook.sh")
+        try! "#!/bin/sh\ntouch '\(marker)'\n".write(toFile: script, atomically: true, encoding: .utf8)
+        _ = Darwin.chmod(script, 0o755)
+        git(t.url("app"), "config", "core.fsmonitor", script)
+        // Control: an unhardened git command does run the script.
+        git(t.url("app"), "status")
+        #expect(FileManager.default.fileExists(atPath: marker), "control: fsmonitor should fire on plain git status")
+        try! FileManager.default.removeItem(atPath: marker)
+
+        let r = ProjectArtifacts.keepReason(artifact(t, "app", "dist"), cwds: [])
+        #expect(r == .gitTracked)
+        #expect(!FileManager.default.fileExists(atPath: marker))
     }
 
     @Test func depthLimitSix() {
@@ -164,10 +238,18 @@ private func found(_ t: TempDir) -> [String] {
         #expect(old.candidates.first?.displayName == "maclean — node_modules")
         #expect(old.candidates.first?.reason.contains("last touched 40 days ago") == true)
         #expect(old.candidates.first?.category == .projectLeftovers)
+        #expect(old.candidates.first?.group == "maclean")
         #expect(await run(t, [a], daysOld: 10).candidates.map(\.tier) == [.review])
         let young = await run(t, [a], daysOld: 3)
         #expect(young.candidates.isEmpty)
         #expect(young.skipped == [SkippedItem(path: a.path, reason: .recent)])
+    }
+
+    @Test func youngArtifactSkippedWithoutKeepChecks() async {
+        // cwds nil would be .projectInUse, but the age gate comes first.
+        let t = TempDir(); let a = project(t)
+        let r = await run(t, [a], daysOld: 3, cwds: nil)
+        #expect(r.skipped == [SkippedItem(path: a.path, reason: .recent)])
     }
 
     @Test func keepReasonsBecomeSkipped() async {
@@ -180,10 +262,10 @@ private func found(_ t: TempDir) -> [String] {
 
     @Test func protectedArtifactNeverOffered() async {
         let t = TempDir(); t.file("home/Work/p/package.json"); t.dir("home/Work/p/node_modules")
-        let a = ProjectArtifact(path: t.url("home/Library/node_modules"), project: "p", projectRoot: t.url("home/Library"))
-        t.dir("home/Library/node_modules")
+        let a = ProjectArtifact(path: t.url("home/Library"), project: "p", projectRoot: t.url("home"))
+        t.dir("home/Library")
         let r = await run(t, [a], daysOld: 40)
         #expect(r.candidates.isEmpty)
-        #expect(r.skipped.count == 1)
+        #expect(r.skipped == [SkippedItem(path: a.path, reason: .protected(.criticalRoot))], "\(r.skipped)")
     }
 }

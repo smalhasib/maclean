@@ -99,7 +99,6 @@ public struct CleanEngine {
         let displayName: String
         var reason: String
         if let artifact {
-            if let r = ProjectArtifacts.keepReason(artifact, cwds: cwds) { return .skip(r) }
             displayName = "\(artifact.project) — \((path as NSString).lastPathComponent)"
             reason = rule.reason
         } else {
@@ -127,6 +126,8 @@ public struct CleanEngine {
         let age = Int((probes.now.timeIntervalSince(ageDate) / 86400).rounded(.down))
         guard let match = rule.ageTiers.first(where: { $0.days <= age }) else { return .skip(.recent) }
         let tier = measurement == nil ? min(match.tier, rule.sizeUnknownTier) : match.tier
+        // After the age gate, so young artifacts never pay for the git and `.git` checks.
+        if let artifact, let r = ProjectArtifacts.keepReason(artifact, cwds: cwds) { return .skip(r) }
         if artifact != nil { reason = "\(rule.reason); project last touched \(age) days ago" }
         if case .downloadsInstaller = rule.special { reason = "Installer image downloaded \(age) days ago" }
         if case .macOSInstaller = rule.special {
@@ -164,7 +165,8 @@ public struct CleanEngine {
         return .offer(CleanCandidate(
             path: path, ruleID: rule.id, category: rule.category, tier: tier,
             displayName: displayName, reason: reason,
-            measurement: measurement, requiresAdmin: rule.requiresAdmin, owner: owner))
+            measurement: measurement, requiresAdmin: rule.requiresAdmin, owner: owner,
+            group: artifact?.project))
     }
 
     private func openCheck(_ path: String, owner: String?) -> SkipReason? {

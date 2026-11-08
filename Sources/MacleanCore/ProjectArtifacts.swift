@@ -123,19 +123,60 @@ public enum ProjectArtifacts {
     private static func containsGit(_ dir: String) -> Bool {
         guard case .success(let names) = CleanEngine.list(dir) else { return false }
         if names.contains(".git") { return true }
-        return names.contains { isRealDirectory(dir + "/" + $0) && containsGit(dir + "/" + $0) }
+        return names.contains { isRealDirectory(dir + "/" + $0, allowDataless: false) && containsGit(dir + "/" + $0) }
     }
 
-    /// `.package-lock.json` missing, or older than a file directly inside `node_modules`.
+    /// Install records, one per package manager (npm, yarn, yarn berry, pnpm).
+    private static let installRecords = [".package-lock.json", ".yarn-integrity", ".yarn-state.yml", ".modules.yaml"]
+
+    /// No install record, or a file inside a package (down to
+    /// `node_modules/@scope/pkg/file`) newer than the oldest record present.
     private static func locallyPatched(_ dir: String) -> Bool {
-        var lock = stat()
-        guard lstat(dir + "/.package-lock.json", &lock) == 0 else { return true }
-        guard case .success(let names) = CleanEngine.list(dir) else { return true }
-        return names.contains { name in
+        var newestRecord: (Int, Int)?
+        for name in installRecords {
             var st = stat()
-            guard name != ".package-lock.json", lstat(dir + "/" + name, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { return false }
-            return (st.st_mtimespec.tv_sec, st.st_mtimespec.tv_nsec) > (lock.st_mtimespec.tv_sec, lock.st_mtimespec.tv_nsec)
+            guard lstat(dir + "/" + name, &st) == 0 else { continue }
+            let t = (st.st_mtimespec.tv_sec, st.st_mtimespec.tv_nsec)
+            if newestRecord == nil || t > newestRecord! { newestRecord = t }
         }
+        guard let record = newestRecord else { return true }
+        return containsNewerFile(dir, than: record, depth: 3)
+    }
+
+    /// A regular file newer than `record` within `depth` levels (top-level records excluded).
+    private static func containsNewerFile(_ dir: String, than record: (Int, Int), depth: Int) -> Bool {
+        guard depth > 0 else { return false }
+        guard case .success(let names) = CleanEngine.list(dir) else { return true }
+        for name in names where !(depth == 3 && installRecords.contains(name)) {
+            let path = dir + "/" + name
+            var st = stat()
+            guard lstat(path, &st) == 0 else { continue }
+            switch st.st_mode & S_IFMT {
+            case S_IFREG:
+                if (st.st_mtimespec.tv_sec, st.st_mtimespec.tv_nsec) > record { return true }
+            case S_IFDIR:
+                if st.st_flags & dataless == 0, containsNewerFile(path, than: record, depth: depth - 1) { return true }
+            default: break
+            }
+        }
+        return false
+    }
+
+    /// The `git ls-files` argv and environment. A repository we found on disk is
+    /// untrusted: its config must not be able to run code (`core.fsmonitor`,
+    /// hooks), so config is pinned and the user/system config and `GIT_*`
+    /// redirections are dropped.
+    static func gitInvocation(root: String, artifact: String, inherited: [String: String])
+        -> (arguments: [String], environment: [String: String]) {
+        let args = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
+                    "-c", "core.untrackedCache=false", "-c", "protocol.allow=never", "--literal-pathspecs",
+                    "-C", root, "ls-files", "-z", "--", artifact]
+        var env = inherited.filter { key, _ in !key.hasPrefix("GIT_") }
+        env["GIT_CONFIG_NOSYSTEM"] = "1"
+        env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+        env["GIT_OPTIONAL_LOCKS"] = "0"
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        return (args, env)
     }
 
     private static let gitPath = "/usr/bin/git"
@@ -148,11 +189,9 @@ public enum ProjectArtifacts {
         guard FileManager.default.isExecutableFile(atPath: gitPath) else { return true }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: gitPath)
-        p.arguments = ["-C", a.projectRoot, "ls-files", "-z", "--", a.path]
-        var env = ProcessInfo.processInfo.environment
-        env["GIT_OPTIONAL_LOCKS"] = "0"
-        env["GIT_TERMINAL_PROMPT"] = "0"
-        p.environment = env
+        let invocation = gitInvocation(root: a.projectRoot, artifact: a.path, inherited: ProcessInfo.processInfo.environment)
+        p.arguments = invocation.arguments
+        p.environment = invocation.environment
         let out = Pipe()
         p.standardOutput = out
         p.standardError = FileHandle.nullDevice

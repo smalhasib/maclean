@@ -99,10 +99,13 @@ public struct CleanCandidate: Sendable, Identifiable, Equatable {
     public let requiresAdmin: Bool
     /// Bundle id re-probed before delete.
     public let owner: String?
+    /// The project name for project artifacts, so rows can be grouped; nil otherwise.
+    public let group: String?
 
     public init(path: String, ruleID: String, category: CleanRule.Category, tier: CleanRule.Tier,
                 displayName: String, reason: String, measurement: Measurement?, requiresAdmin: Bool,
-                owner: String?) {
+                owner: String?, group: String? = nil) {
+        self.group = group
         self.path = path
         self.ruleID = ruleID
         self.category = category
