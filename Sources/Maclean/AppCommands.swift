@@ -24,6 +24,7 @@ enum ProjectLinks {
 struct AppCommands: Commands {
     let registry: SessionRegistry
     let router: WindowRouter
+    let smartClean: SmartCleanController
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -43,7 +44,7 @@ struct AppCommands: Commands {
             GoMenu(router: router)
         }
         CommandMenu("Action") {
-            ActionMenu(router: router)
+            ActionMenu(router: router, smartClean: smartClean)
         }
         CommandGroup(replacing: .help) {
             if let help = ProjectLinks.help, let issues = ProjectLinks.issues {
@@ -83,6 +84,7 @@ private struct GoMenu: View {
 
 private struct ActionMenu: View {
     let router: WindowRouter
+    let smartClean: SmartCleanController
 
     var body: some View {
         Button("Rescan Current Folder") { if let model = router.frontModel { router.rescan(model) } }
@@ -106,6 +108,8 @@ private struct ActionMenu: View {
         Button("Remove All Items from Collector") { router.frontModel?.session.uncollectAll() }
         // "Delete Collected Items" is inserted here in AppKit (menu validation).
         Divider()
+        Button("Check for Cleanable Items") { smartClean.check() }
+            .keyboardShortcut("k", modifiers: [.command, .shift])
         Button("Launch Disk Utility…") { Actions.launchDiskUtility() }
     }
 

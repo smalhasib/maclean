@@ -1,5 +1,6 @@
 import AppKit
 import Quartz
+import SwiftUI
 
 /// Quick Look for the item under the pointer or the selection.
 ///
@@ -156,5 +157,50 @@ final class ResultResponder: NSResponder, QLPreviewPanelDataSource, QLPreviewPan
     nonisolated func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> (any QLPreviewItem)! {
         let url = MainActor.assumeIsolated { QuickLookBridge.url }
         return url.map { $0 as NSURL }
+    }
+}
+
+/// The Quick Look panel's controller for a window that has no result (the Smart
+/// Clean sheet): `SheetQuickLook` puts one in the window's responder chain.
+final class SheetQuickLookResponder: NSResponder, QLPreviewPanelDataSource {
+    override nonisolated func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { true }
+
+    override nonisolated func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        MainActor.assumeIsolated {
+            panel.dataSource = self
+            panel.reloadData()
+        }
+    }
+
+    override nonisolated func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        MainActor.assumeIsolated { if panel.dataSource === self { panel.dataSource = nil } }
+    }
+
+    nonisolated func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
+        MainActor.assumeIsolated { QuickLookBridge.url == nil ? 0 : 1 }
+    }
+
+    nonisolated func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> (any QLPreviewItem)! {
+        let url = MainActor.assumeIsolated { QuickLookBridge.url }
+        return url.map { $0 as NSURL }
+    }
+}
+
+/// An invisible view that makes Quick Look work from its window.
+struct SheetQuickLook: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Host() }
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    final class Host: NSView {
+        private let responder = SheetQuickLookResponder()
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window, responder.nextResponder == nil else { return }
+            responder.nextResponder = window.nextResponder
+            window.nextResponder = responder
+        }
     }
 }

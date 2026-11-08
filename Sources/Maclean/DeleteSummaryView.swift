@@ -6,9 +6,22 @@ import SwiftUI
 /// non-empty) the items changed since the scan with Delete Anyway / Keep,
 /// the items that couldn't be deleted with their reasons, and the items
 /// already gone.
+///
+/// Shared by the collector and Smart Clean: `resolveChanged` is the collector's
+/// Delete Anyway / Keep; without it (Smart Clean) changed items are only listed,
+/// since the next check offers them again.
 struct DeleteSummaryView: View {
-    let controller: DeleteController
     let report: DeleteReport
+    let title: String
+    var changedTitle = "Changed since the scan"
+    var resolveChanged: (([String], Bool) -> Void)?
+    let done: () -> Void
+
+    /// "Freed 1.2 GB" / "Moved 1.2 GB to the Trash".
+    static func title(freed: Int64, mode: DeleteMode) -> String {
+        let size = SizeText.string(freed)
+        return mode == .trash ? "Moved \(size) to the Trash" : "Freed \(size)"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -32,18 +45,13 @@ struct DeleteSummaryView: View {
             Divider()
             HStack {
                 Spacer()
-                Button("Done") { controller.dismissSummary() }
+                Button("Done") { done() }
                     .keyboardShortcut(.defaultAction)
             }
             .padding(16)
         }
         .frame(width: 520)
         .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private var title: String {
-        let size = SizeText.string(report.freed)
-        return controller.mode == .trash ? "Moved \(size) to the Trash" : "Freed \(size)"
     }
 
     private var hasSections: Bool {
@@ -54,11 +62,11 @@ struct DeleteSummaryView: View {
     private var changedSection: some View {
         if !report.changed.isEmpty {
             let paths = report.changed.keys.sorted()
-            section("Changed since the scan") {
-                if paths.count > 1 {
+            section(changedTitle) {
+                if paths.count > 1, let resolveChanged {
                     HStack(spacing: 8) {
-                        Button("Delete All Anyway") { controller.resolveChanged(paths, deleteAnyway: true) }
-                        Button("Keep All") { controller.resolveChanged(paths, deleteAnyway: false) }
+                        Button("Delete All Anyway") { resolveChanged(paths, true) }
+                        Button("Keep All") { resolveChanged(paths, false) }
                     }
                 }
             } rows: {
@@ -68,8 +76,10 @@ struct DeleteSummaryView: View {
                         item(path, detail: "Now \(SizeText.string(change.size)), "
                              + (change.files == 1 ? "1 file" : "\(change.files.formatted()) files"))
                         Spacer(minLength: 8)
-                        Button("Delete Anyway") { controller.resolveChanged([path], deleteAnyway: true) }
-                        Button("Keep") { controller.resolveChanged([path], deleteAnyway: false) }
+                        if let resolveChanged {
+                            Button("Delete Anyway") { resolveChanged([path], true) }
+                            Button("Keep") { resolveChanged([path], false) }
+                        }
                     }
                 }
             }

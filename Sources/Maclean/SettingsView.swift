@@ -1,14 +1,16 @@
 import SwiftUI
 
-/// Settings (spec §5.5): a General tab with the window-mode and Trash toggles. Other
-/// tabs arrive with the plans that need them.
+/// Settings (spec §5.5): a General tab with the window-mode and Trash toggles, and the
+/// Smart Clean tab.
 struct SettingsView: View {
     var body: some View {
         TabView {
             GeneralSettings()
                 .tabItem { Label("General", systemImage: "gearshape") }
+            SmartCleanSettings()
+                .tabItem { Label("Smart Clean", systemImage: "sparkles") }
         }
-        .frame(width: 440)
+        .frame(width: 440, height: 560)
     }
 }
 

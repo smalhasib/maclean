@@ -123,14 +123,14 @@ import UniformTypeIdentifiers
 
 @MainActor enum FolderPicker {
     /// Asks for a folder to scan (directories only).
-    static func pick() -> URL? {
+    static func pick(prompt: String = "Scan", message: String = "Choose a folder to scan") -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.treatsFilePackagesAsDirectories = true
-        panel.prompt = "Scan"
-        panel.message = "Choose a folder to scan"
+        panel.prompt = prompt
+        panel.message = message
         return panel.runModal() == .OK ? panel.url : nil
     }
 
@@ -149,8 +149,10 @@ import UniformTypeIdentifiers
 struct StartView: View {
     let model: StartModel
     let registry: SessionRegistry
+    let smartClean: SmartCleanController
     // `State` used as a type: the `@State` macro's plugin ships only with Xcode.
     private let starTargeted = State(initialValue: false)
+    private let reviewing = State(initialValue: false)
     private static let folderIcon = NSWorkspace.shared.icon(for: .folder)
 
     var body: some View {
@@ -195,6 +197,9 @@ struct StartView: View {
                     Separator().padding(.leading, 64)
                 }
 
+                // This view isn't on screen while a result fills the window (one-window mode).
+                SmartCleanCard(controller: smartClean) { reviewing.wrappedValue = true }
+
                 let folders = scannedFolders
                 if !folders.isEmpty {
                     SectionHeader(title: "Scanned Folders")
@@ -223,6 +228,12 @@ struct StartView: View {
             .padding(.vertical, 8)
         }
         .font(.body)
+        // Stays up through confirming, cleaning and the summary, even if the view is rebuilt meanwhile.
+        .sheet(isPresented: Binding(get: { reviewing.wrappedValue || smartClean.isBusyCleaning },
+                                    set: { if !$0 { reviewing.wrappedValue = false } })) {
+            SmartCleanReviewView(controller: smartClean) { reviewing.wrappedValue = false }
+                .interactiveDismissDisabled(smartClean.isBusyCleaning)
+        }
     }
 
     /// This session's scans that aren't a listed disk or a starred folder.

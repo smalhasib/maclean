@@ -13,12 +13,13 @@ struct MacleanApp: App {
 
     var body: some Scene {
         Window("Maclean", id: "main") {
-            RootView(model: appDelegate.startModel, registry: appDelegate.registry, router: appDelegate.router)
+            RootView(model: appDelegate.startModel, registry: appDelegate.registry, router: appDelegate.router,
+                     smartClean: appDelegate.smartClean)
         }
         .defaultSize(WindowRouter.startSize)
         .windowResizability(.contentMinSize)
         .commands {
-            AppCommands(registry: appDelegate.registry, router: appDelegate.router)
+            AppCommands(registry: appDelegate.registry, router: appDelegate.router, smartClean: appDelegate.smartClean)
         }
 
         Settings {
@@ -85,6 +86,7 @@ struct RootView: View {
     let model: StartModel
     let registry: SessionRegistry
     let router: WindowRouter
+    let smartClean: SmartCleanController
     @Environment(\.openWindow) private var openWindow
     // `State` used as a type: the `@State` macro's plugin ships only with Xcode.
     private let dropTargeted = State(initialValue: false)
@@ -96,7 +98,7 @@ struct RootView: View {
                 ResultView(model: result, router: router) { router.backToDisks(from: result) }
                     .id(ObjectIdentifier(result))
             } else {
-                StartView(model: model, registry: registry)
+                StartView(model: model, registry: registry, smartClean: smartClean)
             }
         }
         .frame(minWidth: WindowRouter.startMinimumSize.width, minHeight: WindowRouter.startMinimumSize.height)

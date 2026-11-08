@@ -33,8 +33,16 @@ import Observation
     /// True while the administrator prompt (and the helper) runs, during a
     /// clean or "Measure with administrator rights".
     var awaitingAdmin: Bool { (batch?.awaitingAdmin ?? false) || measuring }
-    /// True while a background re-check runs behind the summary.
-    var isChecking: Bool { checkTask != nil }
+    /// True while a check runs (also behind the summary). Observed, unlike `checkTask`.
+    private(set) var isChecking = false
+
+    /// True from the confirmation alert until the summary is dismissed.
+    var isBusyCleaning: Bool {
+        switch phase {
+        case .confirming, .cleaning, .summary: true
+        default: false
+        }
+    }
 
     private var batch: DeleteBatch?
     private var measuring = false
@@ -112,10 +120,12 @@ import Observation
         }
         let task = Task.detached(priority: .utility) { await engine.run(beforeRule: pause) }
         checkTask = task
+        isChecking = true
         Task { [weak self] in
             let result = await task.value
             guard let self, mine == self.generation, !task.isCancelled else { return }
             self.checkTask = nil
+            self.isChecking = false
             self.publish(result)
         }
     }
@@ -125,6 +135,7 @@ import Observation
         guard let checkTask else { return }
         checkTask.cancel()
         self.checkTask = nil
+        isChecking = false
         generation += 1
         if phase == .checking { phase = resting }
     }
@@ -292,7 +303,7 @@ import Observation
     }
 
     /// The last component of a bundle id ("com.google.Chrome" → "Chrome").
-    static func appName(_ bundleID: String) -> String {
+    nonisolated static func appName(_ bundleID: String) -> String {
         bundleID.split(separator: ".").last.map(String.init) ?? bundleID
     }
 }

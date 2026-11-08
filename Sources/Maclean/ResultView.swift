@@ -76,7 +76,10 @@ struct ResultView: View {
         .onReceive(NotificationCenter.default.publisher(for: .macleanDidDelete)) { _ in model.refreshVolumeSpace() }
         .sheet(isPresented: summaryShown) {
             if case .summary(let report) = model.session.deletion.phase {
-                DeleteSummaryView(controller: model.session.deletion, report: report)
+                let deletion = model.session.deletion
+                DeleteSummaryView(report: report, title: DeleteSummaryView.title(freed: report.freed, mode: deletion.mode),
+                                  resolveChanged: { deletion.resolveChanged($0, deleteAnyway: $1) },
+                                  done: { deletion.dismissSummary() })
                     .interactiveDismissDisabled()
             }
         }
