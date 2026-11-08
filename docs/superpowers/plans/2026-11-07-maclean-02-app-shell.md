@@ -20,7 +20,7 @@
 - **Motion:** drilling in or out animates over ~0.35 s ease-in-out, and hover over ~0.1 s. With Reduce Motion on, both become crossfades.
 - **Performance, on a `/` scan:** hover highlight < 16 ms; drill animation at 60 fps; first chart frame ≤ 100 ms after a result opens. Layout covers only the visible rings. Scanning never blocks the main thread.
 - **Shortcuts** (spec §6): ↑/↓, PgUp/PgDn/Home/End; Return/⌘↓/pinch-open = enter; ⌘↑/pinch-close = enclosing folder; ⌘[ / ⌘] / swipe = back/forward; ⇧⌘D = Back to Disks; Space = Quick Look; ⌘-click or ⌥⌘R = Show in Finder; ⌥⌘T = Open in Terminal; ⌥-click or ⇧⌘N = Open in New Window; ⌘R = rescan the session root; ⇧⌘R = rescan the disk; ⌘O = Scan Folder…; ⌘E = expand "smaller objects"; ⌘, = Settings. Keyboard actions apply to the item under the pointer first, otherwise to the selected row.
-- Commit messages: Conventional Commits, ending with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- Commit messages: Conventional Commits, with no AI attribution trailer.
 
 ## Review Focus
 

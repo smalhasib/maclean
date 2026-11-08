@@ -44,7 +44,7 @@
 - **Drags never carry file URLs out of Maclean.** The internal pasteboard type is `org.maclean.node`, so a drag can't move or copy real files in Finder.
 - **Look:** Plan 2's light & airy style. Both appearances. Body text ≥ 13 pt with `.monospacedDigit()` sizes. Middle truncation with a tooltip. Keyboard reachable.
 - **Collect and uncollect** animate with an angle morph of about 0.25 s ease-in-out. Reduce Motion turns it into a crossfade.
-- **Commits:** Conventional Commits, ending with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Never push.
+- **Commits:** Conventional Commits, with no AI attribution trailer. Never push.
 
 ## Review Focus
 
