@@ -88,6 +88,10 @@ import Observation
         (report?.candidates ?? []).filter { $0.tier != .info }.reduce(0) { $0 + ($1.measurement?.size ?? 0) }
     }
     var needsAdmin: Bool { chosen.contains { $0.requiresAdmin } }
+    /// Whether the ticked items include Trash ones (always deleted permanently).
+    var selectedIncludesTrash: Bool { chosen.contains { $0.category == .trash } }
+    /// The mode the last (or current) clean ran with, read from Settings when it started.
+    private(set) var lastMode: DeleteMode = .permanent
 
     static func isSelectable(_ c: CleanCandidate) -> Bool { c.tier != .info && c.measurement != nil }
 
@@ -263,6 +267,7 @@ import Observation
         }
         cancelCheck()
         let mode: DeleteMode = defaults.bool(forKey: DeleteController.trashKey) ? .trash : .permanent
+        lastMode = mode
         var requests: [String: DeleteRequest] = [:]
         var owners: [String: String] = [:]
         let items = targets.compactMap { c -> DeleteBatch.Item? in

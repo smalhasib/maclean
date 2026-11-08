@@ -301,6 +301,36 @@ private final class Home {
     #expect(c.report == nil)
 }
 
+@Test @MainActor func isCheckingTracksCheckAndCancel() async throws {
+    let home = Home(caches: ["a"])
+    let flag = Flag()
+    flag.value = true
+    let c = controller(home: home, scanning: { _ in flag.value })
+    #expect(!c.isChecking)
+    c.check()
+    #expect(c.isChecking)
+    try await Task.sleep(for: .milliseconds(100))
+    c.cancelCheck()
+    #expect(!c.isChecking)
+    flag.value = false
+    c.check()
+    #expect(c.isChecking)
+    await until { c.phase == .ready }
+    #expect(!c.isChecking)
+}
+
+@Test @MainActor func lastModeIsCapturedAtCleanStart() async {
+    let home = Home(caches: ["a"])
+    let d = defaults()
+    d.set(true, forKey: DeleteController.trashKey)
+    let c = controller(home: home, defaults: d)
+    c.check()
+    await until { c.phase == .ready }
+    await c.clean()
+    d.set(false, forKey: DeleteController.trashKey)
+    #expect(c.lastMode == .trash)
+}
+
 @Test @MainActor func launchCheckRespectsSetting() async {
     let home = Home(caches: ["a"])
     let off = defaults()

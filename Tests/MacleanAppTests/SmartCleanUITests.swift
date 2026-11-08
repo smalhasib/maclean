@@ -72,3 +72,19 @@ private func candidate(_ path: String, _ category: CleanRule.Category, size: Int
     #expect(CategoryState.tri(["/a", "/b"], selected: ["/z"]) == .off)
     #expect(CategoryState.tri([], selected: ["/a"]) == .off)
 }
+
+@Test func alertCopyTrashModeWithTrashItems() {
+    let a = SmartCleanCopy.alert(count: 3, size: 1_000_000, mode: .trash, needsAdmin: false, includesTrash: true)
+    #expect(a.message == "They will be moved to the Trash. Items already in the Trash will be deleted permanently.")
+    // Permanent mode needs no extra line.
+    let p = SmartCleanCopy.alert(count: 3, size: 1_000_000, mode: .permanent, needsAdmin: false, includesTrash: true)
+    #expect(p.message == "They will be deleted permanently.")
+}
+
+@Test func cardLineReviewOnlyWhenNoCleanableSize() {
+    let info = CleanReport(candidates: [candidate("/a", .largeData, size: 5_000_000_000, tier: .info),
+                                        candidate("/b", .appCaches, size: nil, tier: .review)])
+    #expect(SmartCleanCopy.cardLine(info) == "Nothing to clean automatically — review 2 items")
+    let one = CleanReport(candidates: [candidate("/a", .appCaches, size: nil, tier: .review)])
+    #expect(SmartCleanCopy.cardLine(one) == "Nothing to clean automatically — review 1 item")
+}

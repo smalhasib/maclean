@@ -6,11 +6,12 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             GeneralSettings()
+                .frame(width: 440)
                 .tabItem { Label("General", systemImage: "gearshape") }
             SmartCleanSettings()
+                .frame(width: 440, height: 560)
                 .tabItem { Label("Smart Clean", systemImage: "sparkles") }
         }
-        .frame(width: 440, height: 560)
     }
 }
 

@@ -115,6 +115,7 @@ struct SkippedSection: View {
             .buttonStyle(.plain)
             .accessibilityValue(expanded.wrappedValue ? "expanded" : "collapsed")
             if expanded.wrappedValue {
+                LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(skipped.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .firstTextBaseline, spacing: 12) {
                         Text((item.path as NSString).abbreviatingWithTildeInPath)
@@ -126,6 +127,7 @@ struct SkippedSection: View {
                     .padding(.vertical, 4)
                     .padding(.leading, 18)
                 }
+                }
             }
         }
     }
@@ -134,9 +136,9 @@ struct SkippedSection: View {
     private func reason(_ r: SkipReason) -> some View {
         let text = SmartCleanCopy.skipReason(r)
         if r == .noAccess {
-            Link(text, destination: SmartCleanCopy.fullDiskAccessURL)
+            Link(text, destination: SmartCleanCopy.fullDiskAccessURL).help(text)
         } else {
-            Text(text).secondaryText().lineLimit(1).truncationMode(.middle)
+            Text(text).secondaryText().lineLimit(1).truncationMode(.middle).help(text)
         }
     }
 }

@@ -14,9 +14,12 @@ enum SmartCleanCopy {
         return total > 0 ? SizeText.string(total) : nil
     }
 
-    /// "18.6 GB can be cleaned", or "Nothing to clean right now" when nothing measured is cleanable.
+    /// "18.6 GB can be cleaned"; with items but no cleanable size (all Info or size unknown),
+    /// "Nothing to clean automatically — review 3 items"; else "Nothing to clean right now".
     static func cardLine(_ report: CleanReport) -> String {
-        cardSize(report).map { "\($0) can be cleaned" } ?? nothing
+        if let size = cardSize(report) { return "\(size) can be cleaned" }
+        let n = report.candidates.count
+        return n == 0 ? nothing : "Nothing to clean automatically — review \(n) \(n == 1 ? "item" : "items")"
     }
 
     /// The names of the three biggest categories, biggest first ("App caches, Logs, Developer files").
@@ -49,8 +52,11 @@ enum SmartCleanCopy {
     }
 
     /// The confirmation alert before Clean.
-    static func alert(count: Int, size: Int64, mode: DeleteMode, needsAdmin: Bool) -> (title: String, message: String) {
+    /// `includesTrash`: the selection holds Trash items, which are always deleted permanently.
+    static func alert(count: Int, size: Int64, mode: DeleteMode, needsAdmin: Bool,
+                      includesTrash: Bool = false) -> (title: String, message: String) {
         var message = mode == .trash ? "They will be moved to the Trash." : "They will be deleted permanently."
+        if mode == .trash, includesTrash { message += " Items already in the Trash will be deleted permanently." }
         if needsAdmin { message += " Some items need your administrator password." }
         return ("Delete \(count) \(count == 1 ? "item" : "items") (\(SizeText.string(size)))?", message)
     }

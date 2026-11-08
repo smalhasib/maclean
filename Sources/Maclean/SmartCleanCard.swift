@@ -49,10 +49,11 @@ struct SmartCleanCard: View {
                 card {
                     icon
                     VStack(alignment: .leading, spacing: 2) {
-                        if let size = SmartCleanCopy.cardSize(report) {
-                            (Text(size).bold().monospacedDigit() + Text(" can be cleaned"))
+                        let line = SmartCleanCopy.cardLine(report)
+                        if let size = SmartCleanCopy.cardSize(report), line.hasPrefix(size) {
+                            Text(size).bold().monospacedDigit() + Text(line.dropFirst(size.count))
                         } else {
-                            Text(SmartCleanCopy.nothing)
+                            Text(line)
                         }
                         let top = SmartCleanCopy.breakdown(report)
                         if !top.isEmpty {

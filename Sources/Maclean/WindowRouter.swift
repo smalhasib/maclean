@@ -144,6 +144,12 @@ import SwiftUI
         }
     }
 
+    /// The start screen in the main window (a result there goes back to the disks), brought forward.
+    func showStartScreen() {
+        registry.presented = nil
+        showLauncher()
+    }
+
     /// "Disks" / ⇧⌘D from a result: the main window goes back to the start
     /// screen; another window brings the launcher forward.
     func backToDisks(from model: ResultViewModel) {

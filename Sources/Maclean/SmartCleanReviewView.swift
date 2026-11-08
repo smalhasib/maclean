@@ -37,7 +37,7 @@ struct SmartCleanReviewView: View {
                                     set: { if !$0 { controller.dismissSummary() } })) {
             if case .summary(let report) = controller.phase {
                 DeleteSummaryView(report: report,
-                                  title: DeleteSummaryView.title(freed: report.freed, mode: moveToTrash ? .trash : .permanent),
+                                  title: DeleteSummaryView.title(freed: report.freed, mode: controller.lastMode),
                                   changedTitle: "Changed since the check",
                                   done: { controller.dismissSummary() })
                     .interactiveDismissDisabled()
@@ -48,7 +48,8 @@ struct SmartCleanReviewView: View {
     private var alertCopy: (title: String, message: String) {
         let count = controller.selected.count
         return SmartCleanCopy.alert(count: count, size: controller.selectedSize,
-                                    mode: moveToTrash ? .trash : .permanent, needsAdmin: controller.needsAdmin)
+                                    mode: moveToTrash ? .trash : .permanent, needsAdmin: controller.needsAdmin,
+                                    includesTrash: controller.selectedIncludesTrash)
     }
 
     // MARK: Header

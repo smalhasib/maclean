@@ -108,7 +108,10 @@ private struct ActionMenu: View {
         Button("Remove All Items from Collector") { router.frontModel?.session.uncollectAll() }
         // "Delete Collected Items" is inserted here in AppKit (menu validation).
         Divider()
-        Button("Check for Cleanable Items") { smartClean.check() }
+        Button("Check for Cleanable Items") {
+            smartClean.check()
+            router.showStartScreen()   // where the card shows the checking state
+        }
             .keyboardShortcut("k", modifiers: [.command, .shift])
         Button("Launch Disk Utility…") { Actions.launchDiskUtility() }
     }
