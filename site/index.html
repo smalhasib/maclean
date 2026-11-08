@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maclean: free disk space analyzer and cleaner for macOS</title>
+<meta name="description" content="Maclean is a free, open-source disk analyzer and cleaner for macOS. Scan a disk, explore it on an interactive map, and clear space safely.">
+<meta name="theme-color" content="#FAFAF8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101216" media="(prefers-color-scheme: dark)">
+<meta property="og:title" content="Maclean: see where your disk space went">
+<meta property="og:description" content="Free, open-source disk space analyzer and cleaner for macOS.">
+<meta property="og:image" content="https://smalhasib.github.io/maclean/icon.png">
+<meta property="og:url" content="https://smalhasib.github.io/maclean/">
+<link rel="icon" href="icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="nav">
+  <a class="brand" href="#top"><img src="icon.png" alt="" width="28" height="28">Maclean</a>
+  <nav aria-label="Main">
+    <a href="#features">Features</a>
+    <a href="#install">Install</a>
+    <a href="#use">How to use</a>
+    <a href="#docs">Docs</a>
+    <a class="btn small ghost" href="https://github.com/smalhasib/maclean" rel="noopener">
+      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38v-1.33c-2.23.48-2.7-1.07-2.7-1.07-.36-.92-.89-1.17-.89-1.17-.73-.5.05-.49.05-.49.81.06 1.23.83 1.23.83.72 1.23 1.88.88 2.34.67.07-.52.28-.88.51-1.08-1.78-.2-3.65-.89-3.65-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.28.82 2.15 0 3.07-1.88 3.75-3.66 3.95.29.25.54.73.54 1.48v2.2c0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+      Star <span class="star-count" hidden></span>
+    </a>
+  </nav>
+</header>
+
+<main id="top">
+
+<section class="hero">
+  <div class="hero-text">
+    <p class="pill">Free, open source, no telemetry</p>
+    <h1>See where your disk space went.</h1>
+    <p class="lead">Maclean is a native macOS disk analyzer and cleaner. Scan a disk, explore it on an interactive map, and clear space safely.</p>
+    <div class="cta">
+      <a id="download" class="btn primary" href="https://github.com/smalhasib/maclean/releases/latest" rel="noopener">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"/></svg>
+        <span id="download-label">Download for macOS</span>
+      </a>
+      <button class="chip" data-copy="brew install --cask maclean" aria-label="Copy the Homebrew install command">
+        <code>brew install --cask maclean</code><span class="copy-hint">Copy</span>
+      </button>
+    </div>
+    <p class="fine">macOS 14 or later · Apple silicon and Intel · MIT licensed</p>
+  </div>
+
+  <svg class="sunburst" viewBox="0 0 200 200" role="img" aria-label="Animated sunburst map of disk usage">
+    <g transform="rotate(-90 100 100)" fill="none">
+      <g class="a3" stroke-width="14"><circle cx="100" cy="100" r="93" stroke="#BBD3F2" stroke-dasharray="330 254"/><circle cx="100" cy="100" r="93" stroke="#F5C4B3" stroke-dasharray="150 434" stroke-dashoffset="-345"/></g>
+      <g class="a2" stroke-width="26"><circle cx="100" cy="100" r="68" stroke="#9FE1CB" stroke-dasharray="150 277"/><circle cx="100" cy="100" r="68" stroke="#8BB5E8" stroke-dasharray="170 257" stroke-dashoffset="-150"/><circle cx="100" cy="100" r="68" stroke="#F4C0D1" stroke-dasharray="107 320" stroke-dashoffset="-320"/></g>
+      <g class="a1" stroke-width="24"><circle cx="100" cy="100" r="40" stroke="#8BB5E8" stroke-dasharray="110 141"/><circle cx="100" cy="100" r="40" stroke="#E98FB0" stroke-dasharray="75 176" stroke-dashoffset="-110"/><circle cx="100" cy="100" r="40" stroke="#E8AE6C" stroke-dasharray="62 189" stroke-dashoffset="-185"/></g>
+    </g>
+    <circle class="hole" cx="100" cy="100" r="22"/>
+  </svg>
+</section>
+
+<section id="features" class="section reveal">
+  <h2>Everything you need to get space back</h2>
+  <div class="grid features">
+    <article class="card"><h3>Fast scans</h3><p>Scan whole disks or any folder using every core. Hard links and APFS clones are counted once, and it stays on one disk.</p></article>
+    <article class="card"><h3>Interactive map</h3><p>Click a segment to drill in, hover for sizes, press Space for Quick Look. A side list ranks the largest items.</p></article>
+    <article class="card"><h3>Collector</h3><p>Drag items to the collector. Folders shrink as you collect, so you see the space you'll get back before anything is deleted.</p></article>
+    <article class="card"><h3>Safe delete</h3><p>A 5-second countdown, a re-check right before removal, and no following swapped links or crossing disks. Or use the Trash.</p></article>
+    <article class="card"><h3>Smart Clean</h3><p>Finds caches, logs, build output and leftovers of removed apps, and says why it skipped anything. Nothing goes until you confirm.</p></article>
+    <article class="card"><h3>Private and protected</h3><p>No analytics or accounts. System folders, keychains, Mail, Messages and Photos can't be deleted. Updates are signed.</p></article>
+  </div>
+</section>
+
+<section id="install" class="section reveal">
+  <h2>Install</h2>
+  <p class="sub">Needs macOS 14 Sonoma or later, on Apple silicon or Intel.</p>
+
+  <div class="tabs" role="tablist" aria-label="Install method">
+    <button role="tab" id="t-brew" aria-controls="p-brew" aria-selected="true">Homebrew</button>
+    <button role="tab" id="t-dmg" aria-controls="p-dmg" aria-selected="false" tabindex="-1">Disk image</button>
+    <button role="tab" id="t-src" aria-controls="p-src" aria-selected="false" tabindex="-1">From source</button>
+  </div>
+
+  <div class="panel" role="tabpanel" id="p-brew" aria-labelledby="t-brew">
+    <div class="code"><code>brew tap smalhasib/maclean</code><button data-copy="brew tap smalhasib/maclean" aria-label="Copy">Copy</button></div>
+    <div class="code"><code>brew trust smalhasib/maclean</code><button data-copy="brew trust smalhasib/maclean" aria-label="Copy">Copy</button></div>
+    <div class="code"><code>brew install --cask maclean</code><button data-copy="brew install --cask maclean" aria-label="Copy">Copy</button></div>
+    <p class="note">Update later with <code>brew upgrade --cask maclean</code>. The cask also installs the <code>maclean-scan</code> command.</p>
+  </div>
+
+  <div class="panel" role="tabpanel" id="p-dmg" aria-labelledby="t-dmg" hidden>
+    <ol class="steps">
+      <li>Download the <a id="dmg-link" href="https://github.com/smalhasib/maclean/releases/latest" rel="noopener">latest <code>.dmg</code></a> and open it.</li>
+      <li>Drag <strong>Maclean</strong> onto the <strong>Applications</strong> shortcut, then eject the disk image.</li>
+      <li>Open Maclean from Applications.</li>
+    </ol>
+    <details class="help">
+      <summary>macOS says it can't verify Maclean</summary>
+      <p>Maclean isn't notarized by Apple, so macOS may block the first launch. Allow it once:</p>
+      <ul>
+        <li><strong>macOS 15 or later:</strong> try to open Maclean, then open System Settings › Privacy &amp; Security, scroll to Security, click <strong>Open Anyway</strong> next to Maclean, and confirm with your password.</li>
+        <li><strong>macOS 14:</strong> right-click Maclean in Applications, choose <strong>Open</strong>, then <strong>Open</strong> again.</li>
+        <li><strong>Terminal, any version:</strong>
+          <div class="code"><code>xattr -dr com.apple.quarantine /Applications/Maclean.app</code><button data-copy="xattr -dr com.apple.quarantine /Applications/Maclean.app" aria-label="Copy">Copy</button></div>
+        </li>
+      </ul>
+    </details>
+    <p class="note">Once it opens, Maclean installs updates itself.</p>
+  </div>
+
+  <div class="panel" role="tabpanel" id="p-src" aria-labelledby="t-src" hidden>
+    <div class="code"><code>git clone https://github.com/smalhasib/maclean.git &amp;&amp; cd maclean</code><button data-copy="git clone https://github.com/smalhasib/maclean.git && cd maclean" aria-label="Copy">Copy</button></div>
+    <div class="code"><code>scripts/build-app.sh &amp;&amp; open .build/Maclean.app</code><button data-copy="scripts/build-app.sh && open .build/Maclean.app" aria-label="Copy">Copy</button></div>
+    <p class="note">Needs only the Command Line Tools (<code>xcode-select --install</code>). Xcode isn't required.</p>
+  </div>
+</section>
+
+<section id="use" class="section reveal">
+  <h2>How to use</h2>
+  <ol class="grid how">
+    <li class="card"><span class="n">1</span><h3>Grant Full Disk Access</h3><p>Maclean asks at launch until it's on. Without it, macOS hides folders like Mail and Messages and totals come out low. For folders only an administrator can open, it asks for your password once per scan.</p></li>
+    <li class="card"><span class="n">2</span><h3>Pick a disk or folder</h3><p>Choose one on the start screen, or use File › Scan Folder… (<kbd>⌘O</kbd>).</p></li>
+    <li class="card"><span class="n">3</span><h3>Explore the map</h3><p>Click a segment to go in and the centre to go back out. Hover for sizes, press <kbd>Space</kbd> for Quick Look.</p></li>
+    <li class="card"><span class="n">4</span><h3>Collect what you don't need</h3><p>Drag items to the collector bar, or press <kbd>⌘⌫</kbd>. You see the space you'll free before deleting.</p></li>
+    <li class="card"><span class="n">5</span><h3>Delete</h3><p>A 5-second countdown with Cancel, then everything is re-checked and removed. Turn on Move to Trash in Settings to use the Trash.</p></li>
+    <li class="card"><span class="n">6</span><h3>Or let Smart Clean find it</h3><p>Press <kbd>⇧⌘K</kbd> to review caches, logs, build output and app leftovers. Nothing is deleted until you tick items and confirm.</p></li>
+  </ol>
+</section>
+
+<section id="shortcuts" class="section reveal">
+  <h2>Keyboard shortcuts</h2>
+  <div class="keys">
+    <div><span>Scan folder</span><kbd>⌘O</kbd></div>
+    <div><span>Open in new window</span><kbd>⇧⌘N</kbd></div>
+    <div><span>Back / forward</span><kbd>⌘[</kbd> <kbd>⌘]</kbd></div>
+    <div><span>Enter / enclosing folder</span><kbd>⌘↓</kbd> <kbd>⌘↑</kbd></div>
+    <div><span>Back to disks</span><kbd>⇧⌘D</kbd></div>
+    <div><span>Expand smaller objects</span><kbd>⌘E</kbd></div>
+    <div><span>Rescan folder / rescan</span><kbd>⌘R</kbd> <kbd>⇧⌘R</kbd></div>
+    <div><span>Quick Look</span><kbd>Space</kbd></div>
+    <div><span>Show in Finder</span><kbd>⌥⌘R</kbd></div>
+    <div><span>Open in Terminal</span><kbd>⌥⌘T</kbd></div>
+    <div><span>Move to collector</span><kbd>⌘⌫</kbd></div>
+    <div><span>Check for cleanable items</span><kbd>⇧⌘K</kbd></div>
+    <div><span>Settings</span><kbd>⌘,</kbd></div>
+  </div>
+</section>
+
+<section id="docs" class="section reveal">
+  <h2>Docs and source</h2>
+  <div class="grid docs">
+    <a class="card link" href="https://github.com/smalhasib/maclean#readme" rel="noopener"><h3>README</h3><p>Install, usage and features in one page.</p></a>
+    <a class="card link" href="https://github.com/smalhasib/maclean/blob/main/docs/releasing.md" rel="noopener"><h3>Releasing</h3><p>How automatic releases, signing and updates work.</p></a>
+    <a class="card link" href="https://github.com/smalhasib/maclean/blob/main/CHANGELOG.md" rel="noopener"><h3>Changelog</h3><p>What changed in every release.</p></a>
+    <a class="card link" href="https://github.com/smalhasib/maclean/blob/main/docs/manual-checklist.md" rel="noopener"><h3>Manual checklist</h3><p>The by-hand checks run before a release.</p></a>
+    <a class="card link" href="https://github.com/smalhasib/maclean/issues" rel="noopener"><h3>Report an issue</h3><p>Bugs and ideas are welcome.</p></a>
+    <a class="card link" href="https://github.com/smalhasib/maclean" rel="noopener"><h3>Source code</h3><p>MIT licensed, native Swift and SwiftUI.</p></a>
+  </div>
+</section>
+
+<section class="star reveal">
+  <p class="star-title"><span class="pl">★</span> Enjoying Maclean?</p>
+  <p>It's free and built in the open. If it saved you space, a star on GitHub helps other people find it.</p>
+  <a class="btn primary" href="https://github.com/smalhasib/maclean" rel="noopener">Star on GitHub <span class="star-count" hidden></span></a>
+</section>
+
+</main>
+
+<footer>
+  <span>Maclean · <a href="https://github.com/smalhasib/maclean/blob/main/LICENSE" rel="noopener">MIT license</a></span>
+  <span><a href="https://github.com/smalhasib/maclean/releases" rel="noopener">Releases</a> · <a href="https://github.com/smalhasib/maclean" rel="noopener">GitHub</a></span>
+</footer>
+
+<script src="app.js" defer></script>
+</body>
+</html>

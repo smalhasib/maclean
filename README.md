@@ -7,7 +7,8 @@
 <p align="center">
   A free, open-source disk space analyzer and cleaner for macOS.<br>
   Scan a disk, see where the space went on an interactive map, and clear it out safely.<br>
-  Native Swift, no telemetry, MIT licensed.
+  Native Swift, no telemetry, MIT licensed.<br>
+  <a href="https://smalhasib.github.io/maclean/">Website</a> · <a href="https://github.com/smalhasib/maclean/releases">Releases</a>
 </p>
 
 ## Install
