@@ -230,15 +230,6 @@ struct StartView: View {
             .padding(.vertical, 8)
         }
         .font(.body)
-        // A sheet you must answer; once access is on, it can be set aside.
-        .sheet(isPresented: Binding(get: { coordinator.sheet == .fullDiskAccess(granted: false)
-                                        || coordinator.sheet == .fullDiskAccess(granted: true) },
-                                    set: { if !$0 { coordinator.dismissSheet() } })) {
-            let granted = coordinator.sheet == .fullDiskAccess(granted: true)
-            FullDiskAccessSheet(granted: granted, onContinue: coordinator.continueWithoutAccess,
-                                onDismissGranted: coordinator.dismissSheet)
-                .interactiveDismissDisabled(!granted)
-        }
         // Stays up through confirming, cleaning and the summary, even if the view is rebuilt meanwhile.
         .sheet(isPresented: Binding(get: { reviewing.wrappedValue || smartClean.isBusyCleaning },
                                     set: { if !$0 { reviewing.wrappedValue = false } })) {
@@ -253,18 +244,20 @@ struct StartView: View {
             Image(systemName: "lock.fill").secondaryText()
             if coordinator.accessGranted {
                 Text("Full Disk Access is on. Relaunch Maclean to use it.")
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
-                Button("Relaunch") { Relauncher.relaunch() }
+                Button("Relaunch") { Relauncher.relaunch() }.fixedSize()
             } else {
                 Text("Scans will miss protected folders —")
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 Button("Grant Access…") { coordinator.reopenAccessSheet() }
-                    .buttonStyle(.link)
+                    .buttonStyle(.link).fixedSize()
                 Spacer(minLength: 0)
             }
         }
-        .lineLimit(1)
         .padding(.horizontal, 12)
-        .frame(height: 32)
+        .padding(.vertical, 6)
+        .frame(minHeight: 32)
         .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
         .padding(.horizontal, 12)
         .padding(.bottom, 4)

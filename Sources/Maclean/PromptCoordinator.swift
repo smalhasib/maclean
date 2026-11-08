@@ -19,6 +19,7 @@ import Observation
 
     @ObservationIgnored private let hasAccess: () -> Bool
     @ObservationIgnored private var updatePending = false
+    @ObservationIgnored private var accessPending = false
     @ObservationIgnored private var adminBusy = false
     @ObservationIgnored private var adminWaiters: [CheckedContinuation<Void, Never>] = []
 
@@ -36,29 +37,52 @@ import Observation
     }
 
     func reopenAccessSheet() {
-        if sheet == nil { sheet = .fullDiskAccess(granted: accessGranted) }
+        if sheet == nil { sheet = .fullDiskAccess(granted: accessGranted) } else if sheet == .update { accessPending = true }
     }
 
     /// Re-probes, for the return from System Settings.
     func becameActive() {
         guard sheet == .fullDiskAccess(granted: false) || showsAccessNotice, !accessGranted, hasAccess() else { return }
         accessGranted = true
-        if sheet == nil || sheet == .fullDiskAccess(granted: false) { sheet = .fullDiskAccess(granted: true) }
+        if sheet == nil || sheet == .fullDiskAccess(granted: false) {
+            sheet = .fullDiskAccess(granted: true)
+        } else if sheet == .update {
+            accessPending = true   // shown once the update sheet is closed
+        }
     }
 
     func requestUpdateSheet() {
         if sheet == nil { sheet = .update } else if sheet != .update { updatePending = true }
     }
 
+    /// Any dismissal (Escape, a click outside, the sheet's own buttons). Leaving
+    /// the not-granted sheet without access is the same as Continue.
     func dismissSheet() {
-        closeSheet()
+        if sheet == .fullDiskAccess(granted: false) {
+            continueWithoutAccess()
+        } else {
+            closeSheet()
+        }
     }
 
     /// Runs `job` once no sheet is up and no other admin job is running. The
     /// job shows the dialog (with `reason`), so the dialogs never overlap.
-    func admin<T>(_ reason: String, _ job: @escaping @MainActor () async -> T) async -> T {
+    /// Throws `CancellationError`, without running `job`, when the calling task
+    /// was cancelled while it waited (a waiting task is only noticed once its
+    /// turn comes, and it then passes the slot on).
+    func admin<T>(_ reason: String, _ job: @escaping @MainActor () async -> T) async throws -> T {
         if adminBusy || sheet != nil || !adminWaiters.isEmpty {
             await withCheckedContinuation { adminWaiters.append($0) }
+            // A sheet may have appeared between the hand-over and now: wait again, first in line.
+            while sheet != nil, !Task.isCancelled {
+                adminBusy = false
+                await withCheckedContinuation { adminWaiters.insert($0, at: 0) }
+            }
+            if Task.isCancelled {
+                adminBusy = false
+                drainAdmin()
+                throw CancellationError()
+            }
         } else {
             adminBusy = true
         }
@@ -74,6 +98,9 @@ import Observation
         if updatePending {
             updatePending = false
             sheet = .update
+        } else if accessPending {
+            accessPending = false
+            sheet = .fullDiskAccess(granted: accessGranted)
         } else {
             sheet = nil
         }

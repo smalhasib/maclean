@@ -103,6 +103,12 @@ struct RootView: View {
     // `State` used as a type: the `@State` macro's plugin ships only with Xcode.
     private let dropTargeted = State(initialValue: false)
 
+    /// The update sheet has its own presentation (a later task).
+    private static func showsAccessSheet(_ sheet: PromptCoordinator.Sheet?) -> Bool {
+        if case .fullDiskAccess = sheet { return true }
+        return false
+    }
+
     var body: some View {
         Group {
             if let session = registry.presented, let tree = session.tree,
@@ -117,6 +123,16 @@ struct RootView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .background(MainWindowAccessor(router: router))
         .environment(\.windowRouter, router)
+        // The coordinator's sheet gates admin jobs app-wide, so it is presented here, on
+        // whatever fills the main window (start screen or a result), never on one view.
+        // Result windows need none: the main window is always open while the app runs.
+        .sheet(isPresented: Binding(get: { Self.showsAccessSheet(coordinator.sheet) },
+                                    set: { if !$0 { coordinator.dismissSheet() } })) {
+            let granted = coordinator.sheet == .fullDiskAccess(granted: true)
+            FullDiskAccessSheet(granted: granted, onContinue: coordinator.continueWithoutAccess,
+                                onDismissGranted: coordinator.dismissSheet)
+                .interactiveDismissDisabled(!granted)
+        }
         .onAppear {
             let open = openWindow
             router.openMainWindow = { open(id: "main") }

@@ -23,7 +23,7 @@ struct FullDiskAccessSheet: View {
             Text(granted ? "Full Disk Access is on" : "Give Maclean Full Disk Access")
                 .font(.title2.weight(.semibold))
             if granted {
-                Text("Full Disk Access is on. Relaunch Maclean to use it.")
+                Text("Relaunch Maclean to use it.")
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                 Button("Relaunch") { Relauncher.relaunch() }
