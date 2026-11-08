@@ -78,12 +78,13 @@ private func releaseJSON(assets: [(String, String)]) -> Data {
 }
 
 /// The all-zero key is a small-order point: Ed25519 accepts forged signatures for it.
-@Test func placeholderKeyNeverVerifies() {
-    #expect(UpdateKey.publicKeyBase64 == Data(count: 32).base64EncodedString())
+@Test func allZeroKeyNeverVerifies() {
+    let zero = Data(count: 32).base64EncodedString()
+    #expect(UpdateKey.publicKeyBase64 != zero)
+    #expect(Data(base64Encoded: UpdateKey.publicKeyBase64)?.count == 32)
     let identity = Data([1] + [UInt8](repeating: 0, count: 31))
     for i in 0..<64 {
         let forged = (identity + Data(count: 32)).base64EncodedString()
-        #expect(!UpdateSignature.isValid(Data("m\(i)".utf8), signatureBase64: forged,
-                                         publicKeyBase64: UpdateKey.publicKeyBase64))
+        #expect(!UpdateSignature.isValid(Data("m\(i)".utf8), signatureBase64: forged, publicKeyBase64: zero))
     }
 }

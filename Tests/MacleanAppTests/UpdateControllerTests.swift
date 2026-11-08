@@ -336,7 +336,7 @@ private func installer(_ f: Fixture, relaunches: Relaunches,
         try await installer(f, relaunches: relaunches)
             .install(zip: tampered, signature: signature, release: f.release, replacing: f.installed)
     }
-    // The placeholder key never verifies anything.
+    // The shipped release key never verifies a zip signed by another key.
     let placeholder = UpdateInstaller(trash: { _ in Issue.record("trashed") }, relaunch: { _ in Issue.record("relaunched") })
     await #expect(throws: UpdateInstallError.badSignature) {
         try await placeholder.install(zip: zip, signature: signature, release: f.release, replacing: f.installed)

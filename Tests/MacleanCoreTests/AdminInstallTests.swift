@@ -119,7 +119,7 @@ private func failure(_ result: Result<Void, AdminInstall.InstallError>) -> Admin
     #expect(!unzipped)
     #expect(f.version() == "0.2.0")
     #expect(f.parentEntries() == ["Maclean.app"])
-    // The placeholder all-zero key never verifies anything.
+    // The shipped release key never verifies a zip signed by another key.
     let placeholder = AdminInstall.perform(f.request(zip: zip), publicKeyBase64: UpdateKey.publicKeyBase64,
                                            unzip: AdminInstall.ditto)
     #expect(failure(placeholder) == .badSignature)

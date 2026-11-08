@@ -476,7 +476,7 @@ Tests at the end of Task 7: 473 pass (44 + 287 + 142 across the three test targe
 - Admin delete of a root-owned folder works with the password.
 - Root versus privacy spike: root never opens TCC-protected folders (Mail, Messages, Safari). The scanner now tells them apart by errno (EPERM is privacy, EACCES is ownership), keeps privacy folders (`.privacy`) out of the password read, and offers Full Disk Access for them.
 - Without Full Disk Access, `*.photoslibrary` and `~/Library/Photos` raise the Photos consent dialog, so scans skip them; no prompt was seen afterwards.
-- Owner step 1 (signing certificate) is done.
+- Owner steps 1–3 are done: the signing certificate exists, and the update key is at `~/.config/maclean/update-key` (backup in `~/Documents/Maclean/update-key`) with its public key in `UpdateKey.swift`.
 
 ### Developer ID follow-ups (spec §8)
 
