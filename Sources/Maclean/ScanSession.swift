@@ -30,8 +30,9 @@ import Observation
     /// The collector overlay on the finished tree; nil while scanning, after a
     /// failure, or before the first scan. Windows keep their last copy meanwhile.
     private(set) var view: TreeView?
-    /// True while a delete counts down or runs; collect and uncollect are
-    /// no-ops then (`markRemoved` stays allowed: the delete run calls it).
+    /// True while a delete counts down or runs (not while its summary is up,
+    /// so Rescan works then); collect and uncollect are no-ops, as is a
+    /// rescan (`markRemoved` stays allowed: the delete run calls it).
     var isDeleting = false
     /// Collected paths the last rescan couldn't find; the result window shows
     /// a note and clears it.

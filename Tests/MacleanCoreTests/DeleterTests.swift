@@ -99,6 +99,39 @@ private final class URLBox: @unchecked Sendable {
         #expect(!exists(t.url("d")))
     }
 
+    /// `r` with a different change tolerance.
+    private func cache(_ r: DeleteRequest) -> DeleteRequest {
+        DeleteRequest(path: r.path, inode: r.inode, device: r.device, size: r.size, fileCount: r.fileCount,
+                      isDirectory: r.isDirectory, tolerance: .cache)
+    }
+
+    @Test func cacheToleranceAllowsSmallGrowth() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        t.file("d/a", bytes: 100 << 10)
+        let r = cache(try await request(t.url("d")))
+        t.file("d/b", bytes: 8 << 10)
+        guard case .deleted = await deleter.delete(r) else { Issue.record("expected deleted"); return }
+        #expect(!exists(t.url("d")))
+    }
+
+    @Test func cacheToleranceRefusesLargeGrowth() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        t.file("d/a", bytes: 100 << 10)
+        let r = cache(try await request(t.url("d")))
+        t.file("d/b", bytes: 20 << 10)
+        guard case .changedSinceScan = await deleter.delete(r) else { Issue.record("expected changedSinceScan"); return }
+        #expect(exists(t.url("d/a")) && exists(t.url("d/b")))
+    }
+
+    @Test func cacheToleranceIgnoresFileCountChange() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        t.file("d/a", bytes: 100 << 10)
+        let r = try await request(t.url("d"))
+        for i in 0..<3 { t.file("d/empty\(i)") }
+        guard case .changedSinceScan = await deleter.delete(r) else { Issue.record("strict: expected changed"); return }
+        guard case .deleted = await deleter.delete(cache(r)) else { Issue.record("expected deleted"); return }
+    }
+
     @Test func symlinkIsDeletedAsLinkOnly() async throws {
         let t = TempDir(); defer { withExtendedLifetime(t) {} }
         t.file("keep/k", bytes: 10)

@@ -1,6 +1,10 @@
 import Foundation
 
-public enum ProtectionContext: Sendable { case collector }
+/// Which feature asks. `.smartClean` has no rules of its own yet: it uses the collector's.
+public enum ProtectionContext: String, Sendable {
+    case collector
+    case smartClean = "smart-clean"
+}
 
 public enum Refusal: String, Sendable, Codable, Equatable {
     case systemProtected, volumeRoot, libraryItself, homeItself, macleanItself, timeMachine, unsafePath

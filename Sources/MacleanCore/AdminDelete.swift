@@ -7,7 +7,7 @@ import Foundation
 /// delete itself.
 ///
 /// Arguments: `--delete --env <JSON environment> --items-file <path>
-/// --items-sha256 <hex>`. The items travel in a file (`writeItemsFile`) so a
+/// --items-sha256 <hex> --context collector|smart-clean`. The items travel in a file (`writeItemsFile`) so a
 /// large batch can't exceed the argument size limit; the app removes it after
 /// the run (`removeItemsFile`). The file sits in the user's temp folder, so
 /// its SHA-256 travels in argv (fixed once the password prompt starts) and
@@ -28,8 +28,10 @@ public enum AdminDelete {
 
     public enum ParseError: Error, Equatable { case usage, malformed(String) }
 
-    public static func arguments(itemsFile: String, sha256: String, environment: ProtectionEnvironment) -> [String] {
-        ["--delete", "--env", json(environment), "--items-file", itemsFile, "--items-sha256", sha256]
+    public static func arguments(itemsFile: String, sha256: String, environment: ProtectionEnvironment,
+                                 context: ProtectionContext) -> [String] {
+        ["--delete", "--env", json(environment), "--items-file", itemsFile, "--items-sha256", sha256,
+         "--context", context.rawValue]
     }
 
     /// Writes `items` as JSON to a new file (mode 0600) in a fresh private
@@ -64,9 +66,11 @@ public enum AdminDelete {
         try? FileManager.default.removeItem(at: file.deletingLastPathComponent())
     }
 
-    public static func parse(_ arguments: [String]) throws -> (items: [Item], environment: ProtectionEnvironment) {
-        guard arguments.count == 7, arguments[0] == "--delete", arguments[1] == "--env",
-              arguments[3] == "--items-file", arguments[5] == "--items-sha256" else {
+    public static func parse(_ arguments: [String]) throws
+        -> (items: [Item], environment: ProtectionEnvironment, context: ProtectionContext) {
+        guard arguments.count == 9, arguments[0] == "--delete", arguments[1] == "--env",
+              arguments[3] == "--items-file", arguments[5] == "--items-sha256", arguments[7] == "--context",
+              let context = ProtectionContext(rawValue: arguments[8]) else {
             throw ParseError.usage
         }
         let decoder = JSONDecoder()
@@ -75,7 +79,7 @@ public enum AdminDelete {
             let data = try readRegularFile(arguments[4])
             guard sha256(data) == arguments[6] else { throw ParseError.malformed("items file fingerprint mismatch") }
             let items = try decoder.decode([Item].self, from: data)
-            return (items, env)
+            return (items, env, context)
         } catch {
             throw ParseError.malformed(String(describing: error))
         }
@@ -120,14 +124,18 @@ public enum AdminDelete {
     /// between the check and the removal.
     public static func perform(_ item: Item, with deleter: Deleter) async -> DeleteOutcome {
         let path = item.request.path
-        if let refusal = ProtectionRules.refusal(for: path, in: deleter.environment) { return .refused(refusal) }
+        if let refusal = ProtectionRules.refusal(for: path, context: deleter.context, in: deleter.environment) {
+            return .refused(refusal)
+        }
         let fd: Int32
         switch Deleter.openParent(of: path) {
         case .failure(let early): return early.outcome
         case .success(let opened): fd = opened
         }
         defer { close(fd) }
-        if let refusal = resolvedRefusal(for: path, parentFD: fd, in: deleter.environment) { return .refused(refusal) }
+        if let refusal = resolvedRefusal(for: path, parentFD: fd, context: deleter.context, in: deleter.environment) {
+            return .refused(refusal)
+        }
         return await deleter.delete(item.request, force: item.force, parentFD: fd)
     }
 
@@ -137,15 +145,16 @@ public enum AdminDelete {
     /// location is read back with `F_GETPATH`, and `<resolved parent>/<name>`
     /// must not be refused either, so a path through a symlinked ancestor
     /// can't reach a protected item.
-    public static func resolvedRefusal(for path: String, parentFD: Int32, in env: ProtectionEnvironment) -> Refusal? {
-        if let refusal = ProtectionRules.refusal(for: path, in: env) { return refusal }
+    public static func resolvedRefusal(for path: String, parentFD: Int32, context: ProtectionContext = .collector,
+                                       in env: ProtectionEnvironment) -> Refusal? {
+        if let refusal = ProtectionRules.refusal(for: path, context: context, in: env) { return refusal }
         guard let (_, nameBytes) = Deleter.split(path) else { return .unsafePath }
         let name = String(decoding: nameBytes.dropLast().map { UInt8(bitPattern: $0) }, as: UTF8.self)
         var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
         guard fcntl(parentFD, F_GETPATH, &buffer) != -1 else { return .unsafePath }
         let resolved = String(decoding: buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
         let full = resolved.hasSuffix("/") ? resolved + name : resolved + "/" + name
-        return ProtectionRules.refusal(for: full, in: env)
+        return ProtectionRules.refusal(for: full, context: context, in: env)
     }
 
     private struct Line: Codable {

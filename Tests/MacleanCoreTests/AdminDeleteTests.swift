@@ -25,8 +25,9 @@ private func req(_ path: String, dir: Bool = false) -> DeleteRequest {
     let dirAttrs = try FileManager.default.attributesOfItem(atPath: file.deletingLastPathComponent().path)
     #expect((dirAttrs[.posixPermissions] as? Int) == 0o700)
 
-    let args = AdminDelete.arguments(itemsFile: file.path, sha256: hash, environment: env)
-    #expect(args == ["--delete", "--env", args[2], "--items-file", file.path, "--items-sha256", hash])
+    let args = AdminDelete.arguments(itemsFile: file.path, sha256: hash, environment: env, context: .collector)
+    #expect(args == ["--delete", "--env", args[2], "--items-file", file.path, "--items-sha256", hash,
+                     "--context", "collector"])
     let parsed = try AdminDelete.parse(args)
     #expect(parsed.items == items)
     #expect(parsed.environment == env)
@@ -35,12 +36,29 @@ private func req(_ path: String, dir: Bool = false) -> DeleteRequest {
     #expect(!FileManager.default.fileExists(atPath: file.deletingLastPathComponent().path))
 }
 
+@Test func contextRoundTrips() throws {
+    let (file, hash) = try AdminDelete.writeItemsFile([AdminDelete.Item(request: req("/Users/me/x"), force: false)])
+    defer { AdminDelete.removeItemsFile(file) }
+    let args = AdminDelete.arguments(itemsFile: file.path, sha256: hash, environment: env, context: .smartClean)
+    #expect(Array(args.suffix(2)) == ["--context", "smart-clean"])
+    #expect(try AdminDelete.parse(args).context == .smartClean)
+}
+
+@Test func parseRejectsUnknownContext() throws {
+    let (file, hash) = try AdminDelete.writeItemsFile([AdminDelete.Item(request: req("/Users/me/x"), force: false)])
+    defer { AdminDelete.removeItemsFile(file) }
+    let good = AdminDelete.arguments(itemsFile: file.path, sha256: hash, environment: env, context: .collector)
+    #expect(throws: (any Error).self) { try AdminDelete.parse(Array(good.dropLast()) + ["everything"]) }
+    #expect(throws: (any Error).self) { try AdminDelete.parse(Array(good.dropLast(2))) }
+    #expect(throws: (any Error).self) { try AdminDelete.parse(Array(good.dropLast(2)) + ["--ctx", "collector"]) }
+}
+
 @Test func manyItemsStayOutOfArgv() throws {
     let long = String(repeating: "x", count: 200)
     let items = (0..<5_000).map { AdminDelete.Item(request: req("/Users/me/\(long)/\($0)"), force: false) }
     let (file, hash) = try AdminDelete.writeItemsFile(items)
     defer { AdminDelete.removeItemsFile(file) }
-    let args = AdminDelete.arguments(itemsFile: file.path, sha256: hash, environment: env)
+    let args = AdminDelete.arguments(itemsFile: file.path, sha256: hash, environment: env, context: .collector)
     #expect(args.joined().utf8.count < 4096)
     #expect(try AdminDelete.parse(args).items.count == 5_000)
 }
@@ -48,7 +66,7 @@ private func req(_ path: String, dir: Bool = false) -> DeleteRequest {
 @Test func parseRejectsMalformedArguments() throws {
     let (file, hash) = try AdminDelete.writeItemsFile([AdminDelete.Item(request: req("/Users/me/x"), force: false)])
     defer { AdminDelete.removeItemsFile(file) }
-    let good = AdminDelete.arguments(itemsFile: file.path, sha256: hash, environment: env)
+    let good = AdminDelete.arguments(itemsFile: file.path, sha256: hash, environment: env, context: .collector)
     #expect(throws: (any Error).self) { try AdminDelete.parse([]) }
     #expect(throws: (any Error).self) { try AdminDelete.parse(Array(good.dropFirst())) }
     #expect(throws: (any Error).self) { try AdminDelete.parse(good + ["extra"]) }
@@ -73,7 +91,7 @@ private func req(_ path: String, dir: Bool = false) -> DeleteRequest {
     let (file, hash) = try AdminDelete.writeItemsFile(items)
     defer { AdminDelete.removeItemsFile(file) }
     let dir = file.deletingLastPathComponent()
-    let good = AdminDelete.arguments(itemsFile: file.path, sha256: hash, environment: env)
+    let good = AdminDelete.arguments(itemsFile: file.path, sha256: hash, environment: env, context: .collector)
     #expect(try AdminDelete.parse(good).items == items)
 
     // Rewritten after the hash was taken (as during the password prompt).
@@ -91,7 +109,7 @@ private func req(_ path: String, dir: Bool = false) -> DeleteRequest {
     try FileManager.default.copyItem(at: fresh, to: original)
     let link = dir.appending(path: "link.json")
     try FileManager.default.createSymbolicLink(at: link, withDestinationURL: original)
-    var viaLink = AdminDelete.arguments(itemsFile: link.path, sha256: freshHash, environment: env)
+    var viaLink = AdminDelete.arguments(itemsFile: link.path, sha256: freshHash, environment: env, context: .collector)
     #expect(throws: (any Error).self) { try AdminDelete.parse(viaLink) }
 
     // A FIFO is not a regular file (and must not block the helper).

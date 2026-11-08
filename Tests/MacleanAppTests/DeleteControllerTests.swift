@@ -431,6 +431,17 @@ private struct Fixture {
     #expect(f.session.view?.collected.count == 3)
 }
 
+@Test @MainActor func rescanAllowedWhileSummaryShown() async throws {
+    let f = try await fixture(1)
+    let clock = TestClock()
+    let c = controller(f, FakeDeleter(), clock: clock)
+    c.start()
+    #expect(f.session.isDeleting)
+    _ = try #require(await runToSummary(c, clock))
+    guard case .summary = c.phase else { Issue.record("expected summary"); return }
+    #expect(!f.session.isDeleting)
+}
+
 @Test @MainActor func rescanIsBlockedWhileDeleting() async throws {
     let (registry, f) = try await registryFixture(1)
     let c = controller(f, FakeDeleter(), clock: TestClock())

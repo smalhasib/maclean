@@ -11,15 +11,27 @@ public struct DeleteRequest: Sendable, Hashable, Codable {
     /// Non-directory items when scanned (1 for a file or symlink).
     public let fileCount: Int64
     public let isDirectory: Bool
+    /// How much the item may differ from the scan before it counts as changed.
+    public let tolerance: ChangeTolerance
 
-    public init(path: String, inode: UInt64, device: Int32, size: Int64, fileCount: Int64, isDirectory: Bool) {
+    public init(path: String, inode: UInt64, device: Int32, size: Int64, fileCount: Int64, isDirectory: Bool,
+                tolerance: ChangeTolerance = .strict) {
         self.path = path
         self.inode = inode
         self.device = device
         self.size = size
         self.fileCount = fileCount
         self.isDirectory = isDirectory
+        self.tolerance = tolerance
     }
+}
+
+/// What counts as "changed since the scan".
+public enum ChangeTolerance: String, Codable, Sendable {
+    /// Any file-count difference, or a size difference above 1% or 1 MB.
+    case strict
+    /// For caches: only growth of more than 10% (a shrink or a different file count is fine).
+    case cache
 }
 
 public enum DeleteMode: String, Sendable, Codable { case permanent, trash }
@@ -56,23 +68,27 @@ public enum DeleteOutcome: Sendable, Equatable, Codable {
 public struct Deleter: Sendable {
     public let mode: DeleteMode
     public let environment: ProtectionEnvironment
+    /// The feature the deleter works for; its protection rules apply to every item.
+    public let context: ProtectionContext
     /// Test seam: receives the item's location in the Trash after a trash-mode delete.
     let trashed: (@Sendable (URL) -> Void)?
 
-    public init(mode: DeleteMode, environment: ProtectionEnvironment) {
-        self.init(mode: mode, environment: environment, trashed: nil)
+    public init(mode: DeleteMode, environment: ProtectionEnvironment, context: ProtectionContext = .collector) {
+        self.init(mode: mode, environment: environment, context: context, trashed: nil)
     }
 
-    init(mode: DeleteMode, environment: ProtectionEnvironment, trashed: (@Sendable (URL) -> Void)?) {
+    init(mode: DeleteMode, environment: ProtectionEnvironment, context: ProtectionContext = .collector,
+         trashed: (@Sendable (URL) -> Void)?) {
         self.mode = mode
         self.environment = environment
+        self.context = context
         self.trashed = trashed
     }
 
     /// Deletes `request`'s item. `force` skips the changed-since-scan re-walk
     /// (the identity check still runs); `freed` is then `request.size`.
     public func delete(_ request: DeleteRequest, force: Bool = false) async -> DeleteOutcome {
-        if let refusal = ProtectionRules.refusal(for: request.path, context: .collector, in: environment) {
+        if let refusal = ProtectionRules.refusal(for: request.path, context: context, in: environment) {
             return .refused(refusal)
         }
         let pfd: Int32
@@ -92,7 +108,7 @@ public struct Deleter: Sendable {
     /// (The changed-since-scan re-walk and a trash-mode move still go by path;
     /// the identity check guards both.)
     public func delete(_ request: DeleteRequest, force: Bool = false, parentFD pfd: Int32) async -> DeleteOutcome {
-        if let refusal = ProtectionRules.refusal(for: request.path, context: .collector, in: environment) {
+        if let refusal = ProtectionRules.refusal(for: request.path, context: context, in: environment) {
             return .refused(refusal)
         }
         guard let (_, name) = Self.split(request.path) else { return .refused(.unsafePath) }
@@ -205,10 +221,12 @@ public struct Deleter: Sendable {
         return nil
     }
 
-    /// Any file-count difference, or a size difference above 1% or 1 MB,
-    /// whichever is larger (caches churn a little all the time).
+    /// Per `request.tolerance`. Strict: any file-count difference, or a size
+    /// difference above 1% or 1 MB, whichever is larger (caches churn a
+    /// little all the time). Cache: size grown by more than 10%.
     static func changed(_ request: DeleteRequest, size: Int64, fileCount: Int64) -> Bool {
-        fileCount != request.fileCount || abs(size - request.size) > max(request.size / 100, 1_048_576)
+        if request.tolerance == .cache { return size > request.size * 11 / 10 }
+        return fileCount != request.fileCount || abs(size - request.size) > max(request.size / 100, 1_048_576)
     }
 
     struct Early: Error { let outcome: DeleteOutcome }

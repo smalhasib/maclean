@@ -14,28 +14,14 @@ extension Notification.Name {
     static let macleanDidDelete = Notification.Name("MacleanDidDelete")
 }
 
-/// What a delete run did, shown in the summary sheet. Paths are the
-/// collected items' absolute paths.
-struct DeleteReport: Equatable {
-    struct Changed: Equatable {
-        var size: Int64
-        var files: Int64
-    }
-
-    var freed: Int64 = 0
-    var deleted: [String] = []
-    var alreadyGone: [String] = []
-    var changed: [String: Changed] = [:]
-    var failed: [String: String] = [:]
-}
-
 /// Deletes a session's collected items: a 5 s countdown (cancellable), then
 /// one item at a time off the main actor (Stop takes effect between items),
 /// then one administrator batch for the items that need it, then a summary.
 ///
-/// Deleted and already-gone items leave the collector as they finish; every
-/// other item stays collected. The session is marked `isDeleting` from the
-/// countdown until the summary is dismissed.
+/// Deleted and already-gone items leave the collector when the run ends;
+/// every other item stays collected. The session is marked `isDeleting` from
+/// the countdown until the summary appears (and again during Delete Anyway),
+/// so Rescan works while the summary is up.
 @MainActor @Observable final class DeleteController {
     enum Phase: Equatable {
         case idle
@@ -47,11 +33,10 @@ struct DeleteReport: Equatable {
     /// UserDefaults key of Settings' "Move to Trash instead of deleting permanently".
     static let trashKey = "MoveToTrashInsteadOfDeleting"
     static let countdownSeconds = 5
-    static let trashNeedsAdmin = "Needs administrator rights, so it can't be moved to the Trash. "
-        + "Turn off “Move to Trash” in Settings to delete it."
-    static let adminNotGiven = "Administrator password not given."
-    static let stoppedBeforeAdmin = "Stopped before the administrator step."
-    static let adminNoReport = "The administrator step didn't report back. It may still be running — rescan to check."
+    static let trashNeedsAdmin = DeleteBatch.trashNeedsAdmin
+    static let adminNotGiven = DeleteBatch.adminNotGiven
+    static let stoppedBeforeAdmin = DeleteBatch.stoppedBeforeAdmin
+    static let adminNoReport = DeleteBatch.adminNoReport
 
     private(set) var phase: Phase = .idle
     /// The mode of the current (or last) run, read from Settings at `start()`.
@@ -61,7 +46,9 @@ struct DeleteReport: Equatable {
     private(set) var pendingSize: Int64 = 0
     /// True while the administrator prompt (and the helper) runs; Stop is
     /// unavailable then.
-    private(set) var awaitingAdmin = false
+    var awaitingAdmin: Bool { batch?.awaitingAdmin ?? false }
+    /// The running run's engine.
+    private var batch: DeleteBatch?
 
     @ObservationIgnored private weak var session: ScanSession?
     @ObservationIgnored private let makeDeleter: (DeleteMode) -> any DeleterProtocol
@@ -194,6 +181,7 @@ struct DeleteReport: Equatable {
             return
         }
         stopRequested = false
+        session?.isDeleting = true
         phase = .running(done: 0, total: rerun.count)
         task = Task { await run(rerun, force: true) }
     }
@@ -206,95 +194,33 @@ struct DeleteReport: Equatable {
     // MARK: Run
 
     private func run(_ items: [Entry], force: Bool) async {
-        let deleter = makeDeleter(mode)
-        var removedAny = false
-        var queue: [(entry: Entry, force: Bool)] = []
+        let batch = DeleteBatch(mode: mode, context: .collector, makeDeleter: { [makeDeleter] m, _ in makeDeleter(m) },
+                                admin: admin)
+        self.batch = batch
         phase = .running(done: 0, total: items.count)
-        for (i, entry) in items.enumerated() {
-            if stopRequested { break }
-            let outcome = await deleter.delete(entry.request, force: force)
-            if case .needsAdmin(let started, let verified) = outcome {
-                // Started or verified items skip root's re-walk: it would see
-                // the formerly unreadable contents and call them changed.
-                queue.append((entry, force || started || verified))
-            } else {
-                removedAny = apply(outcome, to: entry) || removedAny
-            }
-            phase = .running(done: i + 1, total: items.count)
-        }
-        if stopRequested {
-            for (entry, _) in queue { report.failed[entry.request.path] = Self.stoppedBeforeAdmin }
-        } else if !queue.isEmpty {
-            removedAny = await escalate(queue) || removedAny
-        }
+        let result = await batch.run(items.map { DeleteBatch.Item(request: $0.request, force: force) },
+                                     shouldStop: { [unowned self] in stopRequested },
+                                     progress: { [unowned self] done, total in phase = .running(done: done, total: total) },
+                                     beforeEach: { _ in nil })
+        self.batch = nil
+        merge(result)
         task = nil
         phase = .summary(report)
-        if removedAny { NotificationCenter.default.post(name: .macleanDidDelete, object: session) }
+        // The summary is up: the session is free again (a rescan may run).
+        // Delete Anyway sets it for its own run.
+        session?.isDeleting = false
+        if !result.deleted.isEmpty { NotificationCenter.default.post(name: .macleanDidDelete, object: session) }
     }
 
-    /// Runs the queued items through the administrator helper (permanent
-    /// mode only). Returns whether anything was deleted.
-    private func escalate(_ queue: [(entry: Entry, force: Bool)]) async -> Bool {
-        guard mode == .permanent else {
-            for (entry, _) in queue { report.failed[entry.request.path] = Self.trashNeedsAdmin }
-            return false
-        }
-        let items = queue.map { AdminDelete.Item(request: $0.entry.request, force: $0.force) }
-        let output: String
-        awaitingAdmin = true
-        defer { awaitingAdmin = false }
-        do {
-            let (file, sha256) = try AdminDelete.writeItemsFile(items)
-            defer { AdminDelete.removeItemsFile(file) }
-            output = try await admin.run(AdminDelete.arguments(itemsFile: file.path, sha256: sha256, environment: .current()))
-        } catch {
-            // Anything but a cancelled prompt: root may have started, or may
-            // still be deleting. Keep the items and say so.
-            let reason = error as? AdminRunnerError == .cancelled ? Self.adminNotGiven : Self.adminNoReport
-            for (entry, _) in queue { report.failed[entry.request.path] = reason }
-            return false
-        }
-        let outcomes = AdminDelete.decode(output)
-        var removedAny = false
-        for (entry, _) in queue {
-            switch outcomes[entry.request.path] {
-            case nil:
-                report.failed[entry.request.path] = "The administrator helper gave no result."
-            case .needsAdmin:
-                report.failed[entry.request.path] = "Couldn't be deleted, even with administrator rights."
-            case let outcome?:
-                removedAny = apply(outcome, to: entry) || removedAny
-            }
-        }
-        return removedAny
-    }
-
-    /// Records `outcome` and moves a deleted or vanished item out of the
-    /// collector. Returns whether the item was deleted.
-    @discardableResult
-    private func apply(_ outcome: DeleteOutcome, to entry: Entry) -> Bool {
-        let path = entry.request.path
-        switch outcome {
-        case .deleted(let freed):
-            report.freed += freed
-            report.deleted.append(path)
-            markRemoved(entry)
-            return true
-        case .missing:
-            report.alreadyGone.append(path)
-            markRemoved(entry)
-        case .changedSinceScan(let size, let files):
-            report.changed[path] = DeleteReport.Changed(size: size, files: files)
-        case .replaced:
-            report.failed[path] = "Something else is at this location now."
-        case .refused(let refusal):
-            report.failed[path] = refusal.message(name: (path as NSString).lastPathComponent)
-        case .failed(let message):
-            report.failed[path] = message
-        case .needsAdmin:
-            report.failed[path] = "Needs administrator rights."
-        }
-        return false
+    /// Adds a run's `result` to the report and moves deleted and vanished
+    /// items out of the collector.
+    private func merge(_ result: DeleteReport) {
+        report.freed += result.freed
+        report.deleted += result.deleted
+        report.alreadyGone += result.alreadyGone
+        report.changed.merge(result.changed) { _, new in new }
+        report.failed.merge(result.failed) { _, new in new }
+        for path in result.deleted + result.alreadyGone { if let entry = entries[path] { markRemoved(entry) } }
     }
 
     private func markRemoved(_ entry: Entry) {

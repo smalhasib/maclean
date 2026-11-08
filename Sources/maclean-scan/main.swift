@@ -56,7 +56,7 @@ func runAdminDelete(_ arguments: [String]) async -> Never {
         fputs("maclean-scan: --delete must run as root\n", stderr)
         exit(4)
     }
-    let parsed: (items: [AdminDelete.Item], environment: ProtectionEnvironment)
+    let parsed: (items: [AdminDelete.Item], environment: ProtectionEnvironment, context: ProtectionContext)
     do { parsed = try AdminDelete.parse(arguments) } catch {
         fputs("maclean-scan: malformed --delete arguments\n", stderr)
         exit(2)
@@ -64,7 +64,7 @@ func runAdminDelete(_ arguments: [String]) async -> Never {
     var env = ProtectionEnvironment.current()
     env.home = parsed.environment.home
     env.appBundle = parsed.environment.appBundle
-    let deleter = Deleter(mode: .permanent, environment: env)
+    let deleter = Deleter(mode: .permanent, environment: env, context: parsed.context)
     for item in parsed.items {
         // Opens the parent once, checks its resolved location, deletes relative to that fd.
         let outcome = await AdminDelete.perform(item, with: deleter)
