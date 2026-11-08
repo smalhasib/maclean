@@ -81,15 +81,7 @@ struct LiveCleanProbes: CleanProbes {
         }
     }
 
-    /// Opens the user's TCC database read-only: only Full Disk Access allows it,
-    /// and the refusal (EPERM/EACCES) raises no dialog. Any other failure also
-    /// answers false, so TCC-protected folders stay unread.
-    func hasFullDiskAccess() -> Bool {
-        let fd = open(home + "/Library/Application Support/com.apple.TCC/TCC.db", O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
-        guard fd >= 0 else { return false }
-        close(fd)
-        return true
-    }
+    func hasFullDiskAccess() -> Bool { FullDiskAccess.isGranted(home: home) }
 
     // MARK: - Helpers
 

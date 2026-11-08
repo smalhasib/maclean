@@ -14,7 +14,7 @@ struct MacleanApp: App {
     var body: some Scene {
         Window("Maclean", id: "main") {
             RootView(model: appDelegate.startModel, registry: appDelegate.registry, router: appDelegate.router,
-                     smartClean: appDelegate.smartClean)
+                     smartClean: appDelegate.smartClean, coordinator: appDelegate.coordinator)
         }
         .defaultSize(WindowRouter.startSize)
         .windowResizability(.contentMinSize)
@@ -32,6 +32,7 @@ struct MacleanApp: App {
     let registry = SessionRegistry()
     let startModel = StartModel()
     lazy var router = WindowRouter(registry: registry, startModel: startModel)
+    let coordinator = PromptCoordinator(hasAccess: { FullDiskAccess.isGranted() })
     private lazy var deleteMenuItem = DeleteMenuItem(router: router)
     lazy var smartClean: SmartCleanController = {
         let controller = SmartCleanController(
@@ -65,12 +66,17 @@ struct MacleanApp: App {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.activate()
+        coordinator.launch()
         // SwiftUI builds the menu bar during launch: add the item after it.
         DispatchQueue.main.async {
             self.deleteMenuItem.install()
             // The start window is up by now: check in the background (spec §5.1).
             self.smartClean.checkAtLaunchIfEnabled()
         }
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        coordinator.becameActive()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -92,6 +98,7 @@ struct RootView: View {
     let registry: SessionRegistry
     let router: WindowRouter
     let smartClean: SmartCleanController
+    let coordinator: PromptCoordinator
     @Environment(\.openWindow) private var openWindow
     // `State` used as a type: the `@State` macro's plugin ships only with Xcode.
     private let dropTargeted = State(initialValue: false)
@@ -103,7 +110,7 @@ struct RootView: View {
                 ResultView(model: result, router: router) { router.backToDisks(from: result) }
                     .id(ObjectIdentifier(result))
             } else {
-                StartView(model: model, registry: registry, smartClean: smartClean)
+                StartView(model: model, registry: registry, smartClean: smartClean, coordinator: coordinator)
             }
         }
         .frame(minWidth: WindowRouter.startMinimumSize.width, minHeight: WindowRouter.startMinimumSize.height)

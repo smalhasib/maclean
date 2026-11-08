@@ -150,6 +150,7 @@ struct StartView: View {
     let model: StartModel
     let registry: SessionRegistry
     let smartClean: SmartCleanController
+    let coordinator: PromptCoordinator
     // `State` used as a type: the `@State` macro's plugin ships only with Xcode.
     private let starTargeted = State(initialValue: false)
     private let reviewing = State(initialValue: false)
@@ -177,6 +178,7 @@ struct StartView: View {
                         model.dismissNotice(notice.id)
                     }
                 }
+                if coordinator.showsAccessNotice { accessNotice }
                 SectionHeader(title: "Disks")
                 ForEach(model.volumes) { volume in
                     VolumeRowView(
@@ -228,12 +230,45 @@ struct StartView: View {
             .padding(.vertical, 8)
         }
         .font(.body)
+        // A sheet you must answer; once access is on, it can be set aside.
+        .sheet(isPresented: Binding(get: { coordinator.sheet == .fullDiskAccess(granted: false)
+                                        || coordinator.sheet == .fullDiskAccess(granted: true) },
+                                    set: { if !$0 { coordinator.dismissSheet() } })) {
+            let granted = coordinator.sheet == .fullDiskAccess(granted: true)
+            FullDiskAccessSheet(granted: granted, onContinue: coordinator.continueWithoutAccess,
+                                onDismissGranted: coordinator.dismissSheet)
+                .interactiveDismissDisabled(!granted)
+        }
         // Stays up through confirming, cleaning and the summary, even if the view is rebuilt meanwhile.
         .sheet(isPresented: Binding(get: { reviewing.wrappedValue || smartClean.isBusyCleaning },
                                     set: { if !$0 { reviewing.wrappedValue = false } })) {
             SmartCleanReviewView(controller: smartClean) { reviewing.wrappedValue = false }
                 .interactiveDismissDisabled(smartClean.isBusyCleaning)
         }
+    }
+
+    /// The persistent reminder after "Continue without Full Disk Access".
+    private var accessNotice: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "lock.fill").secondaryText()
+            if coordinator.accessGranted {
+                Text("Full Disk Access is on. Relaunch Maclean to use it.")
+                Spacer(minLength: 8)
+                Button("Relaunch") { Relauncher.relaunch() }
+            } else {
+                Text("Scans will miss protected folders —")
+                Button("Grant Access…") { coordinator.reopenAccessSheet() }
+                    .buttonStyle(.link)
+                Spacer(minLength: 0)
+            }
+        }
+        .lineLimit(1)
+        .padding(.horizontal, 12)
+        .frame(height: 32)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
+        .padding(.horizontal, 12)
+        .padding(.bottom, 4)
+        .accessibilityElement(children: .contain)
     }
 
     /// This session's scans that aren't a listed disk or a starred folder.
