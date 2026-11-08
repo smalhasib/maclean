@@ -134,3 +134,18 @@ private let knownMountPoint: (parent: String, name: String)? = {
         #expect(e.allSatisfy { $0.kind == .file })
     }
 }
+
+@Test func entriesReportModifiedTime() throws {
+    let t = TempDir()
+    defer { withExtendedLifetime(t) {} }
+    t.file("f", bytes: 10)
+    t.dir("d")
+    var st = stat()
+    #expect(lstat(t.url("f"), &st) == 0)
+    let handle = try DirectoryReader.open(path: t.path)
+    let entries = try DirectoryReader.entries(of: handle)
+    #expect(entries.count == 2)
+    for e in entries { #expect(e.modified > 0) }
+    let f = try #require(entries.first { $0.name == "f" })
+    #expect(f.modified >= Int64(st.st_mtimespec.tv_sec))
+}

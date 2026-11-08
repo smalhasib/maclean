@@ -60,9 +60,11 @@ public enum Measurer {
             newest: Date(timeIntervalSince1970: Double(max(st.st_mtimespec.tv_sec, st.st_ctimespec.tv_sec))),
             inode: UInt64(st.st_ino), device: st.st_dev, isDirectory: isDir, restricted: false)
         if !isDir {
+            let a = fileAttributes(path)
             result.size = context.billableSize(
-                allocated: Int64(st.st_blocks) * 512, linkCount: UInt32(st.st_nlink), inode: UInt64(st.st_ino),
-                device: st.st_dev, cloneID: 0, cloneRefCount: 0)
+                allocated: a?.allocated ?? Int64(st.st_blocks) * 512, linkCount: UInt32(st.st_nlink),
+                inode: UInt64(st.st_ino), device: st.st_dev,
+                cloneID: a?.cloneID ?? 0, cloneRefCount: a?.cloneRefCount ?? 0)
             return result
         }
         if let deadline, .now >= deadline { throw .timedOut }
@@ -78,6 +80,34 @@ public enum Measurer {
         return result
     }
 
+    /// Allocated size and clone identity of one path, via the same attributes
+    /// `DirectoryReader` requests. Never follows a symlink. Nil if the call fails.
+    private static func fileAttributes(_ path: String) -> (allocated: Int64, cloneID: UInt64, cloneRefCount: UInt32)? {
+        var request = attrlist()
+        request.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
+        request.commonattr = attrgroup_t(ATTR_CMN_RETURNED_ATTRS)
+        request.fileattr = attrgroup_t(ATTR_FILE_ALLOCSIZE)
+        request.forkattr = attrgroup_t(ATTR_CMNEXT_CLONEID | ATTR_CMNEXT_CLONE_REFCNT)
+        var buffer = [UInt8](repeating: 0, count: 256)
+        let options = UInt32(FSOPT_ATTR_CMN_EXTENDED | FSOPT_NOFOLLOW)
+        guard getattrlist(path, &request, &buffer, buffer.count, options) == 0 else { return nil }
+        return buffer.withUnsafeBytes { raw -> (Int64, UInt64, UInt32)? in
+            var offset = MemoryLayout<UInt32>.size
+            func read<T>(_: T.Type) -> T? {
+                guard raw.count - offset >= MemoryLayout<T>.size else { return nil }
+                defer { offset += MemoryLayout<T>.size }
+                return raw.loadUnaligned(fromByteOffset: offset, as: T.self)
+            }
+            guard let returned = read(attribute_set_t.self) else { return nil }
+            func has(_ group: attrgroup_t, _ bit: Int32) -> Bool { group & attrgroup_t(bit) != 0 }
+            var allocated: Int64 = 0, cloneID: UInt64 = 0, refCount: UInt32 = 0
+            if has(returned.fileattr, ATTR_FILE_ALLOCSIZE) { guard let v = read(off_t.self) else { return nil }; allocated = v }
+            if has(returned.forkattr, ATTR_CMNEXT_CLONEID) { guard let v = read(UInt64.self) else { return nil }; cloneID = v }
+            if has(returned.forkattr, ATTR_CMNEXT_CLONE_REFCNT) { guard let v = read(UInt32.self) else { return nil }; refCount = v }
+            return (allocated, cloneID, refCount)
+        }
+    }
+
     private static func walk(_ entries: [RawEntry], in handle: DirectoryHandle, device: Int32,
                              context: MeasureContext, deadline: ContinuousClock.Instant?,
                              into result: inout Measurement, newest: inout Int64) throws(MeasureError) {
@@ -88,9 +118,12 @@ public enum Measurer {
             case .directory:
                 if e.isMountPoint { continue }
                 if let deadline, .now >= deadline { throw .timedOut }
-                guard let sub = try? DirectoryReader.open(name: e.name, in: handle),
-                      let subEntries = try? DirectoryReader.entries(of: sub) else {
-                    result.restricted = true
+                let sub: DirectoryHandle, subEntries: [RawEntry]
+                do {
+                    sub = try DirectoryReader.open(name: e.name, in: handle)
+                    subEntries = try DirectoryReader.entries(of: sub)
+                } catch {
+                    if error != .notFound { result.restricted = true }  // vanished mid-walk: skip
                     continue
                 }
                 try walk(subEntries, in: sub, device: device, context: context, deadline: deadline,

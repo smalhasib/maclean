@@ -105,4 +105,35 @@ private func setTime(_ path: String, daysAgo: Double) {
             try Measurer.measure(t.url("d"), context: MeasureContext(), deadline: .now - .seconds(1))
         }
     }
+
+    @Test func nestedModifiedReachesNewest() throws {
+        let t = TempDir()
+        defer { withExtendedLifetime(t) {} }
+        t.file("d/sub/f", bytes: 10)
+        setTime(t.url("d/sub/f"), daysAgo: 5)
+        var st = stat()
+        lstat(t.url("d"), &st)
+        let dirTime = max(st.st_mtimespec.tv_sec, st.st_ctimespec.tv_sec)
+        Thread.sleep(forTimeInterval: 2.1)
+        let h = fopen(t.url("d/sub/f"), "w")
+        fputs("x", h); fclose(h)
+        lstat(t.url("d/sub/f"), &st)
+        let fileTime = max(st.st_mtimespec.tv_sec, st.st_ctimespec.tv_sec)
+        let m = try Measurer.measure(t.url("d"), context: MeasureContext())
+        let newest = Int(m.newest.timeIntervalSince1970)
+        #expect(abs(newest - fileTime) <= 1)
+        #expect(newest > dirTime)
+    }
+
+    @Test func topLevelClonesCountedOncePerContext() throws {
+        let t = TempDir()
+        defer { withExtendedLifetime(t) {} }
+        t.file("a", bytes: 1 << 20)
+        guard clonefile(t.url("a"), t.url("b"), 0) == 0 else { return }  // not APFS
+        let ctx = MeasureContext()
+        let first = try Measurer.measure(t.url("a"), context: ctx)
+        let second = try Measurer.measure(t.url("b"), context: ctx)
+        #expect(first.size >= 1 << 20)
+        #expect(second.size == 0)
+    }
 }
