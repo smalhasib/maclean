@@ -97,7 +97,7 @@ public enum CleanCatalog {
     private static let mail: [R] = [
         R(id: "mail.downloads", category: .mailAttachments,
           pattern: "~/Library/Containers/com.apple.mail/Data/Library/Mail Downloads", unit: .eachChild,
-          ageTiers: [(30, .review)], owner: .bundleID("com.apple.mail"),
+          ageTiers: [(30, .review)], owner: .bundleID("com.apple.mail"), needsFullDiskAccess: true,
           reason: "Attachments Mail saved when you opened them; the originals stay in your mail"),
     ]
 
@@ -112,7 +112,9 @@ public enum CleanCatalog {
         ("lmStudio", "~/.cache/lm-studio"),
         ("simulatorDevices", "~/Library/Developer/CoreSimulator/Devices"),
     ].map {
+        // Docker's data sits in another app's container.
         R(id: "info.\($0.0)", category: .largeData, pattern: $0.1, unit: .folder, ageTiers: [(0, .info)],
+          needsFullDiskAccess: $0.1.hasPrefix("~/Library/Containers/"),
           reason: "Large data Smart Clean doesn't delete; use the map to review it")
     }
 
@@ -121,13 +123,13 @@ public enum CleanCatalog {
           unit: .folder, ageTiers: [(14, .review)], requiresAdmin: true, special: .macOSInstaller,
           reason: "Installer for a different macOS version"),
         R(id: "installer.downloads", category: .oldInstallers, pattern: "~/Downloads/*.{dmg,pkg}", unit: .folder,
-          ageTiers: [(30, .review)], special: .downloadsInstaller, reason: "Installer image"),
+          ageTiers: [(30, .review)], needsFullDiskAccess: true, special: .downloadsInstaller, reason: "Installer image"),
     ]
 
     /// Each item, grouped under one Trash section by the UI. Always permanent.
     private static let trash: [R] = [
         R(id: "trash", category: .trash, pattern: "~/.Trash", unit: .eachChild, ageTiers: [(0, .review)],
-          reason: "In the Trash"),
+          needsFullDiskAccess: true, reason: "In the Trash"),
     ]
 
     // MARK: Leftovers and window state
@@ -141,7 +143,8 @@ public enum CleanCatalog {
         ("appSupport", "~/Library/Application Support", .eachChild, .none),
     ].map {
         R(id: "leftover.\($0.0)", category: .removedApps, pattern: $0.1, unit: $0.2, ageTiers: [(30, .review)],
-          owner: $0.3, special: .removedAppLeftover, reason: leftoverReason)
+          owner: $0.3, needsFullDiskAccess: $0.1 == "~/Library/Containers", special: .removedAppLeftover,
+          reason: leftoverReason)
     }
 
     /// Claims every `*.savedState`; the owner is the stripped name when it is a bundle id.
@@ -160,7 +163,8 @@ public enum CleanCatalog {
         R(id: "cache.other", category: .appCaches, pattern: "~/Library/Caches", unit: .eachChild,
           ageTiers: [(7, .safe)], reason: cacheReason),
         R(id: "cache.container", category: .appCaches, pattern: "~/Library/Containers/*/Data/Library/Caches",
-          unit: .eachChild, ageTiers: [(3, .safe)], owner: .containerBundleID, reason: cacheReason),
+          unit: .eachChild, ageTiers: [(3, .safe)], owner: .containerBundleID, needsFullDiskAccess: true,
+          reason: cacheReason),
         R(id: "cache.electron", category: .appCaches,
           pattern: "~/Library/Application Support/*/{Cache,Code Cache,GPUCache,DawnCache,GrShaderCache,Crashpad/completed}",
           unit: .folder, ageTiers: [(0, .safe)], owner: .appSupportFolder, reason: cacheReason),

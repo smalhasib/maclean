@@ -55,6 +55,8 @@ import Observation
     @ObservationIgnored private let admin: any AdminRunning
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let scanning: (Int32) -> Bool
+    /// Where `.macleanDidDelete` is posted after a clean that deleted something.
+    @ObservationIgnored private let notifications: NotificationCenter
     @ObservationIgnored private var checkTask: Task<CleanReport, Never>?
     /// Bumped by every check start, cancel and admin measure, so stale results are dropped.
     @ObservationIgnored private var generation = 0
@@ -64,13 +66,15 @@ import Observation
 
     init(engine: @escaping () -> CleanEngine, probes: any CleanProbes,
          makeDeleter: @escaping (DeleteMode, ProtectionContext) -> any DeleterProtocol, admin: any AdminRunning,
-         defaults: UserDefaults = .standard, scanning: @escaping (Int32) -> Bool) {
+         defaults: UserDefaults = .standard, notifications: NotificationCenter = .default,
+         scanning: @escaping (Int32) -> Bool) {
         makeEngine = engine
         self.probes = probes
         self.makeDeleter = makeDeleter
         self.admin = admin
         self.defaults = defaults
         self.scanning = scanning
+        self.notifications = notifications
     }
 
     // MARK: Selection
@@ -81,6 +85,9 @@ import Observation
 
     /// Ticked items that can be cleaned (known size, not Info).
     private var chosen: [CleanCandidate] { selectable.filter { selected.contains($0.path) } }
+
+    /// How many ticked items Clean would delete (the alert's count; same set as `selectedSize`).
+    var chosenCount: Int { chosen.count }
 
     var selectedSize: Int64 { chosen.reduce(0) { $0 + ($1.measurement?.size ?? 0) } }
     /// The measured size of everything that could be cleaned (Info rows excluded).
@@ -144,13 +151,15 @@ import Observation
         if phase == .checking { phase = resting }
     }
 
-    /// Adds `path` to the never-clean list and checks again.
+    /// Adds `path` to the never-clean list, drops its row (and tick) at once, and checks again.
     func neverClean(_ path: String) {
         var list = defaults.stringArray(forKey: Self.neverCleanKey) ?? []
         if !list.contains(path) {
             list.append(path)
             defaults.set(list, forKey: Self.neverCleanKey)
         }
+        selected.remove(path)
+        report?.candidates.removeAll { $0.path == path }
         check()
     }
 
@@ -274,10 +283,13 @@ import Observation
             guard let request = Self.request(for: c) else { return nil }
             requests[c.path] = request
             owners[c.path] = c.owner
-            // Emptying the Trash means deleting permanently.
-            return DeleteBatch.Item(request: request, force: false, mode: c.category == .trash ? .permanent : nil)
+            // Emptying the Trash means deleting permanently. System items go
+            // straight to the administrator batch (R27).
+            return DeleteBatch.Item(request: request, force: false, mode: c.category == .trash ? .permanent : nil,
+                                    adminOnly: c.requiresAdmin)
         }
-        let batch = DeleteBatch(mode: mode, context: .smartClean, makeDeleter: makeDeleter, admin: admin)
+        let batch = DeleteBatch(mode: mode, context: .smartClean, makeDeleter: makeDeleter, admin: admin,
+                                neverClean: defaults.stringArray(forKey: Self.neverCleanKey) ?? [])
         self.batch = batch
         stopRequested = false
         phase = .cleaning(done: 0, total: items.count)
@@ -290,6 +302,8 @@ import Observation
         })
         self.batch = nil
         registry?.markRemoved((result.deleted + result.alreadyGone).compactMap { requests[$0] })
+        // Free-space figures (start screen, open results) refresh.
+        if !result.deleted.isEmpty { notifications.post(name: .macleanDidDelete, object: nil) }
         phase = .summary(result)
         check()
     }

@@ -17,6 +17,7 @@ struct FakeProbes: CleanProbes {
     var artifacts: [ProjectArtifact] = []
     /// nil = the process scan failed.
     var cwds: [String]? = []
+    var fullDiskAccess = true
 
     func isRunning(bundleID: String) -> Bool? {
         unknownOwners.contains(bundleID) ? nil : running.contains(bundleID)
@@ -28,6 +29,7 @@ struct FakeProbes: CleanProbes {
     func projectArtifacts(roots: [String]) -> [ProjectArtifact] { artifacts }
     func workingDirectories() -> [String]? { cwds }
     func securityToolInstalled() -> Bool { securityTool }
+    func hasFullDiskAccess() -> Bool { fullDiskAccess }
 }
 
 private func days(_ n: Double) -> Date { Date().addingTimeInterval(n * 86400) }
@@ -356,6 +358,57 @@ private struct Fixture {
         let generic = rule("c", "~/Library/Caches", owner: .childNameIfBundleID)
         #expect(CleanEngine.rule(matching: "/h/Library/Caches/com.gone.app", in: [leftovers, generic], home: "/h")?.id == "c")
         #expect(CleanEngine.rule(matching: "/h/Library/Caches/com.gone.app", in: [leftovers], home: "/h") == nil)
+    }
+
+    @Test func withoutFullDiskAccessProtectedRootsAreSkippedUnread() async {
+        let f = Fixture()
+        defer { withExtendedLifetime(f) {} }
+        f.t.file("home/Downloads/a.dmg", bytes: 10)
+        f.t.file("home/.Trash/x", bytes: 10)
+        f.t.file("home/Library/Caches/a/x", bytes: 10)
+        let downloads = CleanRule(id: "dl", category: .oldInstallers, pattern: "~/Downloads/*.{dmg,pkg}", unit: .folder,
+                                  ageTiers: [(0, .review)], needsFullDiskAccess: true, reason: "test")
+        let trash = CleanRule(id: "trash", category: .trash, pattern: "~/.Trash", unit: .eachChild,
+                              ageTiers: [(0, .review)], needsFullDiskAccess: true, reason: "test")
+        let rules = [downloads, trash, rule("c", "~/Library/Caches")]
+
+        var noFDA = FakeProbes()
+        noFDA.fullDiskAccess = false
+        let without = await f.run(rules, probes: noFDA)
+        #expect(without.candidates.map(\.path) == [f.t.url("home/Library/Caches/a")])
+        // One entry per root, though the pattern has two brace alternatives.
+        #expect(without.skipped == [SkippedItem(path: f.t.url("home/Downloads"), reason: .noAccess),
+                                    SkippedItem(path: f.t.url("home/.Trash"), reason: .noAccess)])
+        // A category turned off isn't reported.
+        let off = await f.run(rules, probes: noFDA, disabled: [.trash])
+        #expect(off.skipped == [SkippedItem(path: f.t.url("home/Downloads"), reason: .noAccess)])
+
+        let with = await f.run(rules, probes: FakeProbes())
+        #expect(Set(with.candidates.map(\.path)) == [f.t.url("home/Downloads/a.dmg"), f.t.url("home/.Trash/x"),
+                                                     f.t.url("home/Library/Caches/a")])
+    }
+
+    @Test func catalogFlagsTCCProtectedRules() {
+        let tcc = ["~/Downloads", "~/.Trash", "~/Library/Containers"]
+        for r in CleanCatalog.rules where !r.pattern.isEmpty {
+            let protected = tcc.contains { r.pattern == $0 || r.pattern.hasPrefix($0 + "/") }
+            #expect(r.needsFullDiskAccess == protected, "\(r.id)")
+        }
+        let flagged = Set(CleanCatalog.rules.filter(\.needsFullDiskAccess).map(\.id))
+        #expect(flagged == ["mail.downloads", "info.docker", "installer.downloads", "trash", "leftover.containers",
+                            "cache.container"])
+    }
+
+    @Test func catalogExcludesIgnoreCase() throws {
+        for id in ["sys.cache.app", "sys.cache.other"] {
+            let r = try #require(CleanCatalog.rules.first { $0.id == id })
+            #expect(!CleanEngine.claims(r, path: "/Library/Caches/COM.APPLE.SAFARI", checkType: false))
+            #expect(!CleanEngine.claims(r, path: "/Library/Caches/com.apple.Safari", checkType: false))
+        }
+        let other = try #require(CleanCatalog.rules.first { $0.id == "sys.cache.other" })
+        #expect(CleanEngine.claims(other, path: "/Library/Caches/Vendor", checkType: false))
+        let varLog = try #require(CleanCatalog.rules.first { $0.id == "sys.varLog" })
+        #expect(CleanEngine.claims(varLog, path: "/private/var/log/INSTALL.LOG", checkType: false))
     }
 }
 

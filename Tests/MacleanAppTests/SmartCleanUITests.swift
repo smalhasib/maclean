@@ -81,6 +81,12 @@ private func candidate(_ path: String, _ category: CleanRule.Category, size: Int
     #expect(p.message == "They will be deleted permanently.")
 }
 
+@Test func alertCopyTrashModeWithSystemItemsPromisesNoPassword() {
+    let a = SmartCleanCopy.alert(count: 2, size: 1_000_000, mode: .trash, needsAdmin: true)
+    #expect(a.message == "They will be moved to the Trash. System items can't be moved to the Trash and will be skipped.")
+    #expect(!a.message.contains("password"))
+}
+
 @Test func cardLineReviewOnlyWhenNoCleanableSize() {
     let info = CleanReport(candidates: [candidate("/a", .largeData, size: 5_000_000_000, tier: .info),
                                         candidate("/b", .appCaches, size: nil, tier: .review)])

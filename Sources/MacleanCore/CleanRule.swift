@@ -51,13 +51,17 @@ public struct CleanRule: Sendable, Identifiable {
     public let requiresAdmin: Bool
     /// `probes.isOpen` must be false (system log files, idleassetsd tmp files).
     public let requireNotOpen: Bool
+    /// Its roots are TCC-protected (`~/Downloads`, other apps' containers,
+    /// `~/.Trash`): without Full Disk Access they aren't read at all (reading
+    /// could raise a system dialog) and go to Skipped as `.noAccess` (R28).
+    public let needsFullDiskAccess: Bool
     public let special: Special
     public let reason: String
 
     public init(id: String, category: Category, pattern: String, unit: Unit,
                 ageTiers: [(days: Int, tier: Tier)], owner: Owner = .none, fileFilter: [String]? = nil,
                 exclude: [String] = [], requiresAdmin: Bool = false, requireNotOpen: Bool = false,
-                special: Special = .none, reason: String) {
+                needsFullDiskAccess: Bool = false, special: Special = .none, reason: String) {
         self.id = id
         self.category = category
         self.pattern = pattern
@@ -68,6 +72,7 @@ public struct CleanRule: Sendable, Identifiable {
         self.exclude = exclude
         self.requiresAdmin = requiresAdmin
         self.requireNotOpen = requireNotOpen
+        self.needsFullDiskAccess = needsFullDiskAccess
         self.special = special
         self.reason = reason
     }
@@ -174,4 +179,6 @@ public protocol CleanProbes: Sendable {
     func workingDirectories() -> [String]?
     /// Whether any folder in `CleanCatalog.securityToolFolders` exists.
     func securityToolInstalled() -> Bool
+    /// Whether Maclean has Full Disk Access, asked without raising a dialog.
+    func hasFullDiskAccess() -> Bool
 }

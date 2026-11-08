@@ -77,3 +77,67 @@ private func item(_ path: String, mode: DeleteMode? = nil) -> DeleteBatch.Item {
     #expect(steps == [2, 12, 22])
     #expect(!b.awaitingAdmin)
 }
+
+/// Records the admin argv and answers "deleted" for every path the batch sends.
+private final class RecordingAdmin: AdminRunning, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _arguments: [[String]] = []
+    private var _items: [AdminDelete.Item] = []
+    let paths: [String]
+    init(paths: [String]) { self.paths = paths }
+    var arguments: [[String]] { lock.withLock { _arguments } }
+    /// The items file's contents, read while it still exists.
+    var items: [AdminDelete.Item] { lock.withLock { _items } }
+    func run(_ arguments: [String]) async throws -> String {
+        let read = arguments.firstIndex(of: "--items-file")
+            .flatMap { FileManager.default.contents(atPath: arguments[$0 + 1]) }
+            .flatMap { try? JSONDecoder().decode([AdminDelete.Item].self, from: $0) } ?? []
+        lock.withLock { _arguments.append(arguments); _items += read }
+        return paths.map { AdminDelete.encode(path: $0, outcome: .deleted(freed: 100)) }.joined(separator: "\n")
+    }
+}
+
+@Test @MainActor func adminOnlyItemSkipsUserDeleter() async {
+    // A user-level attempt would partly delete it (started) and break root's age check (R27).
+    let deleter = FakeDeleter { $0.path == "/Library/Logs/x" ? .needsAdmin(started: true) : .deleted(freed: $0.size) }
+    let admin = RecordingAdmin(paths: ["/Library/Logs/x"])
+    let b = DeleteBatch(mode: .permanent, context: .smartClean, makeDeleter: { _, _ in deleter }, admin: admin)
+    var sys = item("/Library/Logs/x")
+    sys.adminOnly = true
+    sys.force = true
+    let report = await b.run([sys, item("/x/user")], shouldStop: { false }, progress: { _, _ in },
+                             beforeEach: { _ in nil })
+    #expect(deleter.paths == ["/x/user"])
+    #expect(admin.arguments.count == 1)
+    #expect(report.deleted.sorted() == ["/Library/Logs/x", "/x/user"])
+    // Root re-checks everything itself: sent without force.
+    #expect(admin.items.map(\.request.path) == ["/Library/Logs/x"])
+    #expect(admin.items.map(\.force) == [false])
+}
+
+@Test @MainActor func adminOnlyItemInTrashModeIsSkipped() async {
+    let deleter = FakeDeleter()
+    let admin = RecordingAdmin(paths: [])
+    let b = DeleteBatch(mode: .trash, context: .smartClean, makeDeleter: { _, _ in deleter }, admin: admin)
+    var sys = item("/Library/Logs/x")
+    sys.adminOnly = true
+    let report = await b.run([sys], shouldStop: { false }, progress: { _, _ in }, beforeEach: { _ in nil })
+    #expect(deleter.paths.isEmpty)
+    #expect(admin.arguments.isEmpty)
+    #expect(report.failed["/Library/Logs/x"] == DeleteBatch.trashNeedsAdmin)
+}
+
+@Test @MainActor func smartCleanAdminStepCarriesNeverClean() async throws {
+    let deleter = FakeDeleter { _ in .needsAdmin(started: false) }
+    let admin = RecordingAdmin(paths: ["/x/root"])
+    let b = DeleteBatch(mode: .permanent, context: .smartClean, makeDeleter: { _, _ in deleter }, admin: admin,
+                        neverClean: ["/Library/Caches/keep"])
+    _ = await b.run([item("/x/root")], shouldStop: { false }, progress: { _, _ in }, beforeEach: { _ in nil })
+    let args = try #require(admin.arguments.first)
+    let json = try #require(args.firstIndex(of: "--env").map { args[$0 + 1] })
+    let env = try JSONDecoder().decode(ProtectionEnvironment.self, from: Data(json.utf8))
+    #expect(env.neverClean == ["/Library/Caches/keep"])
+    // The collector ignores the list.
+    #expect(DeleteBatch.environment(for: .collector, neverClean: ["/a"]).neverClean.isEmpty)
+    #expect(DeleteBatch.environment(for: .smartClean, neverClean: ["/a"]).neverClean == ["/a"])
+}

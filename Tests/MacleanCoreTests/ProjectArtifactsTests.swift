@@ -209,6 +209,51 @@ private func found(_ t: TempDir) -> [String] {
         let r = ProjectArtifacts.searchRoots(home: t.url("home"), extra: ["/somewhere"])
         #expect(r == [t.url("home/Work"), t.url("home/stuff"), "/somewhere"])
     }
+
+    @Test func searchRootsNeverDiscoverTCCFolders() {
+        let t = TempDir()
+        for name in ["Desktop", "Documents", "Downloads"] { t.file("home/\(name)/app/package.json") }
+        t.file("home/stuff/package.json")
+        #expect(ProjectArtifacts.searchRoots(home: t.url("home"), extra: []) == [t.url("home/stuff")])
+        // Still searched when added in Settings.
+        #expect(ProjectArtifacts.searchRoots(home: t.url("home"), extra: [t.url("home/Documents")])
+            == [t.url("home/stuff"), t.url("home/Documents")])
+    }
+
+    @Test func gitRunsOnlyWhenRealGitInstalled() {
+        let t = TempDir()
+        t.file("app/package.json"); t.file("app/dist/a.js")
+        initRepo(t.url("app"))
+        git(t.url("app"), "add", "package.json")
+        git(t.url("app"), "commit", "-q", "-m", "init")
+        let a = artifact(t, "app", "dist")
+        // No real git (only the shim, which would raise the install dialog): kept as tracked.
+        #expect(ProjectArtifacts.keepReason(a, cwds: [], gitInstalled: { false }) == .gitTracked)
+        // A real git: it runs and finds nothing tracked.
+        #expect(ProjectArtifacts.keepReason(a, cwds: [], gitInstalled: { true }) == nil)
+        // Outside any repository git isn't needed.
+        let u = TempDir()
+        u.file("app/package.json"); u.file("app/dist/a.js")
+        #expect(ProjectArtifacts.keepReason(artifact(u, "app", "dist"), cwds: [], gitInstalled: { false }) == nil)
+    }
+
+    @Test func realGitDetection() {
+        let clt = "/Library/Developer/CommandLineTools/usr/bin/git"
+        #expect(ProjectArtifacts.realGitInstalled(developerDir: "/Applications/Xcode.app/Contents/Developer",
+                                                  exists: { $0 == "/Applications/Xcode.app/Contents/Developer" }))
+        #expect(ProjectArtifacts.realGitInstalled(developerDir: nil, exists: { $0 == clt }))
+        // xcode-select failed, or names a folder that's gone, and no CLT git.
+        #expect(!ProjectArtifacts.realGitInstalled(developerDir: nil, exists: { _ in false }))
+        #expect(!ProjectArtifacts.realGitInstalled(developerDir: "/gone", exists: { _ in false }))
+    }
+
+    @Test func containsGitKeepsOnTimeoutOrUnlistable() {
+        let t = TempDir()
+        t.file("app/dist/a.js")
+        #expect(!ProjectArtifacts.containsGit(t.url("app/dist"), deadline: .now + .seconds(2)))
+        #expect(ProjectArtifacts.containsGit(t.url("app/dist"), deadline: .now - .seconds(1)))
+        #expect(ProjectArtifacts.containsGit(t.url("app/missing"), deadline: .now + .seconds(2)))
+    }
 }
 
 @Suite struct ProjectArtifactsEngineTests {

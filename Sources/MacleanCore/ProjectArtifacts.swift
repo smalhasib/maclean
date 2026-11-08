@@ -7,8 +7,11 @@ public enum ProjectArtifacts {
     /// `~`-relative folders searched whenever they exist.
     static let namedRoots = ["Projects", "Developer", "Development", "Code", "Work", "dev", "src", "GitHub",
                              "Repos", "Workspace", "www"]
-    /// Top-level home folders never searched for markers.
-    private static let excludedHomeFolders: Set<String> = ["Library", "Movies", "Music", "Pictures", "Public", "Applications"]
+    /// Top-level home folders never searched for markers. Desktop, Documents and
+    /// Downloads are TCC-protected: reading them could raise a system dialog, so
+    /// they are searched only when added in Settings (R29).
+    private static let excludedHomeFolders: Set<String> = ["Library", "Movies", "Music", "Pictures", "Public", "Applications",
+                                                           "Desktop", "Documents", "Downloads"]
     private static let maxDepth = 6
     private static let pruned: Set<String> = [".git", "Library", ".Trash"]
     /// `SF_DATALESS`: a cloud-only placeholder.
@@ -107,23 +110,33 @@ public enum ProjectArtifacts {
 
     // MARK: - Keep checks
 
-    /// Why `a` must be kept, in order: it contains a `.git`; it holds git-tracked
-    /// files (a timeout or git error counts as tracked); a process works inside
-    /// the project (`cwds == nil`: unknown, so yes); or it is a `node_modules`
-    /// edited by hand (§6.5).
-    public static func keepReason(_ a: ProjectArtifact, cwds: [String]?) -> SkipReason? {
-        if containsGit(a.path) { return .containsGit }
-        if hasTrackedFiles(a) { return .gitTracked }
+    /// Why `a` must be kept, in order: it contains a `.git` (or that couldn't be
+    /// ruled out in time); it holds git-tracked files (a timeout, a git error or
+    /// no real git counts as tracked); a process works inside the project
+    /// (`cwds == nil`: unknown, so yes); or it is a `node_modules` edited by hand
+    /// (§6.5). `gitInstalled` is asked before running git (see `realGitInstalled`).
+    public static func keepReason(_ a: ProjectArtifact, cwds: [String]?,
+                                  gitInstalled: () -> Bool = { liveGitInstalled }) -> SkipReason? {
+        if containsGit(a.path, deadline: .now + containsGitBudget) { return .containsGit }
+        if hasTrackedFiles(a, gitInstalled: gitInstalled) { return .gitTracked }
         guard let cwds else { return .projectInUse }
         if cwds.contains(where: { PathUtil.isInside($0, orEqualTo: a.projectRoot) }) { return .projectInUse }
         if (a.path as NSString).lastPathComponent == "node_modules", locallyPatched(a.path) { return .locallyPatched }
         return nil
     }
 
-    private static func containsGit(_ dir: String) -> Bool {
-        guard case .success(let names) = CleanEngine.list(dir) else { return false }
+    /// How long the `.git` search below one artifact may take.
+    static let containsGitBudget: Duration = .seconds(2)
+
+    /// A `.git` anywhere below `dir`. A timeout or a folder that can't be listed
+    /// answers true (keep): a repository can't be ruled out.
+    static func containsGit(_ dir: String, deadline: ContinuousClock.Instant) -> Bool {
+        if .now >= deadline { return true }
+        guard case .success(let names) = CleanEngine.list(dir) else { return true }
         if names.contains(".git") { return true }
-        return names.contains { isRealDirectory(dir + "/" + $0, allowDataless: false) && containsGit(dir + "/" + $0) }
+        return names.contains {
+            isRealDirectory(dir + "/" + $0, allowDataless: false) && containsGit(dir + "/" + $0, deadline: deadline)
+        }
     }
 
     /// Install records, one per package manager (npm, yarn, yarn berry, pnpm).
@@ -180,13 +193,50 @@ public enum ProjectArtifacts {
     }
 
     private static let gitPath = "/usr/bin/git"
+    private static let cltGit = "/Library/Developer/CommandLineTools/usr/bin/git"
+
+    /// Whether a real git is installed, so `/usr/bin/git` (a shim) won't raise
+    /// the "install the command line developer tools" dialog (R29): the
+    /// developer directory (`xcode-select -p`, nil if it failed) exists, or the
+    /// Command Line Tools git does.
+    static func realGitInstalled(developerDir: String?, exists: (String) -> Bool) -> Bool {
+        if let developerDir, !developerDir.isEmpty, exists(developerDir) { return true }
+        return exists(cltGit)
+    }
+
+    /// `realGitInstalled` for this Mac, asked once per process.
+    public static let liveGitInstalled: Bool = realGitInstalled(developerDir: xcodeSelectPath(), exists: { path in
+        var st = stat()
+        return stat(path, &st) == 0
+    })
+
+    /// `xcode-select -p`'s output, or nil if it didn't exit 0 within 3 s. It never prompts.
+    private static func xcodeSelectPath() -> String? {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/xcode-select")
+        p.arguments = ["-p"]
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        p.standardInput = FileHandle.nullDevice
+        let exited = DispatchSemaphore(value: 0)
+        p.terminationHandler = { _ in exited.signal() }
+        do { try p.run() } catch { return nil }
+        if exited.wait(timeout: .now() + 3) == .timedOut {
+            p.terminate()
+            return nil
+        }
+        guard p.terminationStatus == 0 else { return nil }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     /// `git ls-files` lists something under the artifact. Inside a repository a
-    /// timeout, a non-zero exit or a missing git all answer true (keep); outside
-    /// any repository nothing can be tracked.
-    private static func hasTrackedFiles(_ a: ProjectArtifact) -> Bool {
+    /// timeout, a non-zero exit or a missing (or shim-only) git all answer true
+    /// (keep); outside any repository nothing can be tracked.
+    private static func hasTrackedFiles(_ a: ProjectArtifact, gitInstalled: () -> Bool) -> Bool {
         guard insideRepository(a.projectRoot) else { return false }
-        guard FileManager.default.isExecutableFile(atPath: gitPath) else { return true }
+        guard gitInstalled(), FileManager.default.isExecutableFile(atPath: gitPath) else { return true }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: gitPath)
         let invocation = gitInvocation(root: a.projectRoot, artifact: a.path, inherited: ProcessInfo.processInfo.environment)

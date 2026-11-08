@@ -39,7 +39,12 @@ struct MacleanApp: App {
             engine: { CleanEngine(rules: CleanCatalog.rules, home: NSHomeDirectory(), environment: .current(),
                                   probes: LiveCleanProbes()) },
             probes: LiveCleanProbes(),
-            makeDeleter: { Deleter(mode: $0, environment: .current(), context: $1) },
+            // The never-clean list guards the delete path too (read when each clean starts).
+            makeDeleter: { mode, context in
+                let neverClean = UserDefaults.standard.stringArray(forKey: SmartCleanController.neverCleanKey) ?? []
+                return Deleter(mode: mode, environment: DeleteBatch.environment(for: context, neverClean: neverClean),
+                               context: context)
+            },
             admin: AdminRunner(),
             scanning: { [registry] device in
                 registry.all.contains { $0.isScanning && ScanBoundary.forRoot($0.rootPath).allowedDevices.contains(device) }

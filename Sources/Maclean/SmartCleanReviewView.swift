@@ -28,7 +28,7 @@ struct SmartCleanReviewView: View {
         .background(SheetQuickLook())
         .alert(alertCopy.title, isPresented: Binding(get: { controller.phase == .confirming },
                                                      set: { if !$0 { controller.cancelClean() } })) {
-            Button("Clean") { Task { await controller.clean() } }
+            Button("Clean", role: .destructive) { Task { await controller.clean() } }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(alertCopy.message)
@@ -46,10 +46,9 @@ struct SmartCleanReviewView: View {
     }
 
     private var alertCopy: (title: String, message: String) {
-        let count = controller.selected.count
-        return SmartCleanCopy.alert(count: count, size: controller.selectedSize,
-                                    mode: moveToTrash ? .trash : .permanent, needsAdmin: controller.needsAdmin,
-                                    includesTrash: controller.selectedIncludesTrash)
+        SmartCleanCopy.alert(count: controller.chosenCount, size: controller.selectedSize,
+                             mode: moveToTrash ? .trash : .permanent, needsAdmin: controller.needsAdmin,
+                             includesTrash: controller.selectedIncludesTrash)
     }
 
     // MARK: Header

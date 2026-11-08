@@ -27,6 +27,10 @@ struct DeleteReport: Equatable {
         var force: Bool = false
         /// Overrides the batch's mode for this item.
         var mode: DeleteMode?
+        /// Skips the user-level attempt and goes straight to the administrator
+        /// batch (Smart Clean system items, R27): a partial user-level delete
+        /// would leave a fresh ctime that root's age check calls changed.
+        var adminOnly: Bool = false
     }
 
     static let trashNeedsAdmin = "Needs administrator rights, so it can't be moved to the Trash. "
@@ -42,14 +46,26 @@ struct DeleteReport: Equatable {
     @ObservationIgnored private let context: ProtectionContext
     @ObservationIgnored private let makeDeleter: (DeleteMode, ProtectionContext) -> any DeleterProtocol
     @ObservationIgnored private let admin: any AdminRunning
+    @ObservationIgnored private let neverClean: [String]
     @ObservationIgnored private var report = DeleteReport()
 
+    /// `neverClean`: the never-clean list, carried to the administrator step in the Smart Clean context.
     init(mode: DeleteMode, context: ProtectionContext,
-         makeDeleter: @escaping (DeleteMode, ProtectionContext) -> any DeleterProtocol, admin: any AdminRunning) {
+         makeDeleter: @escaping (DeleteMode, ProtectionContext) -> any DeleterProtocol, admin: any AdminRunning,
+         neverClean: [String] = []) {
         self.mode = mode
         self.context = context
         self.makeDeleter = makeDeleter
         self.admin = admin
+        self.neverClean = neverClean
+    }
+
+    /// The live protection environment, with `neverClean` in the Smart Clean
+    /// context (the collector ignores the list).
+    nonisolated static func environment(for context: ProtectionContext, neverClean: [String]) -> ProtectionEnvironment {
+        var env = ProtectionEnvironment.current()
+        if context == .smartClean { env.neverClean = neverClean }
+        return env
     }
 
     /// Deletes `items` in order. `beforeEach` returns a reason to skip an item
@@ -66,6 +82,11 @@ struct DeleteReport: Equatable {
             if shouldStop() { break }
             if let reason = beforeEach(item) {
                 report.failed[item.request.path] = reason
+            } else if item.adminOnly {
+                // Root re-checks everything itself, so no force.
+                var queued = item
+                queued.force = false
+                queue.append(queued)
             } else {
                 let itemMode = item.mode ?? mode
                 let deleter = deleters[itemMode] ?? makeDeleter(itemMode, context)
@@ -108,7 +129,8 @@ struct DeleteReport: Equatable {
             let (file, sha256) = try AdminDelete.writeItemsFile(items)
             defer { AdminDelete.removeItemsFile(file) }
             output = try await admin.run(AdminDelete.arguments(itemsFile: file.path, sha256: sha256,
-                                                               environment: .current(), context: context))
+                                                               environment: Self.environment(for: context, neverClean: neverClean),
+                                                               context: context))
         } catch {
             // Anything but a cancelled prompt: root may have started, or may
             // still be deleting. Keep the items and say so.

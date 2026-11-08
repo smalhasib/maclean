@@ -53,11 +53,16 @@ enum SmartCleanCopy {
 
     /// The confirmation alert before Clean.
     /// `includesTrash`: the selection holds Trash items, which are always deleted permanently.
+    /// `needsAdmin` in Trash mode: system items can't be moved to the Trash, so no
+    /// password is promised; they are skipped (R30).
     static func alert(count: Int, size: Int64, mode: DeleteMode, needsAdmin: Bool,
                       includesTrash: Bool = false) -> (title: String, message: String) {
         var message = mode == .trash ? "They will be moved to the Trash." : "They will be deleted permanently."
         if mode == .trash, includesTrash { message += " Items already in the Trash will be deleted permanently." }
-        if needsAdmin { message += " Some items need your administrator password." }
+        if needsAdmin {
+            message += mode == .trash ? " System items can't be moved to the Trash and will be skipped."
+                : " Some items need your administrator password."
+        }
         return ("Delete \(count) \(count == 1 ? "item" : "items") (\(SizeText.string(size)))?", message)
     }
 

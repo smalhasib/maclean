@@ -34,6 +34,7 @@ private final class Probes: CleanProbes, @unchecked Sendable {
     func projectArtifacts(roots: [String]) -> [ProjectArtifact] { [] }
     func workingDirectories() -> [String]? { [] }
     func securityToolInstalled() -> Bool { false }
+    func hasFullDiskAccess() -> Bool { true }
 }
 
 /// Records each request (with its mode) and answers from a script.
@@ -116,11 +117,11 @@ private final class Home {
 
 @MainActor private func controller(home: Home = Home(caches: []), probes: Probes = Probes(),
                                    deletions: Deletions = Deletions(), admin: Admin = Admin(),
-                                   defaults: UserDefaults = defaults(),
+                                   defaults: UserDefaults = defaults(), notifications: NotificationCenter = NotificationCenter(),
                                    scanning: @escaping (Int32) -> Bool = { _ in false }) -> SmartCleanController {
     SmartCleanController(engine: { home.engine(probes: probes) }, probes: probes,
                          makeDeleter: { deletions.make($0, $1) }, admin: admin, defaults: defaults,
-                         scanning: scanning)
+                         notifications: notifications, scanning: scanning)
 }
 
 @MainActor private func until(_ condition: () -> Bool) async {
@@ -223,6 +224,77 @@ private final class Home {
     let report = try #require(summary(c))
     #expect(report.failed["/Library/Logs/sys"] == DeleteBatch.adminNotGiven)
     #expect(report.deleted == ["/x/user"])
+}
+
+@Test @MainActor func systemItemsGoStraightToAdmin() async throws {
+    // The user-level deleter would partly delete it (R27); it must never be asked.
+    let deletions = Deletions { $0.path == "/Library/Logs/sys" ? .needsAdmin(started: true) : .deleted(freed: $0.size) }
+    let admin = Admin { _ in AdminDelete.encode(path: "/Library/Logs/sys", outcome: .deleted(freed: 1000)) }
+    let d = defaults()
+    d.set(["/Library/Caches/keep"], forKey: SmartCleanController.neverCleanKey)
+    let c = controller(deletions: deletions, admin: admin, defaults: d)
+    c.publish(CleanReport(candidates: [candidate("/Library/Logs/sys", category: .systemLogs, admin: true),
+                                       candidate("/x/user")]))
+    await c.clean()
+    let report = try #require(summary(c))
+    #expect(deletions.calls.map(\.request.path) == ["/x/user"])
+    #expect(admin.arguments.count == 1)
+    #expect(report.deleted.sorted() == ["/Library/Logs/sys", "/x/user"])
+    // The never-clean list reaches the administrator step.
+    let args = try #require(admin.arguments.first)
+    let json = try #require(args.firstIndex(of: "--env").map { args[$0 + 1] })
+    let env = try JSONDecoder().decode(ProtectionEnvironment.self, from: Data(json.utf8))
+    #expect(env.neverClean == ["/Library/Caches/keep"])
+}
+
+/// Counts `.macleanDidDelete` posts with a nil object.
+private final class DidDeleteCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _count = 0
+    var count: Int { lock.withLock { _count } }
+    func hit() { lock.withLock { _count += 1 } }
+}
+
+@Test @MainActor func cleanPostsDidDeleteWhenSomethingWasDeleted() async {
+    let counter = DidDeleteCounter()
+    // A private center: other tests clean in parallel.
+    let center = NotificationCenter()
+    let token = center.addObserver(forName: .macleanDidDelete, object: nil, queue: nil) { n in
+        if n.object == nil { counter.hit() }
+    }
+    defer { center.removeObserver(token) }
+    let c = controller(notifications: center)
+    c.publish(CleanReport(candidates: [candidate("/x/a")]))
+    await c.clean()
+    #expect(counter.count == 1)
+    // Nothing deleted: no post.
+    let none = controller(deletions: Deletions { _ in .missing }, notifications: center)
+    none.publish(CleanReport(candidates: [candidate("/x/b")]))
+    await none.clean()
+    #expect(counter.count == 1)
+}
+
+@Test @MainActor func chosenCountMatchesSizeSet() {
+    let c = controller()
+    c.publish(CleanReport(candidates: [
+        candidate("/x/safe", m: measurement(size: 100)),
+        candidate("/x/info", tier: .info, m: measurement(size: 5000)),
+        candidate("/x/unknown", tier: .review, measured: false, admin: true),
+    ]))
+    c.selected = ["/x/safe", "/x/info", "/x/unknown", "/x/gone"]
+    #expect(c.chosenCount == 1)
+    #expect(c.selectedSize == 100)
+}
+
+@Test @MainActor func neverCleanDropsRowAtOnce() {
+    let c = controller()
+    c.publish(CleanReport(candidates: [candidate("/x/a"), candidate("/x/b")]))
+    #expect(c.selected == ["/x/a", "/x/b"])
+    c.neverClean("/x/a")
+    // Before the re-check finishes.
+    #expect(c.report?.candidates.map(\.path) == ["/x/b"])
+    #expect(c.selected == ["/x/b"])
+    c.cancelCheck()
 }
 
 @Test @MainActor func deletedPathsMarkedRemovedInSessions() async throws {

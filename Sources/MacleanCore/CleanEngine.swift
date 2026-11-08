@@ -40,11 +40,24 @@ public struct CleanEngine: Sendable {
         // Asked once per run, only if a rule needs it; nil = the check failed.
         let installed: Set<String>? = rules.contains(where: Self.needsInstalledSet)
             ? probes.installedBundleIDs().map { Set($0.map { $0.lowercased() }) } : []
+        // Asked once per run, only if a rule needs it. Never prompts.
+        let fullDiskAccess = rules.contains(where: \.needsFullDiskAccess) ? probes.hasFullDiskAccess() : true
 
         for rule in rules {
             if Task.isCancelled { break }
             await beforeRule(rule)
             if Task.isCancelled { break }
+            if rule.needsFullDiskAccess, !fullDiskAccess {
+                // Not read at all: touching a TCC-protected folder could raise a
+                // system dialog (R28). Later rules don't claim inside it either.
+                for root in Self.literalRoots(of: rule, home: home) {
+                    claimed.append(root)
+                    if !disabled.contains(rule.category), denied.insert(root).inserted {
+                        report.skipped.append(SkippedItem(path: root, reason: .noAccess))
+                    }
+                }
+                continue
+            }
             if case .projectArtifacts = rule.special {
                 if !disabled.contains(rule.category) { runProjectArtifacts(rule, context: context, progress: progress, into: &report) }
                 continue
@@ -257,9 +270,9 @@ public struct CleanEngine: Sendable {
     /// The rule's name conditions. `checkType` also requires a regular file for `fileFilter` rows.
     static func claims(_ rule: CleanRule, path: String, checkType: Bool) -> Bool {
         let name = (path as NSString).lastPathComponent
-        if rule.exclude.contains(where: { glob($0, name) }) { return false }
+        if rule.exclude.contains(where: { globIgnoringCase($0, name) }) { return false }
         if let filter = rule.fileFilter {
-            guard filter.contains(where: { glob($0, name) }) else { return false }
+            guard filter.contains(where: { globIgnoringCase($0, name) }) else { return false }
             if checkType {
                 var st = stat()
                 guard lstat(path, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { return false }
@@ -339,6 +352,17 @@ public struct CleanEngine: Sendable {
         return segments.isEmpty ? [] : current
     }
 
+    /// Each brace alternative's longest literal prefix (up to the first glob
+    /// segment), with `~` as `home`. String only: nothing is read.
+    static func literalRoots(of rule: CleanRule, home: String) -> [String] {
+        var seen: Set<String> = []
+        return braceExpand(rule.pattern).compactMap { p -> String? in
+            guard let (base, segments) = resolve(p, home: home) else { return nil }
+            let literal = segments.prefix { !$0.contains(where: { "*?[".contains($0) }) }
+            return literal.reduce(base) { join($0, $1) }
+        }.filter { seen.insert($0).inserted }
+    }
+
     /// `~` / `~/…` → (home, segments); `/…` → ("/", segments); anything else is invalid.
     private static func resolve(_ pattern: String, home: String) -> (String, [String])? {
         let split = { (s: Substring) in s.split(separator: "/").map(String.init) }
@@ -375,6 +399,11 @@ public struct CleanEngine: Sendable {
 
     private static func glob(_ pattern: String, _ name: String) -> Bool {
         fnmatch(pattern, name, FNM_PERIOD) == 0
+    }
+
+    /// Catalog name conditions (`exclude`, `fileFilter`) ignore case, as the default APFS volume does.
+    private static func globIgnoringCase(_ pattern: String, _ name: String) -> Bool {
+        fnmatch(pattern, name, FNM_PERIOD | FNM_CASEFOLD) == 0
     }
 
     private static func join(_ dir: String, _ name: String) -> String {
