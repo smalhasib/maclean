@@ -2,14 +2,34 @@ import Darwin
 import Foundation
 
 enum FullDiskAccess {
-    /// Opens the user's TCC database read-only: only Full Disk Access allows it,
-    /// and the refusal (EPERM/EACCES) raises no dialog. Any other failure also
-    /// answers false, so TCC-protected folders stay unread.
+    /// True when any of `probes` can be opened read-only. Each one is readable
+    /// only with Full Disk Access, and a refusal (EPERM/EACCES) raises no
+    /// dialog. A missing probe decides nothing: macOS 27 has no per-user
+    /// `com.apple.TCC` folder, which made the old single-file check always fail.
     static func isGranted(home: String = NSHomeDirectory()) -> Bool {
-        let fd = open(home + "/Library/Application Support/com.apple.TCC/TCC.db", O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
-        guard fd >= 0 else { return false }
-        close(fd)
-        return true
+        isGranted(probes: defaultProbes(home: home))
+    }
+
+    static func isGranted(probes: [String]) -> Bool {
+        probes.contains { path in
+            let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+            guard fd >= 0 else { return false }
+            close(fd)
+            return true
+        }
+    }
+
+    /// Locations macOS protects with Full Disk Access and no consent dialog.
+    /// The system TCC database exists on every Mac; the rest cover systems
+    /// where it moves. Never Desktop, Documents or Downloads: those prompt.
+    static func defaultProbes(home: String) -> [String] {
+        [
+            "/Library/Application Support/com.apple.TCC/TCC.db",
+            home + "/Library/Application Support/com.apple.TCC/TCC.db",
+            home + "/Library/Safari",
+            home + "/Library/Mail",
+            home + "/Library/Messages",
+        ]
     }
 
     /// The Privacy & Security pane that lists Full Disk Access.
