@@ -25,6 +25,10 @@ import Observation
     @ObservationIgnored var onUserScan: (() -> Void)?
     /// Called after a session is forgotten, so views holding its result let go.
     @ObservationIgnored var onForget: ((ScanSession) -> Void)?
+    /// Shares administrator dialogs; nil never reads restricted folders by itself.
+    @ObservationIgnored var batcher: AdminBatcher?
+    /// Where `AdminBatcher.askKey` is read.
+    @ObservationIgnored var defaults: UserDefaults = .standard
 
     /// This session's scans, oldest first.
     var all: [ScanSession] { order.compactMap { sessions[$0] } }
@@ -126,6 +130,11 @@ import Observation
     }
 
     private func finished(_ session: ScanSession) {
+        // Spec §4.2: each finished scan with restricted folders asks once, right away.
+        if let batcher, sessions[session.rootPath] === session, session.restrictedCount > 0,
+           AdminBatcher.asksAutomatically(defaults) {
+            Task { await session.readRestricted(using: batcher) }
+        }
         guard latest === session else { return }
         latest = nil
         let newWindow = newWindowSessions.remove(ObjectIdentifier(session)) != nil

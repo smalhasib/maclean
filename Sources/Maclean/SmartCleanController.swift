@@ -7,9 +7,10 @@ import Observation
 /// items and the user's ticks, and deletes the ticked items through the shared
 /// `DeleteBatch` after the view's confirmation alert.
 ///
-/// The check pauses between targets while a scan of the target's volume runs,
-/// never asks for a password and never deletes. A cancelled check publishes
-/// nothing.
+/// The check pauses between targets while a scan of the target's volume runs
+/// and never deletes. A cancelled check publishes nothing. When it finds
+/// system items it couldn't measure, "Measure with administrator rights" runs
+/// once by itself (spec §4.3), unless Settings turns that off.
 @MainActor @Observable final class SmartCleanController {
     enum Phase: Equatable {
         case idle, checking, ready, nothingFound, confirming
@@ -57,6 +58,11 @@ import Observation
     @ObservationIgnored private let probes: any CleanProbes
     @ObservationIgnored private let makeDeleter: (DeleteMode, ProtectionContext) -> any DeleterProtocol
     @ObservationIgnored private let admin: any AdminRunning
+    /// Measures go through it, so they share a dialog with scan reads; nil runs `admin` directly.
+    @ObservationIgnored private let batcher: AdminBatcher?
+    /// Size-unknown system items whose automatic measure was cancelled or
+    /// failed: never asked about automatically again.
+    @ObservationIgnored private var declinedAutoMeasure: Set<String> = []
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let scanning: (Int32) -> Bool
     /// Where `.macleanDidDelete` is posted after a clean that deleted something.
@@ -70,12 +76,13 @@ import Observation
 
     init(engine: @escaping () -> CleanEngine, probes: any CleanProbes,
          makeDeleter: @escaping (DeleteMode, ProtectionContext) -> any DeleterProtocol, admin: any AdminRunning,
-         defaults: UserDefaults = .standard, notifications: NotificationCenter = .default,
+         batcher: AdminBatcher? = nil, defaults: UserDefaults = .standard, notifications: NotificationCenter = .default,
          scanning: @escaping (Int32) -> Bool) {
         makeEngine = engine
         self.probes = probes
         self.makeDeleter = makeDeleter
         self.admin = admin
+        self.batcher = batcher
         self.defaults = defaults
         self.scanning = scanning
         self.notifications = notifications
@@ -177,6 +184,24 @@ import Observation
         report = result
         if case .summary = phase { return }
         phase = resting
+        measureAutomaticallyIfNeeded()
+    }
+
+    /// Spec §4.3: one automatic measure per check that found size-unknown
+    /// system items, through the shared batcher; items whose automatic
+    /// measure was cancelled or failed aren't asked about again (the review
+    /// keeps the manual button).
+    private func measureAutomaticallyIfNeeded() {
+        guard batcher != nil, phase == .ready, AdminBatcher.asksAutomatically(defaults) else { return }
+        let unknown = Set(unknownAdminPaths)
+        guard !unknown.isEmpty, !unknown.isSubset(of: declinedAutoMeasure) else { return }
+        Task {
+            if await measure() == false { declinedAutoMeasure.formUnion(unknown) }
+        }
+    }
+
+    private var unknownAdminPaths: [String] {
+        (report?.candidates ?? []).filter { $0.requiresAdmin && $0.measurement == nil }.map(\.path)
     }
 
     /// The phase when nothing runs: from the last report.
@@ -220,9 +245,15 @@ import Observation
     /// size-unknown rows needing administrator rights. Rows root couldn't
     /// measure, and every row after a cancelled prompt, stay size unknown.
     func measureWithAdmin() async {
-        guard phase == .ready, !measuring, let report else { return }
-        let paths = report.candidates.filter { $0.requiresAdmin && $0.measurement == nil }.map(\.path)
-        guard !paths.isEmpty else { return }
+        await measure()
+    }
+
+    /// False when the prompt was cancelled or the helper failed; nil when nothing was asked.
+    @discardableResult
+    private func measure() async -> Bool? {
+        guard phase == .ready, !measuring, report != nil else { return nil }
+        let paths = unknownAdminPaths
+        guard !paths.isEmpty else { return nil }
         generation += 1
         let mine = generation
         measuring = true
@@ -233,14 +264,19 @@ import Observation
             defer { AdminMeasure.removePathsFile(file) }
             var env = ProtectionEnvironment.current()
             env.neverClean = defaults.stringArray(forKey: Self.neverCleanKey) ?? []
-            lines = AdminMeasure.decode(try await admin.run(AdminMeasure.arguments(pathsFile: file.path,
-                                                                                   sha256: sha256, environment: env),
-                                                     prompt: Self.measurePrompt(count: paths.count)))
+            let arguments = AdminMeasure.arguments(pathsFile: file.path, sha256: sha256, environment: env)
+            let prompt = Self.measurePrompt(count: paths.count)
+            let output = if let batcher {
+                try await batcher.submit(arguments, reason: prompt)
+            } else {
+                try await admin.run(arguments, prompt: prompt)
+            }
+            lines = AdminMeasure.decode(output)
         } catch {
-            return
+            return false
         }
         // A check started meanwhile owns the report now.
-        guard mine == generation, var current = self.report else { return }
+        guard mine == generation, var current = self.report else { return true }
         current.candidates = current.candidates.map { c in
             guard c.requiresAdmin, c.measurement == nil, let line = lines[c.path], line.error == nil,
                   let m = line.measurement else { return c }
@@ -249,6 +285,7 @@ import Observation
                                   requiresAdmin: c.requiresAdmin, owner: c.owner, group: c.group)
         }
         self.report = current
+        return true
     }
 
     // MARK: Clean

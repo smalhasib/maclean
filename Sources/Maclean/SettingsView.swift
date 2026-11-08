@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Settings (spec §5.5): a General tab with the window-mode and Trash toggles, and the
-/// Smart Clean tab.
+/// Settings (spec §5.5): a General tab with the window-mode, Trash and
+/// administrator-read toggles, and the Smart Clean tab.
 struct SettingsView: View {
     var body: some View {
         TabView {
@@ -18,6 +18,7 @@ struct SettingsView: View {
 private struct GeneralSettings: View {
     @AppStorage(WindowRouter.ownWindowKey) private var ownWindow = false
     @AppStorage(DeleteController.trashKey) private var moveToTrash = false
+    @AppStorage(AdminBatcher.askKey) private var askForAdminReads = true
 
     var body: some View {
         Form {
@@ -28,6 +29,11 @@ private struct GeneralSettings: View {
                 .fixedSize(horizontal: false, vertical: true)
             Toggle("Move to Trash instead of deleting permanently", isOn: $moveToTrash)
             Text("Off: deleted items are gone for good, as in DaisyDisk.")
+                .font(.callout)
+                .secondaryText()
+                .fixedSize(horizontal: false, vertical: true)
+            Toggle("Ask for the administrator password to read restricted folders", isOn: $askForAdminReads)
+            Text("Asked once after a scan finds folders only an administrator can open, and when Smart Clean finds system items it can't measure.")
                 .font(.callout)
                 .secondaryText()
                 .fixedSize(horizontal: false, vertical: true)

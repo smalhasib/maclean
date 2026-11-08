@@ -33,6 +33,8 @@ struct MacleanApp: App {
     let startModel = StartModel()
     lazy var router = WindowRouter(registry: registry, startModel: startModel)
     let coordinator = PromptCoordinator(hasAccess: { FullDiskAccess.isGranted() })
+    /// Scan reads and Smart Clean measures share administrator dialogs through it.
+    lazy var adminBatcher = AdminBatcher(runner: AdminRunner(), coordinator: coordinator)
     private lazy var deleteMenuItem = DeleteMenuItem(router: router)
     lazy var smartClean: SmartCleanController = {
         let controller = SmartCleanController(
@@ -47,6 +49,7 @@ struct MacleanApp: App {
                                context: context)
             },
             admin: AdminRunner(),
+            batcher: adminBatcher,
             scanning: { [registry] device in
                 registry.all.contains { $0.isScanning && ScanBoundary.forRoot($0.rootPath).allowedDevices.contains(device) }
             })
@@ -56,6 +59,7 @@ struct MacleanApp: App {
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         _ = router   // takes over presenting finished scans before any starts
+        registry.batcher = adminBatcher
         NSWindow.allowsAutomaticWindowTabbing = true
         // Run unbundled (`swift run Maclean`), the process would otherwise get
         // no Dock icon and no focus.
