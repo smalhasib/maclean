@@ -43,6 +43,8 @@ import Observation
     /// Which check `checkTask` is, so a cancelled one doesn't clear its successor.
     @ObservationIgnored private var checkGeneration = 0
     @ObservationIgnored private var downloadTask: Task<(Data, String)?, Never>?
+    /// Which attempt `downloadTask` is, so a cancelled one that ends late changes nothing.
+    @ObservationIgnored private var downloadGeneration = 0
     @ObservationIgnored private var presentTask: Task<Void, Never>?
     private var passwordCancelled = false
 
@@ -98,8 +100,9 @@ import Observation
     }
 
     var action: InstallAction {
-        // Unbundled (`swift run`): there is no bundle to replace.
-        guard bundleURL.pathExtension == "app" else { return .download }
+        // Unbundled (`swift run`): there is no bundle to replace. Translocated (opened
+        // from a quarantined download): a read-only copy that would vanish anyway.
+        guard bundleURL.pathExtension == "app", !bundleURL.path.contains("/AppTranslocation/") else { return .download }
         if InstallSource.detect(bundlePath: bundleURL.path, caskroomRoots: caskroomRoots) == .homebrew { return .brew }
         if isWritable(bundleURL.deletingLastPathComponent()) { return .install }
         return passwordCancelled ? .download : .installWithPassword
@@ -180,11 +183,13 @@ import Observation
             return
         }
         state = .downloading(0)
+        downloadGeneration += 1
+        let generation = downloadGeneration
         let task = Task { () -> (Data, String)? in
             do {
                 let signature = String(decoding: try await fetch(release.signatureURL), as: UTF8.self)
                 let zip = try await download(release.zipURL) { fraction in
-                    guard case .downloading = self.state else { return }
+                    guard generation == self.downloadGeneration, case .downloading = self.state else { return }
                     self.state = .downloading(fraction)
                 }
                 return Task.isCancelled ? nil : (zip, signature)
@@ -194,8 +199,9 @@ import Observation
         }
         downloadTask = task
         let downloaded = await task.value
+        // Cancelled (Cancel, Later, Check Now), possibly with a newer attempt running.
+        guard generation == downloadGeneration, !task.isCancelled, case .downloading = state else { return }
         downloadTask = nil
-        guard case .downloading = state else { return }   // cancelled
         guard let (zip, signature) = downloaded else {
             state = .failed("The update couldn't be downloaded. Check your internet connection and try again.")
             return
@@ -280,8 +286,13 @@ import Observation
 }
 
 /// The live network calls: GitHub's API wants a User-Agent and its JSON media
-/// type. Nothing personal is sent.
+/// type. Nothing personal is sent (ephemeral session: no cookies, no cache).
+/// Bodies arrive in chunks and are capped, at 300 MB and at the announced size
+/// plus 1 MB.
 enum UpdateFetch {
+    static let maxBytes: Int64 = 300 * 1024 * 1024
+    static let slack: Int64 = 1024 * 1024
+
     static func request(_ url: URL, version: String) -> URLRequest {
         var request = URLRequest(url: url)
         request.setValue("Maclean/\(version)", forHTTPHeaderField: "User-Agent")
@@ -293,37 +304,96 @@ enum UpdateFetch {
     }
 
     static func fetch(version: String) -> @Sendable (URL) async throws -> Data {
-        { url in
-            let (data, response) = try await URLSession.shared.data(for: request(url, version: version))
-            try check(response)
-            return data
-        }
+        { url in try await load(request(url, version: version), progress: nil) }
     }
 
-    /// Streams the body, reporting the fraction received (when the size is known).
     static func download(version: String) -> @Sendable (URL, @escaping @MainActor (Double) -> Void) async throws -> Data {
-        { url, progress in
-            let (bytes, response) = try await URLSession.shared.bytes(for: request(url, version: version))
-            try check(response)
-            let expected = response.expectedContentLength
-            var data = Data()
-            if expected > 0 { data.reserveCapacity(Int(expected)) }
-            var reported = 0
-            for try await byte in bytes {
-                data.append(byte)
-                if expected > 0, data.count - reported >= 256 * 1024 {
-                    reported = data.count
-                    let fraction = min(1, Double(reported) / Double(expected))
-                    await progress(fraction)
-                }
+        { url, progress in try await load(request(url, version: version), progress: progress) }
+    }
+
+    /// The byte limit for a response announcing `expected` bytes (-1: unknown).
+    static func limit(expected: Int64) -> Int64 {
+        expected > 0 ? min(maxBytes, expected + slack) : maxBytes
+    }
+
+    static func load(_ request: URLRequest, progress: (@MainActor (Double) -> Void)?) async throws -> Data {
+        let loader = Loader(progress: progress)
+        let session = URLSession(configuration: .ephemeral, delegate: loader, delegateQueue: nil)
+        defer { session.finishTasksAndInvalidate() }
+        let task = session.dataTask(with: request)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                loader.start(continuation)
+                task.resume()
             }
-            return data
+        } onCancel: {
+            task.cancel()
         }
     }
 
-    private static func check(_ response: URLResponse) throws {
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw URLError(.badServerResponse)
+    /// Collects one response's chunks; fails on a non-2xx status or an over-long body.
+    private final class Loader: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+        private let lock = NSLock()
+        private let progress: (@MainActor (Double) -> Void)?
+        private var continuation: CheckedContinuation<Data, Error>?
+        private var data = Data()
+        private var expected: Int64 = -1
+        private var lastReported = 0
+        private var failure: Error?
+
+        init(progress: (@MainActor (Double) -> Void)?) { self.progress = progress }
+
+        func start(_ continuation: CheckedContinuation<Data, Error>) {
+            lock.withLock { self.continuation = continuation }
+        }
+
+        func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                lock.withLock { failure = URLError(.badServerResponse) }
+                completionHandler(.cancel)
+                return
+            }
+            let expected = response.expectedContentLength
+            guard expected <= UpdateFetch.maxBytes else {
+                lock.withLock { failure = URLError(.dataLengthExceedsMaximum) }
+                completionHandler(.cancel)
+                return
+            }
+            lock.withLock {
+                self.expected = expected
+                if expected > 0 { data.reserveCapacity(Int(expected)) }
+            }
+            completionHandler(.allow)
+        }
+
+        func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive chunk: Data) {
+            let fraction: Double? = lock.withLock {
+                data.append(chunk)
+                if Int64(data.count) > UpdateFetch.limit(expected: expected) {
+                    failure = URLError(.dataLengthExceedsMaximum)
+                    return nil
+                }
+                guard expected > 0, data.count - lastReported >= 256 * 1024 else { return nil }
+                lastReported = data.count
+                return min(1, Double(data.count) / Double(expected))
+            }
+            if lock.withLock({ failure != nil }) {
+                dataTask.cancel()
+                return
+            }
+            if let fraction, let progress { Task { @MainActor in progress(fraction) } }
+        }
+
+        func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+            let (continuation, result): (CheckedContinuation<Data, Error>?, Result<Data, Error>) = lock.withLock {
+                let c = self.continuation
+                self.continuation = nil
+                if let failure { return (c, .failure(failure)) }
+                if let error { return (c, .failure(error)) }
+                return (c, .success(data))
+            }
+            continuation?.resume(with: result)
         }
     }
 }

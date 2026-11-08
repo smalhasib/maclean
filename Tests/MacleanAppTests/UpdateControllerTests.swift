@@ -22,13 +22,22 @@ private func releaseJSON(_ tag: String = "v0.3.0") -> Data {
 @MainActor private final class FakeNet {
     var json: Data? = releaseJSON()
     var urls: [URL] = []
-    func fetch(_ url: URL) throws -> Data {
+    /// Per zip request, in order: a delay (that ignores cancellation) and whether it then fails.
+    var zipPlan: [(Duration, Bool)] = []
+    func fetch(_ url: URL) async throws -> Data {
         urls.append(url)
         if url == UpdateController.latestReleaseURL {
             guard let json else { throw URLError(.notConnectedToInternet) }
             return json
         }
         if url == sigURL { return Data("c2lnbmF0dXJl".utf8) }
+        if !zipPlan.isEmpty {
+            let (delay, fails) = zipPlan.removeFirst()
+            let clock = ContinuousClock()
+            let end = clock.now + delay
+            while clock.now < end { await Task.yield() }
+            if fails { throw URLError(.networkConnectionLost) }
+        }
         return Data("zip".utf8)
     }
 }
@@ -162,6 +171,9 @@ private func freshDefaults() -> UserDefaults {
     #expect(make(net: net).action == .install)
     // Not the app bundle (`swift run`): never replaced.
     #expect(make(net: net, bundleURL: URL(fileURLWithPath: "/tmp/build/debug")).action == .download)
+    // Translocated (run from a quarantined download): a read-only copy, never replaced.
+    let translocated = URL(fileURLWithPath: "/private/var/folders/x/T/AppTranslocation/1234/d/Maclean.app")
+    #expect(make(net: net, bundleURL: translocated).action == .download)
 
     let locked = make(net: net, writable: false,
                       installPrivileged: { _, _, _, _ in throw AdminRunnerError.cancelled })
@@ -182,6 +194,26 @@ private func freshDefaults() -> UserDefaults {
     await controller.install()
     #expect(await installer.calls == 1)
     #expect(net.urls.contains(zipURL) && net.urls.contains(sigURL))
+}
+
+/// A cancelled download that finishes late must not touch the newer attempt.
+@MainActor @Test func staleDownloadDoesNotClobberNewerAttempt() async {
+    let net = FakeNet()
+    net.zipPlan = [(.milliseconds(100), true), (.milliseconds(300), false)]
+    let installer = FakeInstaller()
+    let controller = make(net: net, installer: installer)
+    controller.checkNow()
+    await controller.checkTask?.value
+    let first = Task { await controller.install() }
+    for _ in 0..<100 where controller.state != .downloading(0) { await Task.yield() }
+    controller.cancel()
+    guard case .available = controller.state else { Issue.record("cancel: \(controller.state)"); return }
+    let second = Task { await controller.install() }
+    await first.value
+    #expect(controller.state != .failed("The update couldn't be downloaded. Check your internet connection and try again."))
+    await second.value
+    #expect(await installer.calls == 1)
+    #expect(controller.state == .installing)
 }
 
 @MainActor @Test func installRefusedDuringDelete() async {
@@ -254,14 +286,17 @@ private final class Relaunches: @unchecked Sendable {
     func add(_ url: URL) { lock.withLock { _urls.append(url) } }
 }
 
-private func installer(_ f: Fixture, relaunches: Relaunches) -> UpdateInstaller {
+private func installer(_ f: Fixture, relaunches: Relaunches,
+                       move: @escaping @Sendable (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) })
+    -> UpdateInstaller {
     let trashDir = f.trashDir
     return UpdateInstaller(
         publicKeyBase64: f.publicKey,
         trash: { url in
             try FileManager.default.moveItem(at: url, to: trashDir.appendingPathComponent(url.lastPathComponent))
         },
-        relaunch: { relaunches.add($0) })
+        relaunch: { relaunches.add($0) },
+        move: move)
 }
 
 @Test func installerRejectsBadSignature() async throws {
@@ -322,4 +357,58 @@ private func installer(_ f: Fixture, relaunches: Relaunches) -> UpdateInstaller 
     // Nothing left behind next to the app.
     let siblings = try FileManager.default.contentsOfDirectory(atPath: f.installed.deletingLastPathComponent().path)
     #expect(siblings == ["Maclean.app"])
+}
+
+/// Moving the new app in fails after leaving a partial copy: the partial item
+/// goes and the old app is back at the bundle path.
+@Test func swapRollsBackAfterPartialMove() async throws {
+    let f = Fixture()
+    let relaunches = Relaunches()
+    let zip = f.zip()
+    let bundlePath = f.installed.path
+    let failing = installer(f, relaunches: relaunches, move: { from, to in
+        if to.path == bundlePath, from.lastPathComponent == "Maclean.app", !from.path.contains("/old/") {
+            try FileManager.default.createDirectory(at: to.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+            throw CocoaError(.fileWriteOutOfSpace)
+        }
+        try FileManager.default.moveItem(at: from, to: to)
+    })
+    await #expect(throws: UpdateInstallError.self) {
+        try await failing.install(zip: zip, signature: f.sign(zip), release: f.release, replacing: f.installed)
+    }
+    #expect(f.installedVersion() == "0.2.0")
+    #expect(f.trashed().isEmpty)
+    #expect(relaunches.urls.isEmpty)
+    let siblings = try FileManager.default.contentsOfDirectory(atPath: f.installed.deletingLastPathComponent().path)
+    #expect(siblings == ["Maclean.app"])
+}
+
+/// When even the restore fails, the error names where the old app is, and it is there.
+@Test func rollbackFailureSaysWhereTheOldAppIs() async throws {
+    let f = Fixture()
+    let relaunches = Relaunches()
+    let zip = f.zip()
+    let bundlePath = f.installed.path
+    let failing = installer(f, relaunches: relaunches, move: { from, to in
+        if to.path == bundlePath { throw CocoaError(.fileWriteNoPermission) }
+        try FileManager.default.moveItem(at: from, to: to)
+    })
+    do {
+        try await failing.install(zip: zip, signature: f.sign(zip), release: f.release, replacing: f.installed)
+        Issue.record("installed")
+    } catch let UpdateInstallError.rollbackFailed(oldPath) {
+        let plist = NSDictionary(contentsOfFile: oldPath + "/Contents/Info.plist")
+        #expect(plist?["CFBundleShortVersionString"] as? String == "0.2.0")
+        #expect(UpdateInstallError.rollbackFailed(oldPath).message.contains(oldPath))
+    } catch {
+        Issue.record("wrong error: \(error)")
+    }
+    #expect(relaunches.urls.isEmpty)
+}
+
+@Test func downloadCap() {
+    let mb: Int64 = 1024 * 1024
+    #expect(UpdateFetch.limit(expected: -1) == 300 * mb)
+    #expect(UpdateFetch.limit(expected: 10 * mb) == 11 * mb)
+    #expect(UpdateFetch.limit(expected: 400 * mb) == 300 * mb)
 }
