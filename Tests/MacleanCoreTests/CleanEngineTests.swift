@@ -311,7 +311,8 @@ private struct Fixture {
         defer { withExtendedLifetime(f) {} }
         f.t.file("home/Library/Caches/locked/x", bytes: 10)
         f.t.chmod("home/Library/Caches/locked", 0)
-        let r = await f.run([rule("c", "~/Library/Caches", tiers: [(7, .safe)], requiresAdmin: true)])
+        let r = await f.run([rule("c", "~/Library/Caches", tiers: [(7, .safe)], requiresAdmin: true)],
+                            probes: FakeProbes(now: days(10)))
         #expect(r.skipped.isEmpty)
         #expect(r.candidates.count == 1)
         #expect(r.candidates.first?.measurement == nil)

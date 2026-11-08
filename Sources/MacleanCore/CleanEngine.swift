@@ -92,27 +92,12 @@ public struct CleanEngine {
             }
         }
 
-        var displayName = (path as NSString).lastPathComponent
-        var reason = rule.reason
-        switch rule.special {
-        case .removedAppLeftover:
-            guard installed != nil else { return .skip(.installedCheckFailed) }
-            let name = Self.ownName(path) ?? displayName
-            if Self.neverDeleteWords.contains(where: { name.lowercased().contains($0) }) {
-                return .skip(.protected(.protectedApp))
-            }
-            displayName = Self.guessedAppName(name)
-        case .skipIfSecurityTool:
-            if probes.securityToolInstalled() { return .skip(.protected(.protectedApp)) }
-        case .launchdOrphan:
-            switch Self.orphanCheck(path, installed: installed) {
-            case .orphan(let missing): reason = "\(rule.reason): \(missing)"
-            case .notOrphan: return .gone
-            case .unknown(let r): return .skip(r)
-            }
-        case .derivedData:
-            displayName = Self.derivedDataProject(path) ?? displayName
-        default: break
+        let displayName: String
+        var reason: String
+        switch prepareSpecial(path, rule: rule, installed: installed) {
+        case .proceed(let name, let why): (displayName, reason) = (name, why)
+        case .skip(let r): return .skip(r)
+        case .drop: return .gone
         }
 
         let measurement: Measurement?
@@ -127,21 +112,15 @@ public struct CleanEngine {
             measurement = nil
         }
 
-        // Installers in Downloads are aged by when they arrived, not by their contents.
-        var ageDate = measurement?.newest
-        if case .downloadsInstaller = rule.special { ageDate = Self.dateAdded(path) }
-        let tier: CleanRule.Tier
-        if let ageDate {
-            let age = Int((probes.now.timeIntervalSince(ageDate) / 86400).rounded(.down))
-            guard let match = rule.ageTiers.first(where: { $0.days <= age }) else { return .skip(.recent) }
-            tier = match.tier
-            if case .downloadsInstaller = rule.special { reason = "Installer image downloaded \(age) days ago" }
-        } else {
-            tier = rule.sizeUnknownTier
-        }
+        // Without a measurement the age comes from the item itself, so the gate still applies.
+        guard let ageDate = Self.ageDate(path, rule: rule, measurement: measurement) else { return .skip(.noAccess) }
+        let age = Int((probes.now.timeIntervalSince(ageDate) / 86400).rounded(.down))
+        guard let match = rule.ageTiers.first(where: { $0.days <= age }) else { return .skip(.recent) }
+        let tier = measurement == nil ? min(match.tier, rule.sizeUnknownTier) : match.tier
+        if case .downloadsInstaller = rule.special { reason = "Installer image downloaded \(age) days ago" }
         if case .macOSInstaller = rule.special {
-            guard let version = Self.bundleVersion(path) else { return .skip(.noAccess) }
-            if Self.isRunningOSVersion(version) { return .skip(.sameOSInstaller) }
+            guard let sameOS = Self.installerMatchesRunningOS(path) else { return .skip(.noAccess) }
+            if sameOS { return .skip(.sameOSInstaller) }
         }
 
         var owner: String?
@@ -261,129 +240,8 @@ public struct CleanEngine {
         return true
     }
 
-    // MARK: - Specials
-
-    private static func needsInstalledSet(_ rule: CleanRule) -> Bool {
-        switch rule.special {
-        case .removedAppLeftover, .launchdOrphan: true
-        default: false
-        }
-    }
-
-    /// A removed-app leftover rule claims only a bundle-id name (not `com.apple.*`)
-    /// whose app isn't installed, or every bundle-id name when the installed check
-    /// failed (it is then skipped, never offered as a generic cache). Everything
-    /// else falls through to the later rules. `installed` is lowercased.
-    static func specialClaims(_ rule: CleanRule, path: String, installed: Set<String>?) -> Bool {
-        guard case .removedAppLeftover = rule.special else { return true }
-        guard let name = ownName(path)?.lowercased(), !name.hasPrefix("com.apple.") else { return false }
-        guard let installed else { return true }
-        return !isInstalled(name, in: installed)
-    }
-
-    /// Exact match, or a helper of an installed id, or an id with an installed helper.
-    private static func isInstalled(_ id: String, in installed: Set<String>) -> Bool {
-        installed.contains(id) || installed.contains { id.hasPrefix($0 + ".") || $0.hasPrefix(id + ".") }
-    }
-
-    /// Leftovers never offered when their name contains one of these (Maclean's own list).
-    static let neverDeleteWords = ["1password", "keychain", "bitwarden", "ssh", "gpg", "lastpass", "dashlane", "keepass"]
-
-    /// `com.gone.app` → `App`.
-    private static func guessedAppName(_ bundleID: String) -> String {
-        let last = bundleID.split(separator: ".").last.map(String.init) ?? bundleID
-        return last.prefix(1).uppercased() + last.dropFirst()
-    }
-
-    private enum Orphan { case orphan(String), notOrphan, unknown(SkipReason) }
-
-    /// A launchd plist whose absolute `Program`/`ProgramArguments[0]` is missing, or
-    /// a helper tool none of whose owning apps (embedded `SMAuthorizedClients`,
-    /// else its own `CFBundleIdentifier`) is installed.
-    private static func orphanCheck(_ path: String, installed: Set<String>?) -> Orphan {
-        var st = stat()
-        guard lstat(path, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { return .unknown(.ownerUnknown) }
-        if path.hasSuffix(".plist") {
-            guard let data = FileManager.default.contents(atPath: path) else { return .unknown(.noAccess) }
-            guard let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
-            else { return .unknown(.ownerUnknown) }
-            let program = dict["Program"] as? String ?? (dict["ProgramArguments"] as? [String])?.first
-            guard let program, program.hasPrefix("/") else { return .notOrphan }
-            var pst = stat()
-            if lstat(program, &pst) != 0, errno == ENOENT || errno == ENOTDIR { return .orphan(program) }
-            return .notOrphan
-        }
-        guard st.st_size <= 64 << 20, let data = FileManager.default.contents(atPath: path) else {
-            return .unknown(.noAccess)
-        }
-        let owners = helperOwnerIDs(data)
-        guard !owners.isEmpty else { return .unknown(.ownerUnknown) }
-        guard let installed else { return .unknown(.installedCheckFailed) }
-        if owners.contains(where: { isInstalled($0.lowercased(), in: installed) }) { return .notOrphan }
-        return .orphan(owners.joined(separator: ", "))
-    }
-
-    /// The owning app ids of a helper binary, from its embedded Info.plist.
-    public static func helperOwnerIDs(_ binary: Data) -> [String] {
-        guard let start = binary.range(of: Data("<?xml".utf8)),
-              let end = binary.range(of: Data("</plist>".utf8), in: start.upperBound..<binary.endIndex),
-              let dict = try? PropertyListSerialization.propertyList(
-                  from: binary[start.lowerBound..<end.upperBound], format: nil) as? [String: Any]
-        else { return [] }
-        let clients = (dict["SMAuthorizedClients"] as? [String] ?? []).compactMap { req -> String? in
-            guard let r = req.range(of: #"identifier\s+"?[A-Za-z0-9.\-]+"#, options: .regularExpression) else { return nil }
-            return req[r].split(whereSeparator: { $0 == " " || $0 == "\"" }).last.map(String.init)
-        }
-        if !clients.isEmpty { return clients }
-        return (dict["CFBundleIdentifier"] as? String).map { [$0] } ?? []
-    }
-
-    /// `kMDItemDateAdded` (when the file arrived in its folder), else the birth time.
-    private static func dateAdded(_ path: String) -> Date? {
-        let name = "com.apple.metadata:kMDItemDateAdded"
-        var buf = [UInt8](repeating: 0, count: 256)
-        let n = getxattr(path, name, &buf, buf.count, 0, XATTR_NOFOLLOW)
-        if n > 0, let date = try? PropertyListSerialization.propertyList(from: Data(buf.prefix(n)), format: nil) as? Date {
-            return date
-        }
-        var st = stat()
-        guard lstat(path, &st) == 0 else { return nil }
-        let t = st.st_birthtimespec
-        return Date(timeIntervalSince1970: TimeInterval(t.tv_sec) + TimeInterval(t.tv_nsec) / 1e9)
-    }
-
-    private static func bundleVersion(_ app: String) -> String? {
-        let plist = (app as NSString).appendingPathComponent("Contents/Info.plist")
-        guard let data = FileManager.default.contents(atPath: plist),
-              let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
-        else { return nil }
-        return dict["CFBundleShortVersionString"] as? String
-    }
-
-    /// Whether `version` names the running macOS (`15.1` == `15.1.0`).
-    private static func isRunningOSVersion(_ version: String) -> Bool {
-        let os = ProcessInfo.processInfo.operatingSystemVersion
-        func trimmed(_ parts: [String]) -> [String] {
-            var p = parts
-            while p.count > 1, p.last.flatMap(Int.init) == 0 { p.removeLast() }
-            return p
-        }
-        let running = ["\(os.majorVersion)", "\(os.minorVersion)", "\(os.patchVersion)"]
-        return trimmed(version.split(separator: ".").map(String.init)) == trimmed(running)
-    }
-
-    /// The project name from a DerivedData folder's `info.plist` `WorkspacePath`.
-    private static func derivedDataProject(_ folder: String) -> String? {
-        let plist = (folder as NSString).appendingPathComponent("info.plist")
-        guard let data = FileManager.default.contents(atPath: plist),
-              let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-              let workspace = dict["WorkspacePath"] as? String, !workspace.isEmpty
-        else { return nil }
-        return ((workspace as NSString).lastPathComponent as NSString).deletingPathExtension
-    }
-
     /// The item's name without `.savedState`, if that is a bundle id.
-    private static func ownName(_ path: String) -> String? {
+    static func ownName(_ path: String) -> String? {
         var name = (path as NSString).lastPathComponent
         if name.hasSuffix(".savedState") { name = String(name.dropLast(".savedState".count)) }
         return CleanRule.isBundleID(name) ? name : nil
@@ -500,7 +358,7 @@ public struct CleanEngine {
     }
 
     /// Names in `dir`, opened with `O_NOFOLLOW` so a swapped-in symlink isn't listed.
-    private static func list(_ dir: String) -> Result<[String], POSIXError> {
+    static func list(_ dir: String) -> Result<[String], POSIXError> {
         let fd = open(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard fd >= 0 else { return .failure(POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)) }
         guard let d = fdopendir(fd) else {

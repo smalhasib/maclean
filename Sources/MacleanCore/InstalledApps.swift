@@ -12,39 +12,50 @@ public enum InstalledApps {
 
     /// The bundle ids of `.app` bundles up to depth 3 under `searchRoots`,
     /// plus `extra` (running apps, LaunchServices ids, LaunchAgent labels).
-    /// Missing roots are passed over; nil if the first root can't be listed.
+    /// Absent roots (after the first) are passed over. nil when the first root
+    /// can't be listed, or anything else can't be read: a folder (other than
+    /// ENOENT) or an `.app`'s Info.plist (unreadable or unparsable).
     public static func bundleIDs(searchRoots: [String], extra: Set<String>) -> Set<String>? {
-        guard let first = searchRoots.first,
-              (try? FileManager.default.contentsOfDirectory(atPath: first)) != nil else { return nil }
-        return Set(apps(searchRoots: searchRoots).map(\.bundleID)).union(extra)
+        apps(searchRoots: searchRoots).map { Set($0.map(\.bundleID)).union(extra) }
     }
 
-    /// Every `.app` up to depth 3, as (name without `.app`, bundle id).
-    /// Bundles aren't entered and symlinked folders aren't followed.
-    public static func apps(searchRoots: [String]) -> [(name: String, bundleID: String)] {
+    /// Every `.app` up to depth 3, as (name without `.app`, bundle id); nil on a
+    /// read error as for `bundleIDs`, or when there are no roots. Bundles aren't entered and symlinked
+    /// folders aren't followed (a symlinked root is resolved first).
+    public static func apps(searchRoots: [String]) -> [(name: String, bundleID: String)]? {
         var found: [(name: String, bundleID: String)] = []
-        func walk(_ dir: String, depth: Int) {
-            guard depth <= 3, let names = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return }
-            for name in names where !name.hasPrefix(".") {
+        func walk(_ dir: String, depth: Int) -> Bool {
+            let names: [String]
+            switch CleanEngine.list(dir) {
+            case .success(let n): names = n
+            case .failure(let e): return e.code == .ENOENT
+            }
+            for name in names.sorted() where !name.hasPrefix(".") {
                 let path = (dir as NSString).appendingPathComponent(name)
                 if name.hasSuffix(".app") {
-                    if let id = bundleID(ofBundle: path) { found.append((String(name.dropLast(4)), id)) }
+                    switch PlistReader.dictionary(atPath: (path as NSString).appendingPathComponent("Contents/Info.plist")) {
+                    case .success(let info):
+                        if let id = info["CFBundleIdentifier"] as? String { found.append((String(name.dropLast(4)), id)) }
+                    case .failure(.missing): break
+                    case .failure: return false
+                    }
                 } else if depth < 3 {
                     var st = stat()
-                    if lstat(path, &st) == 0, st.st_mode & S_IFMT == S_IFDIR { walk(path, depth: depth + 1) }
+                    if lstat(path, &st) == 0, st.st_mode & S_IFMT == S_IFDIR, !walk(path, depth: depth + 1) { return false }
                 }
             }
+            return true
         }
-        for root in searchRoots { walk(root, depth: 1) }
+        guard !searchRoots.isEmpty else { return nil }
+        for (i, root) in searchRoots.enumerated() {
+            guard let resolved = realpath(root, nil) else {
+                let missing = errno == ENOENT || errno == ENOTDIR
+                if missing && i > 0 { continue } else { return nil }
+            }
+            let real = String(cString: resolved)
+            free(resolved)
+            if !walk(real, depth: 1) { return nil }
+        }
         return found
-    }
-
-    /// `CFBundleIdentifier` from a bundle's `Contents/Info.plist`.
-    public static func bundleID(ofBundle path: String) -> String? {
-        let plist = (path as NSString).appendingPathComponent("Contents/Info.plist")
-        guard let data = FileManager.default.contents(atPath: plist),
-              let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
-        else { return nil }
-        return dict["CFBundleIdentifier"] as? String
     }
 }

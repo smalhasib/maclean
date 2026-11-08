@@ -29,10 +29,10 @@ private struct Fixture {
     var home: String { t.url("home") }
     init() { t.dir("home") }
 
-    func run(_ rules: [CleanRule], probes: FakeProbes = FakeProbes()) async -> CleanReport {
+    func run(_ rules: [CleanRule], probes: FakeProbes = FakeProbes(), budget: Duration = .seconds(5)) async -> CleanReport {
         let env = ProtectionEnvironment(home: home, appBundle: "/Applications/Maclean.app", mountPoints: ["/"],
                                         timeMachineMounts: [], neverClean: [])
-        return await CleanEngine(rules: rules, home: home, environment: env, probes: probes).run()
+        return await CleanEngine(rules: rules, home: home, environment: env, probes: probes, budget: budget).run()
     }
 }
 
@@ -117,6 +117,36 @@ private struct Fixture {
         #expect(r.skipped == [SkippedItem(path: f.t.url("home/Library/Caches/com.gone.app"), reason: .recent)])
     }
 
+    @Test func sizeUnknownLeftoverStillAgeGated() async {
+        let f = Fixture()
+        defer { withExtendedLifetime(f) {} }
+        f.t.file("home/Library/Caches/com.gone.app/x", bytes: 10)
+        let path = f.t.url("home/Library/Caches/com.gone.app")
+        let young = await f.run(leftoverAndSweeps, budget: .zero)
+        #expect(young.candidates.isEmpty)
+        #expect(young.skipped == [SkippedItem(path: path, reason: .recent)])
+        let old = await f.run(leftoverAndSweeps, probes: FakeProbes(now: days(40)), budget: .zero)
+        #expect(old.candidates.map(\.path) == [path])
+        #expect(old.candidates.first?.measurement == nil)
+        #expect(old.candidates.first?.tier == .review)
+        #expect(old.candidates.first?.ruleID == "leftover.caches")
+    }
+
+    @Test func sizeUnknownInstallerStillAgeGated() async {
+        let f = Fixture()
+        defer { withExtendedLifetime(f) {} }
+        writePlist(["CFBundleShortVersionString": "10.9"],
+                   to: f.t.url("home/Apps/Install macOS Old.app/Contents/Info.plist"))
+        let installer = rule("inst", "~/Apps/Install macOS*.app", category: .oldInstallers, tiers: [(14, .review)],
+                             special: .macOSInstaller)
+        let young = await f.run([installer], budget: .zero)
+        #expect(young.candidates.isEmpty)
+        #expect(young.skipped.map(\.reason) == [.recent])
+        let old = await f.run([installer], probes: FakeProbes(now: days(20)), budget: .zero)
+        #expect(old.candidates.count == 1)
+        #expect(old.candidates.first?.measurement == nil)
+    }
+
     // MARK: launchd orphans
 
     @Test func launchdOrphanNeedsMissingProgram() async {
@@ -126,19 +156,26 @@ private struct Fixture {
         writePlist(["Label": "b", "Program": "/bin/ls"], to: f.t.url("home/LD/b.plist"))
         writePlist(["Label": "c", "ProgramArguments": ["/nonexistent2/tool", "-x"]], to: f.t.url("home/LD/c.plist"))
         writePlist(["Label": "d", "ProgramArguments": ["relative", "-x"]], to: f.t.url("home/LD/d.plist"))
+        writePlist(["Label": "e", "Program": "/Volumes/maclean-no-such-volume-\(UUID().uuidString)/tool"],
+                   to: f.t.url("home/LD/e.plist"))
         let r = await f.run([rule("ld", "~/LD/*.plist", special: .launchdOrphan)])
         #expect(r.candidates.map(\.path) == [f.t.url("home/LD/a.plist"), f.t.url("home/LD/c.plist")])
         #expect(r.candidates[0].reason.contains("/nonexistent"))
         #expect(r.candidates[1].reason.contains("/nonexistent2/tool"))
+        // A program on an unmounted volume is unknown, not missing.
+        #expect(r.skipped == [SkippedItem(path: f.t.url("home/LD/e.plist"), reason: .ownerUnknown)])
     }
 
     @Test func helperOfUninstalledAppIsOrphan() async {
         let f = Fixture()
         defer { withExtendedLifetime(f) {} }
         func helper(_ name: String, client: String) {
+            helperWith(name, requirement: "identifier \"\(client)\" and anchor apple generic")
+        }
+        func helperWith(_ name: String, requirement: String) {
             let plist = try! PropertyListSerialization.data(fromPropertyList: [
                 "CFBundleIdentifier": name,
-                "SMAuthorizedClients": ["identifier \"\(client)\" and anchor apple generic"],
+                "SMAuthorizedClients": [requirement],
             ], format: .xml, options: 0)
             f.t.dir("home/PHT")
             var bytes = Data([0xCF, 0xFA, 0xED, 0xFE] + [UInt8](repeating: 0, count: 64))
@@ -147,6 +184,8 @@ private struct Fixture {
         }
         helper("com.gone.helper", client: "com.gone.app")
         helper("com.a.helper", client: "com.a.b")
+        // Any installed identifier in the requirement keeps the helper.
+        helperWith("com.multi.helper", requirement: "identifier \"com.gone.other\" or identifier \"com.a.b\"")
         f.t.file("home/PHT/no-plist", bytes: 100)
         let r = await f.run([rule("pht", "~/PHT", unit: .eachChild, special: .launchdOrphan)],
                             probes: FakeProbes(installed: ["com.a.b"]))
@@ -255,5 +294,22 @@ private struct Fixture {
                                           extra: ["com.extra"])
         #expect(ids == ["com.one", "com.two", "com.three", "com.five", "com.extra"])
         #expect(InstalledApps.bundleIDs(searchRoots: [t.url("missing"), t.url("Apps")], extra: []) == nil)
+    }
+
+    @Test func installedAppsFailsOnUnreadableFolderOrPlist() {
+        let t = TempDir()
+        defer { withExtendedLifetime(t) {} }
+        writePlist(["CFBundleIdentifier": "com.one"], to: t.url("Apps/One.app/Contents/Info.plist"))
+        t.dir("Apps/NoPlist.app/Contents")      // missing Info.plist: passed over
+        #expect(InstalledApps.bundleIDs(searchRoots: [t.url("Apps")], extra: []) == ["com.one"])
+
+        t.dir("Apps/Locked/Inner.app")
+        t.chmod("Apps/Locked", 0)
+        #expect(InstalledApps.bundleIDs(searchRoots: [t.url("Apps")], extra: []) == nil)
+        t.chmod("Apps/Locked", 0o755)
+
+        t.file("Apps/Bad.app/Contents/Info.plist", bytes: 0)
+        try! Data("not a plist".utf8).write(to: URL(fileURLWithPath: t.url("Apps/Bad.app/Contents/Info.plist")))
+        #expect(InstalledApps.bundleIDs(searchRoots: [t.url("Apps")], extra: []) == nil)
     }
 }

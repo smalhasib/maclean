@@ -15,6 +15,10 @@ import Testing
         #expect(ProcessProbes.pathsOpen(under: t.url("closed")) == false)
         // A sibling sharing the name prefix is not "under".
         #expect(ProcessProbes.pathsOpen(under: t.url("ope")) == false)
+        // One snapshot answers many questions.
+        let snapshot = try #require(ProcessProbes.openPaths())
+        #expect(ProcessProbes.pathsOpen(under: t.url("open"), in: snapshot))
+        #expect(!ProcessProbes.pathsOpen(under: t.url("closed"), in: snapshot))
     }
 
     @Test func workingDirectoriesIncludeSelf() throws {

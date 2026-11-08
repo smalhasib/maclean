@@ -6,13 +6,20 @@ import Foundation
 /// passed over; nil means the process list itself couldn't be read.
 public enum ProcessProbes {
     /// Whether any process has a file open at `path` or inside it. nil on failure.
+    /// Scans every process; for many checks take one `openPaths()` snapshot instead.
     public static func pathsOpen(under path: String) -> Bool? {
+        openPaths().map { pathsOpen(under: path, in: $0) }
+    }
+
+    /// Whether `snapshot` (from `openPaths()`) has a path at `path` or inside it.
+    public static func pathsOpen(under path: String, in snapshot: [String]) -> Bool {
         let root = ScanBoundary.canonicalPath(path) ?? path
-        guard let pids = allPIDs() else { return nil }
-        for pid in pids where openPaths(of: pid).contains(where: { PathUtil.isInside($0, orEqualTo: root) }) {
-            return true
-        }
-        return false
+        return snapshot.contains { PathUtil.isInside($0, orEqualTo: root) }
+    }
+
+    /// Every open vnode path of every inspectable process. nil on failure.
+    public static func openPaths() -> [String]? {
+        allPIDs().map { $0.flatMap(openPaths(of:)) }
     }
 
     /// Every inspectable process's current working directory. nil on failure.

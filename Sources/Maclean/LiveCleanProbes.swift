@@ -6,11 +6,14 @@ import os
 
 /// The live system behind Smart Clean (spec §6.3, §6.6): NSWorkspace and
 /// LaunchServices for apps, libproc (`ProcessProbes`) for processes. Not unit
-/// tested; the manual checklist covers it.
+/// tested; the manual checklist covers it. Make one per check run: it caches
+/// the app-name index and the open-files snapshot.
 struct LiveCleanProbes: CleanProbes {
     let home: String
     /// App name → bundle id for `.app` bundles in the install roots, built on first use.
     private let appNames = OSAllocatedUnfairLock<[String: String]?>(initialState: nil)
+    /// One open-files snapshot per probe instance (one check run); `.some(nil)` = it failed.
+    private let openSnapshot = OSAllocatedUnfairLock<[String]??>(initialState: nil)
 
     init(home: String = NSHomeDirectory()) {
         self.home = home
@@ -23,7 +26,15 @@ struct LiveCleanProbes: CleanProbes {
         runningBundleIDs().contains { $0 == bundleID || $0.hasPrefix(bundleID + ".") }
     }
 
-    func isOpen(path: String) -> Bool? { ProcessProbes.pathsOpen(under: path) }
+    func isOpen(path: String) -> Bool? {
+        let snapshot = openSnapshot.withLock { cached in
+            if let cached { return cached }
+            let taken = ProcessProbes.openPaths()
+            cached = .some(taken)
+            return taken
+        }
+        return snapshot.map { ProcessProbes.pathsOpen(under: path, in: $0) }
+    }
 
     func isProcessRunning(name: String) -> Bool? { ProcessProbes.processNames()?.contains(name) }
 
@@ -37,7 +48,8 @@ struct LiveCleanProbes: CleanProbes {
         let names = appNames.withLock { cached in
             if let cached { return cached }
             var map: [String: String] = [:]
-            for app in InstalledApps.apps(searchRoots: InstalledApps.defaultSearchRoots(home: home)) where map[app.name] == nil {
+            for app in InstalledApps.apps(searchRoots: InstalledApps.defaultSearchRoots(home: home)) ?? []
+            where map[app.name] == nil {
                 map[app.name] = app.bundleID
             }
             cached = map
@@ -105,10 +117,7 @@ struct LiveCleanProbes: CleanProbes {
     private func launchAgentLabels() -> [String] {
         let dir = "\(home)/Library/LaunchAgents"
         return ((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []).compactMap { name in
-            guard name.hasSuffix(".plist"), let data = FileManager.default.contents(atPath: "\(dir)/\(name)"),
-                  let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
-            else { return nil }
-            return dict["Label"] as? String
+            name.hasSuffix(".plist") ? PlistReader.string("Label", atPath: "\(dir)/\(name)") : nil
         }
     }
 }
