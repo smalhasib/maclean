@@ -29,11 +29,12 @@ Maclean needs macOS 14 Sonoma or later and runs natively on Apple silicon and In
 ### Homebrew
 
 ```sh
-brew tap smalhasib/maclean https://github.com/smalhasib/maclean
+brew tap smalhasib/maclean
+brew trust smalhasib/maclean
 brew install --cask maclean
 ```
 
-This installs `Maclean.app` in `/Applications` and the `maclean-scan` command. To update, run `brew upgrade --cask maclean`. To uninstall, run `brew uninstall --cask maclean`; add `--zap` to also remove its settings.
+`brew trust` is needed once on Homebrew versions that only load casks from taps you've trusted. The cask lives in [smalhasib/homebrew-maclean](https://github.com/smalhasib/homebrew-maclean). This installs `Maclean.app` in `/Applications` and the `maclean-scan` command. To update, run `brew upgrade --cask maclean`. To uninstall, run `brew uninstall --cask maclean`; add `--zap` to also remove its settings.
 
 Maclean is signed ad hoc, not with an Apple Developer ID. The cask clears macOS's download quarantine flag on the installed app so it opens normally.
 
@@ -195,7 +196,7 @@ swift test
 1. Bump `CFBundleShortVersionString` in `Resources/Info.plist`.
 2. Run `scripts/package-release.sh`. It prints the zip path and its SHA-256.
 3. Create the release: `gh release create v<version> .build/Maclean-<version>.zip`.
-4. Update `version` and `sha256` in `Casks/maclean.rb`, then commit and push. Homebrew picks it up on the next `brew update`.
+4. Update `version` and `sha256` in `Casks/maclean.rb` in [smalhasib/homebrew-maclean](https://github.com/smalhasib/homebrew-maclean), then commit and push. Homebrew picks it up on the next `brew update`.
 
 Bug reports and pull requests are welcome: [Issues](https://github.com/smalhasib/maclean/issues).
 
