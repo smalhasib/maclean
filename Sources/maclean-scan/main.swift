@@ -4,10 +4,14 @@ import MacleanCore
 // maclean-scan <path> [--out <file>] [--top <n>]
 // Exit codes: 0 ok, 1 root unreadable, 2 usage error, 3 output write failed. Progress -> stderr, summary -> stdout.
 //
-// maclean-scan --delete --env <json> --items-file <path> --items-sha256 <hex>
+// maclean-scan --delete --env <json> --items-file <path> --items-sha256 <hex> --context collector|smart-clean
 // The app's administrator helper (see AdminDelete): runs only as root,
 // deletes each item permanently and prints one JSON outcome line per item.
 // Exit codes: 0 ok (per-item outcomes on stdout), 2 usage error, 4 not root.
+//
+// maclean-scan smart-measure --env <json> --paths-file <path> --paths-sha256 <hex>
+// Measures system-wide Smart Clean items as root (see AdminMeasure) and
+// prints one JSON line per path. Same exit codes as --delete.
 
 func usage() -> Never {
     fputs("""
@@ -47,10 +51,12 @@ func writeFailureReason(_ error: Error) -> String {
     return "write failed"
 }
 
-/// `--delete` mode. Only `home` and `appBundle` are taken from the app: the
-/// mount lists are rebuilt here, and each item's parent is opened once,
-/// resolved on disk and checked again before the delete runs relative to
-/// that same fd, so a tampered request can't reach a protected item.
+/// `--delete` mode. Only `home`, `appBundle` and `neverClean` (which can only
+/// deny) are taken from the app: the mount lists are rebuilt here, and each
+/// item's parent is opened once, resolved on disk and checked again before
+/// the delete runs relative to that same fd, so a tampered request can't
+/// reach a protected item. In the Smart Clean context root also requires a
+/// catalog rule that needs admin and re-checks the item's age itself.
 func runAdminDelete(_ arguments: [String]) async -> Never {
     guard getuid() == 0 else {
         fputs("maclean-scan: --delete must run as root\n", stderr)
@@ -64,6 +70,7 @@ func runAdminDelete(_ arguments: [String]) async -> Never {
     var env = ProtectionEnvironment.current()
     env.home = parsed.environment.home
     env.appBundle = parsed.environment.appBundle
+    env.neverClean = parsed.environment.neverClean
     let deleter = Deleter(mode: .permanent, environment: env, context: parsed.context)
     for item in parsed.items {
         // Opens the parent once, checks its resolved location, deletes relative to that fd.
@@ -74,11 +81,37 @@ func runAdminDelete(_ arguments: [String]) async -> Never {
     exit(0)
 }
 
+/// `smart-measure` mode. Only `home` and `neverClean` are taken from the app;
+/// only catalog paths that need admin and pass the Smart Clean protection
+/// rules are measured (`AdminMeasure.measureAll`).
+func runAdminMeasure(_ arguments: [String]) -> Never {
+    guard getuid() == 0 else {
+        fputs("maclean-scan: smart-measure must run as root\n", stderr)
+        exit(4)
+    }
+    let parsed: (paths: [String], environment: ProtectionEnvironment)
+    do { parsed = try AdminMeasure.parse(arguments) } catch {
+        fputs("maclean-scan: malformed smart-measure arguments\n", stderr)
+        exit(2)
+    }
+    var env = ProtectionEnvironment.current()
+    env.home = parsed.environment.home
+    env.neverClean = parsed.environment.neverClean
+    for line in AdminMeasure.measureAll(parsed.paths, environment: env) {
+        print(AdminMeasure.encode(line))
+    }
+    fflush(stdout)
+    exit(0)
+}
+
 // Raise the soft fd limit so the scanner's fd budget (half of it) is large.
 ProcessLimits.raiseOpenFileLimit()
 
 if CommandLine.arguments.dropFirst().first == "--delete" {
     await runAdminDelete(Array(CommandLine.arguments.dropFirst()))
+}
+if CommandLine.arguments.dropFirst().first == "smart-measure" {
+    runAdminMeasure(Array(CommandLine.arguments.dropFirst()))
 }
 
 var path: String?

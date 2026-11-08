@@ -164,7 +164,7 @@ private func exists(_ path: String) -> Bool {
     func verdict(_ path: String) -> Refusal? {
         guard case .success(let fd) = Deleter.openParent(of: path) else { return nil }
         defer { close(fd) }
-        return AdminDelete.resolvedRefusal(for: path, parentFD: fd, in: e)
+        return AdminDelete.resolvedRefusal(for: path, parentFD: fd, context: .collector, in: e)
     }
     // The requested path itself looks harmless, but its parent resolves into
     // the protected home folder.
@@ -205,4 +205,91 @@ private func exists(_ path: String) -> Bool {
             == .missing)
     #expect(await AdminDelete.perform(AdminDelete.Item(request: req("relative/x"), force: false), with: deleter)
             == .refused(.unsafePath))
+}
+
+// MARK: - Smart Clean context
+
+/// A system-style rule over a temp folder: each child of `<dir>`, 7 days old.
+private func fakeRule(_ dir: String, admin: Bool = true) -> CleanRule {
+    CleanRule(id: "test.admin", category: .systemLogs, pattern: dir, unit: .eachChild, ageTiers: [(7, .safe), (30, .safe)],
+              requiresAdmin: admin, reason: "test")
+}
+
+private let eightDays: TimeInterval = 8 * 86400
+
+@Test func smartCleanPerformRefusesNonCatalogPath() async throws {
+    let t = TempDir(); defer { withExtendedLifetime(t) {} }
+    t.file("junk/x.txt", bytes: 4096)
+    let path = t.url("junk/x.txt")
+    // The protection rules alone would let it through: the catalog check is what refuses.
+    #expect(ProtectionRules.refusal(for: path, context: .smartClean, in: env) == nil)
+    let deleter = Deleter(mode: .permanent, environment: env, context: .smartClean)
+    let request = try await scannedRequest(path)
+    #expect(await AdminDelete.perform(AdminDelete.Item(request: request, force: true), with: deleter)
+            == .refused(.unsafePath))
+    #expect(exists(path))
+}
+
+@Test func collectorPerformUnaffected() async throws {
+    let t = TempDir(); defer { withExtendedLifetime(t) {} }
+    t.file("junk/x.txt", bytes: 4096)
+    let path = t.url("junk/x.txt")
+    let deleter = Deleter(mode: .permanent, environment: env, context: .collector)
+    let request = try await scannedRequest(path)
+    #expect(await AdminDelete.perform(AdminDelete.Item(request: request, force: false), with: deleter)
+            == .deleted(freed: request.size))
+    #expect(!exists(path))
+}
+
+@Test func smartCleanVerdictChecksRuleAndAge() throws {
+    let t = TempDir(); defer { withExtendedLifetime(t) {} }
+    t.file("logs/a.log", bytes: 4096)
+    let path = t.url("logs/a.log")
+    let rules = [fakeRule(t.url("logs"))]
+
+    // Too new for the smallest age tier (7 days): changed since the scan, with root's numbers.
+    guard case .changedSinceScan(let size, let files)? =
+            AdminDelete.smartCleanVerdict(for: path, rules: rules, home: env.home, now: Date()) else {
+        Issue.record("expected changedSinceScan"); return
+    }
+    #expect(size >= 4096 && files == 1)
+    // Old enough.
+    #expect(AdminDelete.smartCleanVerdict(for: path, rules: rules, home: env.home, now: Date() + eightDays) == nil)
+    // A matching rule that doesn't need admin, or no matching rule: refused.
+    #expect(AdminDelete.smartCleanVerdict(for: path, rules: [fakeRule(t.url("logs"), admin: false)], home: env.home,
+                                          now: Date() + eightDays) == .refused(.unsafePath))
+    #expect(AdminDelete.smartCleanVerdict(for: path, rules: [], home: env.home, now: Date() + eightDays)
+            == .refused(.unsafePath))
+    #expect(AdminDelete.smartCleanVerdict(for: t.url("logs"), rules: rules, home: env.home, now: Date() + eightDays)
+            == .refused(.unsafePath))
+    // Gone: missing.
+    #expect(AdminDelete.smartCleanVerdict(for: t.url("logs/gone.log"), rules: rules, home: env.home,
+                                          now: Date() + eightDays) == .missing)
+}
+
+@Test func smartCleanVerdictRefusesPathThroughSymlinkedAncestor() throws {
+    let t = TempDir(); defer { withExtendedLifetime(t) {} }
+    t.file("real/logs/a.log", bytes: 4096)
+    t.symlink("link", to: t.url("real"))
+    // The requested path matches the rule as a string, but its parent really is `real/logs`.
+    let rules = [fakeRule(t.url("link/logs"))]
+    #expect(AdminDelete.smartCleanVerdict(for: t.url("link/logs/a.log"), rules: rules, home: env.home,
+                                          now: Date() + eightDays) == .refused(.unsafePath))
+}
+
+@Test func smartCleanPerformDeletesOnlyOldCatalogItems() async throws {
+    let t = TempDir(); defer { withExtendedLifetime(t) {} }
+    t.file("logs/a.log", bytes: 4096)
+    let path = t.url("logs/a.log")
+    let rules = [fakeRule(t.url("logs"))]
+    let deleter = Deleter(mode: .permanent, environment: env, context: .smartClean)
+    let item = AdminDelete.Item(request: try await scannedRequest(path), force: false)
+
+    let tooNew = await AdminDelete.perform(item, with: deleter, rules: rules, now: Date())
+    guard case .changedSinceScan = tooNew else { Issue.record("expected changedSinceScan, got \(tooNew)"); return }
+    #expect(exists(path))
+
+    #expect(await AdminDelete.perform(item, with: deleter, rules: rules, now: Date() + eightDays)
+            == .deleted(freed: item.request.size))
+    #expect(!exists(path))
 }

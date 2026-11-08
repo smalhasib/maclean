@@ -38,11 +38,17 @@ public enum AdminDelete {
     /// temporary directory (mode 0700) and returns the file's URL and the
     /// SHA-256 (lowercase hex) of the bytes written.
     public static func writeItemsFile(_ items: [Item]) throws -> (url: URL, sha256: String) {
+        try writePrivateFile(Data(json(items).utf8), name: "items.json")
+    }
+
+    /// Writes `data` to a new file `name` (mode 0600) in a fresh private
+    /// temporary directory (mode 0700); returns its URL and SHA-256.
+    static func writePrivateFile(_ data: Data, name: String) throws -> (url: URL, sha256: String) {
         var template = Array((NSTemporaryDirectory() as NSString)
             .appendingPathComponent("maclean-admin-XXXXXX").utf8CString)
         guard let dir = mkdtemp(&template) else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         let directory = URL(fileURLWithPath: String(cString: dir), isDirectory: true)
-        let file = directory.appending(path: "items.json")
+        let file = directory.appending(path: name)
         let fd = open(file.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else {
             let e = errno
@@ -50,7 +56,6 @@ public enum AdminDelete {
             throw POSIXError(POSIXErrorCode(rawValue: e) ?? .EIO)
         }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-        let data = Data(json(items).utf8)
         do {
             try handle.write(contentsOf: data)
             try handle.close()
@@ -76,8 +81,7 @@ public enum AdminDelete {
         let decoder = JSONDecoder()
         do {
             let env = try decoder.decode(ProtectionEnvironment.self, from: Data(arguments[2].utf8))
-            let data = try readRegularFile(arguments[4])
-            guard sha256(data) == arguments[6] else { throw ParseError.malformed("items file fingerprint mismatch") }
+            let data = try readVerifiedFile(path: arguments[4], sha256: arguments[6])
             let items = try decoder.decode([Item].self, from: data)
             return (items, env, context)
         } catch {
@@ -87,14 +91,18 @@ public enum AdminDelete {
 
     /// Reads `path` without following a symlink at its last component, and
     /// only if it is a regular file (not a FIFO or device that could block
-    /// or stream something else).
-    private static func readRegularFile(_ path: String) throws -> Data {
+    /// or stream something else), then requires its SHA-256 to be `sha256`
+    /// (the fingerprint the app put in argv). Shared by `--delete` and
+    /// `smart-measure`.
+    static func readVerifiedFile(path: String, sha256 expected: String) throws -> Data {
         let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
         guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         var st = stat()
-        guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else { throw ParseError.malformed("items file is not a regular file") }
-        return try handle.readToEnd() ?? Data()
+        guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else { throw ParseError.malformed("not a regular file") }
+        let data = try handle.readToEnd() ?? Data()
+        guard sha256(data) == expected else { throw ParseError.malformed("file fingerprint mismatch") }
+        return data
     }
 
     private static func sha256(_ data: Data) -> String {
@@ -119,11 +127,25 @@ public enum AdminDelete {
     }
 
     /// Deletes one item as the root helper does: the parent is opened once,
-    /// its real location is checked (`resolvedRefusal(for:parentFD:in:)`),
+    /// its real location is checked (`resolvedRefusal(for:parentFD:context:in:)`),
     /// and the same fd is handed to the deleter, so nothing can be swapped
     /// between the check and the removal.
+    ///
+    /// In the Smart Clean context the item must also be claimed by a catalog
+    /// rule that `requiresAdmin` (checked first, on the string), and, measured
+    /// through that same parent fd, still be as old as the rule's smallest age
+    /// tier (`smartCleanVerdict`). A tampered request can't reach anything else.
     public static func perform(_ item: Item, with deleter: Deleter) async -> DeleteOutcome {
+        await perform(item, with: deleter, rules: CleanCatalog.rules, now: Date())
+    }
+
+    /// `perform(_:with:)` with the rules and clock as parameters, for tests.
+    static func perform(_ item: Item, with deleter: Deleter, rules: [CleanRule], now: Date) async -> DeleteOutcome {
         let path = item.request.path
+        let smartClean = deleter.context == .smartClean
+        if smartClean, adminRule(for: path, rules: rules, home: deleter.environment.home) == nil {
+            return .refused(.unsafePath)
+        }
         if let refusal = ProtectionRules.refusal(for: path, context: deleter.context, in: deleter.environment) {
             return .refused(refusal)
         }
@@ -136,7 +158,75 @@ public enum AdminDelete {
         if let refusal = resolvedRefusal(for: path, parentFD: fd, context: deleter.context, in: deleter.environment) {
             return .refused(refusal)
         }
+        if smartClean, let verdict = smartCleanVerdict(for: path, parentFD: fd, rules: rules,
+                                                       home: deleter.environment.home, now: now) {
+            return verdict
+        }
         return await deleter.delete(item.request, force: item.force, parentFD: fd)
+    }
+
+    /// The Smart Clean root check for `path`, or nil when it may be deleted:
+    /// - `.refused(.unsafePath)` unless the first catalog rule (in `rules`
+    ///   order, `CleanEngine.rule(matching:in:home:)`) claiming `path` has
+    ///   `requiresAdmin`;
+    /// - `.changedSinceScan` with root's own numbers when, measured now, the
+    ///   item is newer than the rule's smallest `ageTiers` days.
+    /// The parent is opened once and everything after the rule match is done
+    /// relative to it (`smartCleanVerdict(for:parentFD:rules:home:now:)`).
+    public static func smartCleanVerdict(for path: String, rules: [CleanRule], home: String,
+                                         now: Date) -> DeleteOutcome? {
+        guard adminRule(for: path, rules: rules, home: home) != nil else { return .refused(.unsafePath) }
+        let fd: Int32
+        switch Deleter.openParent(of: path) {
+        case .failure(let early): return early.outcome
+        case .success(let opened): fd = opened
+        }
+        defer { close(fd) }
+        return smartCleanVerdict(for: path, parentFD: fd, rules: rules, home: home, now: now)
+    }
+
+    /// `smartCleanVerdict(for:rules:home:now:)` for `path` whose parent is
+    /// open as `parentFD`. The parent's real location (`F_GETPATH`) plus the
+    /// name must be claimed by the same admin rule (a symlinked ancestor can
+    /// only deny), and the age is measured relative to `parentFD`, the fd the
+    /// protection check and the delete use too.
+    static func smartCleanVerdict(for path: String, parentFD: Int32, rules: [CleanRule], home: String,
+                                  now: Date) -> DeleteOutcome? {
+        guard let rule = adminRule(for: path, rules: rules, home: home),
+              let (name, resolved) = resolvedPath(of: path, parentFD: parentFD),
+              adminRule(for: resolved, rules: rules, home: home)?.id == rule.id,
+              let minDays = rule.ageTiers.map(\.days).min() else {
+            return .refused(.unsafePath)
+        }
+        let m: Measurement
+        do throws(MeasureError) {
+            m = try Measurer.measure(name: name, inParent: parentFD, context: MeasureContext())
+        } catch {
+            switch error {
+            case .notFound: return .missing
+            case .unreadable, .timedOut: return .failed("Couldn't check the item's age")
+            }
+        }
+        if now.timeIntervalSince(m.newest) < Double(minDays) * 86400 {
+            return .changedSinceScan(size: m.size, fileCount: m.fileCount)
+        }
+        return nil
+    }
+
+    /// The first rule in `rules` claiming `path`, if it needs administrator rights.
+    static func adminRule(for path: String, rules: [CleanRule], home: String) -> CleanRule? {
+        guard let rule = CleanEngine.rule(matching: path, in: rules, home: home), rule.requiresAdmin else { return nil }
+        return rule
+    }
+
+    /// The last component of `path` and `<real location of parentFD>/<name>`.
+    static func resolvedPath(of path: String, parentFD: Int32) -> (name: String, resolved: String)? {
+        guard let (_, nameBytes) = Deleter.split(path) else { return nil }
+        let name = String(decoding: nameBytes.dropLast().map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard fcntl(parentFD, F_GETPATH, &buffer) != -1 else { return nil }
+        let parent = String(decoding: buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        return (name, parent.hasSuffix("/") ? parent + name : parent + "/" + name)
     }
 
     /// The protection verdict for `path` whose parent is open as `parentFD`.
@@ -145,15 +235,10 @@ public enum AdminDelete {
     /// location is read back with `F_GETPATH`, and `<resolved parent>/<name>`
     /// must not be refused either, so a path through a symlinked ancestor
     /// can't reach a protected item.
-    public static func resolvedRefusal(for path: String, parentFD: Int32, context: ProtectionContext = .collector,
+    public static func resolvedRefusal(for path: String, parentFD: Int32, context: ProtectionContext,
                                        in env: ProtectionEnvironment) -> Refusal? {
         if let refusal = ProtectionRules.refusal(for: path, context: context, in: env) { return refusal }
-        guard let (_, nameBytes) = Deleter.split(path) else { return .unsafePath }
-        let name = String(decoding: nameBytes.dropLast().map { UInt8(bitPattern: $0) }, as: UTF8.self)
-        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-        guard fcntl(parentFD, F_GETPATH, &buffer) != -1 else { return .unsafePath }
-        let resolved = String(decoding: buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
-        let full = resolved.hasSuffix("/") ? resolved + name : resolved + "/" + name
+        guard let (_, full) = resolvedPath(of: path, parentFD: parentFD) else { return .unsafePath }
         return ProtectionRules.refusal(for: full, context: context, in: env)
     }
 
@@ -162,7 +247,7 @@ public enum AdminDelete {
         let outcome: DeleteOutcome
     }
 
-    private static func json(_ value: some Encodable) -> String {
+    static func json(_ value: some Encodable) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         // Encoding these plain value types can't fail.

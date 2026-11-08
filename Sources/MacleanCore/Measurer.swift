@@ -52,15 +52,27 @@ public enum Measurer {
     /// The deadline is checked once per directory.
     public static func measure(_ path: String, context: MeasureContext,
                                deadline: ContinuousClock.Instant? = nil) throws(MeasureError) -> Measurement {
+        try measure(name: path, inParent: AT_FDCWD, context: context, deadline: deadline)
+    }
+
+    /// Measures the entry `name` of the directory open as `parentFD`, as
+    /// `measure(_:context:deadline:)` does. Nothing is resolved by path, so
+    /// the item measured is the one in that directory even if an ancestor of
+    /// its path is swapped meanwhile. (`AT_FDCWD` with a full path measures
+    /// that path.)
+    public static func measure(name: String, inParent parentFD: Int32, context: MeasureContext,
+                               deadline: ContinuousClock.Instant? = nil) throws(MeasureError) -> Measurement {
         var st = stat()
-        guard lstat(path, &st) == 0 else { throw errno == ENOENT || errno == ENOTDIR ? .notFound : .unreadable }
+        guard fstatat(parentFD, name, &st, AT_SYMLINK_NOFOLLOW) == 0 else {
+            throw errno == ENOENT || errno == ENOTDIR ? .notFound : .unreadable
+        }
         let isDir = st.st_mode & S_IFMT == S_IFDIR
         var result = Measurement(
             size: 0, fileCount: isDir ? 0 : 1,
             newest: Date(timeIntervalSince1970: Double(max(st.st_mtimespec.tv_sec, st.st_ctimespec.tv_sec))),
             inode: UInt64(st.st_ino), device: st.st_dev, isDirectory: isDir, restricted: false)
         if !isDir {
-            let a = fileAttributes(path)
+            let a = fileAttributes(parentFD, name)
             result.size = context.billableSize(
                 allocated: a?.allocated ?? Int64(st.st_blocks) * 512, linkCount: UInt32(st.st_nlink),
                 inode: UInt64(st.st_ino), device: st.st_dev,
@@ -68,9 +80,12 @@ public enum Measurer {
             return result
         }
         if let deadline, .now >= deadline { throw .timedOut }
-        let fd = Darwin.open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+        let fd = openat(parentFD, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
         guard fd >= 0 else { throw errno == ENOENT ? .notFound : .unreadable }
         let handle = DirectoryHandle(fd: fd)
+        // The directory opened must be the one just examined.
+        var opened = stat()
+        guard fstat(fd, &opened) == 0, opened.st_ino == st.st_ino, opened.st_dev == st.st_dev else { throw .notFound }
         var newest = Int64(result.newest.timeIntervalSince1970)
         let entries: [RawEntry]
         do { entries = try DirectoryReader.entries(of: handle) } catch { throw .unreadable }
@@ -80,9 +95,11 @@ public enum Measurer {
         return result
     }
 
-    /// Allocated size and clone identity of one path, via the same attributes
+    /// Allocated size and clone identity of entry `name` in directory `dirFD`
+    /// (or of path `name` with `AT_FDCWD`), via the same attributes
     /// `DirectoryReader` requests. Never follows a symlink. Nil if the call fails.
-    private static func fileAttributes(_ path: String) -> (allocated: Int64, cloneID: UInt64, cloneRefCount: UInt32)? {
+    private static func fileAttributes(_ dirFD: Int32, _ name: String)
+        -> (allocated: Int64, cloneID: UInt64, cloneRefCount: UInt32)? {
         var request = attrlist()
         request.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
         request.commonattr = attrgroup_t(ATTR_CMN_RETURNED_ATTRS)
@@ -90,7 +107,7 @@ public enum Measurer {
         request.forkattr = attrgroup_t(ATTR_CMNEXT_CLONEID | ATTR_CMNEXT_CLONE_REFCNT)
         var buffer = [UInt8](repeating: 0, count: 256)
         let options = UInt32(FSOPT_ATTR_CMN_EXTENDED | FSOPT_NOFOLLOW)
-        guard getattrlist(path, &request, &buffer, buffer.count, options) == 0 else { return nil }
+        guard getattrlistat(dirFD, name, &request, &buffer, buffer.count, UInt(options)) == 0 else { return nil }
         return buffer.withUnsafeBytes { raw -> (Int64, UInt64, UInt32)? in
             var offset = MemoryLayout<UInt32>.size
             func read<T>(_: T.Type) -> T? {

@@ -137,3 +137,22 @@ private func setTime(_ path: String, daysAgo: Double) {
         #expect(second.size == 0)
     }
 }
+
+@Test func measureRelativeToParentFDMatchesPathMeasure() throws {
+    let t = TempDir(); defer { withExtendedLifetime(t) {} }
+    t.file("p/d/a", bytes: 4096)
+    t.file("p/d/sub/b", bytes: 8192)
+    t.file("p/f", bytes: 4096)
+    t.symlink("p/l", to: t.url("p/d"))
+    let fd = open(t.url("p"), O_RDONLY | O_DIRECTORY)
+    #expect(fd >= 0)
+    defer { close(fd) }
+    for name in ["d", "f", "l"] {
+        let byFD = try Measurer.measure(name: name, inParent: fd, context: MeasureContext())
+        let byPath = try Measurer.measure(t.url("p/\(name)"), context: MeasureContext())
+        #expect(byFD == byPath)
+    }
+    // A symlink measures as itself, never its target.
+    #expect(try Measurer.measure(name: "l", inParent: fd, context: MeasureContext()).isDirectory == false)
+    #expect(throws: MeasureError.notFound) { try Measurer.measure(name: "gone", inParent: fd, context: MeasureContext()) }
+}
