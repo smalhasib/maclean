@@ -469,6 +469,15 @@ Tests at the end of Task 7: 473 pass (44 + 287 + 142 across the three test targe
 4. Release 0.3.0 with `scripts/package-release.sh` and `gh release create` (zip and `.sig`), then bump the cask. Note in the release notes that 0.2.0 users update by hand or with `brew upgrade --cask maclean`.
 5. Run the "Access and updates" section of `docs/manual-checklist.md`, including the root versus privacy-protection spike (record the results here), the 0.3.0 to 0.3.1 update that keeps Full Disk Access, and a real password update into a root-owned folder (the root-only chown and swap branches no automated test reaches).
 
+### Manual results (2026-11-08, macOS 27.3, 0.3.0 dev build)
+
+- Quit & Reopen from System Settings reopens the right copy, once its version differs from any other installed Maclean.
+- Root read: a root-only folder (`chmod 700`, 20 MiB) showed 21 MB after the password, and the home scan's password filled in 43 root-owned `~/.cache/mole/tmp` folders.
+- Admin delete of a root-owned folder works with the password.
+- Root versus privacy spike: root never opens TCC-protected folders (Mail, Messages, Safari). The scanner now tells them apart by errno (EPERM is privacy, EACCES is ownership), keeps privacy folders (`.privacy`) out of the password read, and offers Full Disk Access for them.
+- Without Full Disk Access, `*.photoslibrary` and `~/Library/Photos` raise the Photos consent dialog, so scans skip them; no prompt was seen afterwards.
+- Owner step 1 (signing certificate) is done.
+
 ### Developer ID follow-ups (spec §8)
 
 With a Developer ID:
