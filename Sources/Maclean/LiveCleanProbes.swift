@@ -68,8 +68,9 @@ struct LiveCleanProbes: CleanProbes {
         return InstalledApps.bundleIDs(searchRoots: InstalledApps.defaultSearchRoots(home: home), extra: extra)
     }
 
-    /// Project artifacts arrive with Task 6.
-    func projectArtifacts(roots: [String]) -> [ProjectArtifact] { [] }
+    func projectArtifacts(roots: [String]) -> [ProjectArtifact] {
+        ProjectArtifacts.find(roots: roots, deadline: .now + .seconds(10))
+    }
 
     func workingDirectories() -> [String]? { ProcessProbes.workingDirectories() }
 

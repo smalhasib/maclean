@@ -14,6 +14,9 @@ struct FakeProbes: CleanProbes {
     /// nil = the installed-apps check failed.
     var installed: Set<String>? = []
     var securityTool = false
+    var artifacts: [ProjectArtifact] = []
+    /// nil = the process scan failed.
+    var cwds: [String]? = []
 
     func isRunning(bundleID: String) -> Bool? {
         unknownOwners.contains(bundleID) ? nil : running.contains(bundleID)
@@ -22,8 +25,8 @@ struct FakeProbes: CleanProbes {
     func isProcessRunning(name: String) -> Bool? { processes.contains(name) }
     func bundleID(appSupportFolder: String) -> String? { appSupport[appSupportFolder] }
     func installedBundleIDs() -> Set<String>? { installed }
-    func projectArtifacts(roots: [String]) -> [ProjectArtifact] { [] }
-    func workingDirectories() -> [String]? { [] }
+    func projectArtifacts(roots: [String]) -> [ProjectArtifact] { artifacts }
+    func workingDirectories() -> [String]? { cwds }
     func securityToolInstalled() -> Bool { securityTool }
 }
 

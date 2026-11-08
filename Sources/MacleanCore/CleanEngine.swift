@@ -40,7 +40,10 @@ public struct CleanEngine {
 
         for rule in rules {
             if Task.isCancelled { break }
-            guard offersAnything(rule) else { continue }
+            if case .projectArtifacts = rule.special {
+                if !disabled.contains(rule.category) { runProjectArtifacts(rule, context: context, progress: progress, into: &report) }
+                continue
+            }
             let expansion = Self.units(of: rule, home: home)
             let blocked = { (p: String) in
                 claimed.contains { PathUtil.isInside(p, orEqualTo: $0) || PathUtil.isInside($0, orEqualTo: p) }
@@ -83,7 +86,8 @@ public struct CleanEngine {
     private enum Verdict { case offer(CleanCandidate), skip(SkipReason), gone }
 
     /// Steps 4–7 for one claimed item.
-    private func evaluate(_ path: String, rule: CleanRule, context: MeasureContext, installed: Set<String>?) -> Verdict {
+    private func evaluate(_ path: String, rule: CleanRule, context: MeasureContext, installed: Set<String>?,
+                          artifact: ProjectArtifact? = nil, cwds: [String]? = nil) -> Verdict {
         if let r = ProtectionRules.refusal(for: path, context: .smartClean, in: environment) {
             switch r {
             case .neverClean: return .skip(.neverClean)
@@ -94,10 +98,16 @@ public struct CleanEngine {
 
         let displayName: String
         var reason: String
-        switch prepareSpecial(path, rule: rule, installed: installed) {
-        case .proceed(let name, let why): (displayName, reason) = (name, why)
-        case .skip(let r): return .skip(r)
-        case .drop: return .gone
+        if let artifact {
+            if let r = ProjectArtifacts.keepReason(artifact, cwds: cwds) { return .skip(r) }
+            displayName = "\(artifact.project) — \((path as NSString).lastPathComponent)"
+            reason = rule.reason
+        } else {
+            switch prepareSpecial(path, rule: rule, installed: installed) {
+            case .proceed(let name, let why): (displayName, reason) = (name, why)
+            case .skip(let r): return .skip(r)
+            case .drop: return .gone
+            }
         }
 
         let measurement: Measurement?
@@ -117,6 +127,7 @@ public struct CleanEngine {
         let age = Int((probes.now.timeIntervalSince(ageDate) / 86400).rounded(.down))
         guard let match = rule.ageTiers.first(where: { $0.days <= age }) else { return .skip(.recent) }
         let tier = measurement == nil ? min(match.tier, rule.sizeUnknownTier) : match.tier
+        if artifact != nil { reason = "\(rule.reason); project last touched \(age) days ago" }
         if case .downloadsInstaller = rule.special { reason = "Installer image downloaded \(age) days ago" }
         if case .macOSInstaller = rule.special {
             guard let sameOS = Self.installerMatchesRunningOS(path) else { return .skip(.noAccess) }
@@ -164,10 +175,21 @@ public struct CleanEngine {
         }
     }
 
-    /// Project artifacts aren't path-based (Task 6): they offer nothing here yet.
-    private func offersAnything(_ rule: CleanRule) -> Bool {
-        if case .projectArtifacts = rule.special { return false }
-        return true
+    /// Project artifacts aren't path-based: the probes find them, and each goes
+    /// through the same protection, keep checks, age tiers and measuring as any item.
+    private func runProjectArtifacts(_ rule: CleanRule, context: MeasureContext,
+                                     progress: @Sendable (String) -> Void, into report: inout CleanReport) {
+        let roots = ProjectArtifacts.searchRoots(home: home, extra: projectRoots)
+        let cwds = probes.workingDirectories()
+        for artifact in probes.projectArtifacts(roots: roots) {
+            if Task.isCancelled { break }
+            progress(artifact.path)
+            switch evaluate(artifact.path, rule: rule, context: context, installed: nil, artifact: artifact, cwds: cwds) {
+            case .offer(let c): report.candidates.append(c)
+            case .skip(let r): report.skipped.append(SkippedItem(path: artifact.path, reason: r))
+            case .gone: break
+            }
+        }
     }
 
     /// `.keepNewest(n)`: the n newest items (by mtime, then name) of each parent folder.
