@@ -117,6 +117,16 @@ private func node(_ tree: FileTree, _ relative: String) -> NodeID? {
         #expect(read.fileCount(of: full) == 1)
     }
 
+    @Test func libraryPhotosSkippedWhenAsked() async throws {
+        // ~/Library/Photos is guarded by the Photos permission too.
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        t.file("Library/Photos/Libraries/x", bytes: 4096); t.file("Other/Photos/y", bytes: 4096)
+        let tree = try await Scanner.scan(path: t.path, skipsPhotosLibraries: true)
+        let photos = try #require(node(tree, "Library/Photos"))
+        #expect(tree.flags(of: photos).isSuperset(of: [.restricted, .privacy]))
+        #expect(node(tree, "Other/Photos/y") != nil)
+    }
+
     @Test func deepNestingBeyondPathMax() async throws {
         let t = TempDir(); defer { withExtendedLifetime(t) {} }
         // Build with openat/mkdirat: the full path exceeds PATH_MAX.

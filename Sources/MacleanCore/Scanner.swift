@@ -28,7 +28,7 @@ public struct ScanProgress: Sendable {
 /// from the nearest ancestor that is still open.
 public enum Scanner {
     /// Scans `path` with `ScanBoundary.forRoot` of its canonical path.
-    /// `skipsPhotosLibraries` records `.photoslibrary` folders unread (`.privacy`).
+    /// `skipsPhotosLibraries` records `.photoslibrary` folders and `Library/Photos` unread (`.privacy`).
     public static func scan(path: String, skipsPhotosLibraries: Bool = false,
                             qos: DispatchQoS.QoSClass = .userInitiated,
                             progress: @Sendable (ScanProgress) -> Void = { _ in }) async throws -> FileTree {
@@ -349,8 +349,9 @@ private struct Walk {
                     } else {
                         addDirectory(e, in: ref, flags: .mountPoint)
                     }
-                } else if boundary.skipsPhotosLibraries, e.name.hasSuffix(".photoslibrary") {
-                    // Opening it without Full Disk Access raises the Photos consent dialog.
+                } else if boundary.skipsPhotosLibraries,
+                          e.name.hasSuffix(".photoslibrary") || (e.name == "Photos" && Self.isLibrary(ref.name)) {
+                    // Opening these without Full Disk Access raises the Photos consent dialog.
                     addDirectory(e, in: ref, flags: [.restricted, .privacy])
                 } else if checkSkips, boundary.skippedPaths.contains(join(base, e.name)) {
                     addDirectory(e, in: ref, flags: [])
@@ -387,6 +388,11 @@ private struct Walk {
                             inode: e.inode, device: e.device)
             }
         }
+    }
+
+    /// A `Library` folder (the root's name is its whole path).
+    private static func isLibrary(_ name: String) -> Bool {
+        name == "Library" || name.hasSuffix("/Library")
     }
 
     @discardableResult
