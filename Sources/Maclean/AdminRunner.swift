@@ -3,17 +3,25 @@ import Foundation
 protocol AdminRunning: Sendable {
     /// Runs the bundled `maclean-scan` as root once per invocation (each one
     /// its argument list), all behind **one** administrator prompt showing
-    /// `prompt`, and returns each invocation's standard output in order.
-    /// Throws `AdminRunnerError.cancelled` when the user cancels the prompt.
-    func run(_ invocations: [[String]], prompt: String) async throws -> [String]
+    /// `prompt`, and returns each invocation's standard output and exit
+    /// status in order. Throws `AdminRunnerError.cancelled` when the user
+    /// cancels the prompt.
+    func run(_ invocations: [[String]], prompt: String) async throws -> [AdminOutput]
+}
+
+/// One helper invocation's result inside a batch.
+struct AdminOutput: Equatable {
+    let stdout: String
+    let status: Int32
 }
 
 extension AdminRunning {
-    /// Runs one invocation behind its own prompt.
+    /// Runs one invocation behind its own prompt. A non-zero exit throws.
     func run(_ arguments: [String], prompt: String) async throws -> String {
         let outputs = try await run([arguments], prompt: prompt)
         guard outputs.count == 1 else { throw AdminRunnerError.failed(AdminRunner.malformed) }
-        return outputs[0]
+        guard outputs[0].status == 0 else { throw AdminRunnerError.failed("helper exited \(outputs[0].status)") }
+        return outputs[0].stdout
     }
 }
 
@@ -42,7 +50,7 @@ struct AdminRunner: AdminRunning {
     /// time, off the main thread.
     private static let queue = DispatchQueue(label: "maclean.admin-runner", qos: .userInitiated)
 
-    func run(_ invocations: [[String]], prompt: String) async throws -> [String] {
+    func run(_ invocations: [[String]], prompt: String) async throws -> [AdminOutput] {
         guard !invocations.isEmpty else { return [] }
         let helper = helper.path
         guard FileManager.default.isExecutableFile(atPath: helper) else {
@@ -54,14 +62,17 @@ struct AdminRunner: AdminRunning {
                 continuation.resume(returning: Self.execute(source))
             }
         }
-        let outputs = Self.split(try result.get(), separator: separator)
         // The separator is random per call: an output holding it (an extra
-        // piece) can only mean tampering, so nothing is trusted.
-        guard outputs.count == invocations.count else { throw AdminRunnerError.failed(Self.malformed) }
+        // or malformed status line) can only mean tampering, so nothing is
+        // trusted.
+        guard let outputs = Self.split(try result.get(), separator: separator),
+              outputs.count == invocations.count else { throw AdminRunnerError.failed(Self.malformed) }
         return outputs
     }
 
-    /// Builds the AppleScript source and the separator line between outputs.
+    /// Builds the AppleScript source and the separator that starts each
+    /// invocation's status line (`<separator> <exit status>`), which follows
+    /// every invocation, the last one included.
     /// Pure: every argument, the helper path, the separator and the prompt
     /// appear only as escaped string literals, and the shell sees each
     /// argument only through `quoted form of`.
@@ -76,13 +87,13 @@ struct AdminRunner: AdminRunning {
             set cmd to ""
             set savedDelimiters to AppleScript's text item delimiters
             repeat with i from 1 to count of invocations
-              if i > 1 then set cmd to cmd & \(literal("; printf '%s\\n' ")) & quoted form of sep & \(literal("; "))
+              if i > 1 then set cmd to cmd & \(literal("; "))
               set parts to {}
               repeat with a in item i of invocations
                 set end of parts to quoted form of (contents of a)
               end repeat
               set AppleScript's text item delimiters to " "
-              set cmd to cmd & (parts as text)
+              set cmd to cmd & (parts as text) & \(literal("; printf '%s %d\\n' ")) & quoted form of sep & \(literal(" $?"))
               set AppleScript's text item delimiters to savedDelimiters
             end repeat
             do shell script cmd with administrator privileges with prompt \(literal(prompt)) without altering line endings
@@ -95,10 +106,25 @@ struct AdminRunner: AdminRunning {
         "\"" + text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
     }
 
-    /// Splits the combined output at each separator line (the separator and
-    /// its newline). Each invocation's own output keeps its trailing newline.
-    static func split(_ output: String, separator: String) -> [String] {
-        output.components(separatedBy: separator + "\n")
+    /// Splits the combined output at each status line (`<separator> <status>`
+    /// and a newline) into the invocations' outputs, each keeping its own
+    /// trailing newline. Nil (fail closed) when a status line is malformed or
+    /// text follows the last one.
+    static func split(_ output: String, separator: String) -> [AdminOutput]? {
+        var outputs: [AdminOutput] = []
+        var rest = Substring(output)
+        while !rest.isEmpty {
+            guard let marker = rest.range(of: separator) else { return nil }
+            let stdout = String(rest[..<marker.lowerBound])
+            let afterMarker = rest[marker.upperBound...]
+            guard afterMarker.first == " ", let newline = afterMarker.firstIndex(of: "\n") else { return nil }
+            let digits = afterMarker[afterMarker.index(after: afterMarker.startIndex)..<newline]
+            guard !digits.isEmpty, digits.allSatisfy({ $0.isASCII && $0.isNumber }),
+                  let status = Int32(digits) else { return nil }
+            outputs.append(AdminOutput(stdout: stdout, status: status))
+            rest = afterMarker[afterMarker.index(after: newline)...]
+        }
+        return outputs
     }
 
     /// Runs `source` on the calling thread (always `queue`).

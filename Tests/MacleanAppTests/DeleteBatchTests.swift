@@ -22,15 +22,10 @@ private final class FakeDeleter: DeleterProtocol, @unchecked Sendable {
     }
 }
 
-private final class FakeAdmin: AdminRunning, @unchecked Sendable {
+private final class FakeAdmin: AdminFake, @unchecked Sendable {
     private let answer: @Sendable () throws -> String
     init(_ answer: @escaping @Sendable () throws -> String) { self.answer = answer }
-    func run(_ invocations: [[String]], prompt: String) async throws -> [String] {
-        var outputs: [String] = []
-        for arguments in invocations { outputs.append(try await runOne(arguments)) }
-        return outputs
-    }
-    private func runOne(_ arguments: [String]) async throws -> String { try answer() }
+    override func runOne(_ arguments: [String]) async throws -> String { try answer() }
 }
 
 /// Records the (mode, context) pairs the batch asked deleters for.
@@ -84,7 +79,7 @@ private func item(_ path: String, mode: DeleteMode? = nil) -> DeleteBatch.Item {
 }
 
 /// Records the admin argv and answers "deleted" for every path the batch sends.
-private final class RecordingAdmin: AdminRunning, @unchecked Sendable {
+private final class RecordingAdmin: AdminFake, @unchecked Sendable {
     private let lock = NSLock()
     private var _arguments: [[String]] = []
     private var _items: [AdminDelete.Item] = []
@@ -93,12 +88,7 @@ private final class RecordingAdmin: AdminRunning, @unchecked Sendable {
     var arguments: [[String]] { lock.withLock { _arguments } }
     /// The items file's contents, read while it still exists.
     var items: [AdminDelete.Item] { lock.withLock { _items } }
-    func run(_ invocations: [[String]], prompt: String) async throws -> [String] {
-        var outputs: [String] = []
-        for arguments in invocations { outputs.append(try await runOne(arguments)) }
-        return outputs
-    }
-    private func runOne(_ arguments: [String]) async throws -> String {
+    override func runOne(_ arguments: [String]) async throws -> String {
         let read = arguments.firstIndex(of: "--items-file")
             .flatMap { FileManager.default.contents(atPath: arguments[$0 + 1]) }
             .flatMap { try? JSONDecoder().decode([AdminDelete.Item].self, from: $0) } ?? []
@@ -119,6 +109,8 @@ private final class RecordingAdmin: AdminRunning, @unchecked Sendable {
                              beforeEach: { _ in nil })
     #expect(deleter.paths == ["/x/user"])
     #expect(admin.arguments.count == 1)
+    #expect(admin.prompts == [DeleteBatch.adminPrompt])
+    #expect(DeleteBatch.adminPrompt == "Maclean needs to delete items that only an administrator can remove.")
     #expect(report.deleted.sorted() == ["/Library/Logs/x", "/x/user"])
     // Root re-checks everything itself: sent without force.
     #expect(admin.items.map(\.request.path) == ["/Library/Logs/x"])

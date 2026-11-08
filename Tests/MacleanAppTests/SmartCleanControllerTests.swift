@@ -65,18 +65,13 @@ private final class Deletions: @unchecked Sendable {
     }
 }
 
-private final class Admin: AdminRunning, @unchecked Sendable {
+private final class Admin: AdminFake, @unchecked Sendable {
     private let lock = NSLock()
     private var _arguments: [[String]] = []
     private let answer: @Sendable ([String]) throws -> String
     init(_ answer: @escaping @Sendable ([String]) throws -> String = { _ in "" }) { self.answer = answer }
     var arguments: [[String]] { lock.withLock { _arguments } }
-    func run(_ invocations: [[String]], prompt: String) async throws -> [String] {
-        var outputs: [String] = []
-        for arguments in invocations { outputs.append(try await runOne(arguments)) }
-        return outputs
-    }
-    private func runOne(_ arguments: [String]) async throws -> String {
+    override func runOne(_ arguments: [String]) async throws -> String {
         lock.withLock { _arguments.append(arguments) }
         return try answer(arguments)
     }
@@ -471,6 +466,7 @@ private final class DidDeleteCounter: @unchecked Sendable {
     await c.measureWithAdmin()
     #expect(admin.arguments.count == 1)
     #expect(admin.arguments.first?.first == "smart-measure")
+    #expect(admin.prompts == ["Maclean needs to measure 2 system items for Smart Clean."])
     let rows = Dictionary(uniqueKeysWithValues: (c.report?.candidates ?? []).map { ($0.path, $0) })
     #expect(rows["/Library/Caches/a"]?.measurement == filled)
     #expect(rows["/Library/Caches/b"]?.measurement == nil)

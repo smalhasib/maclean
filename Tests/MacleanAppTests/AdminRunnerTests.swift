@@ -61,9 +61,11 @@ private func lex(_ source: String) -> (literals: [String], code: String) {
     let (source, separator) = AdminRunner.script(helper: "/h", invocations: [["--one"], ["--two"]], prompt: "Why")
     let (literals, code) = lex(source)
     #expect(literals.filter { $0 == separator }.count == 1)
-    #expect(literals.contains("; printf '%s\\n' "))
+    // Every invocation, the last included, is followed by its status line.
+    #expect(literals.contains("; printf '%s %d\\n' "))
+    #expect(literals.contains(" $?"))
     #expect(literals.contains("; "))
-    #expect(code.contains("quoted form of sep"))
+    #expect(code.contains("(parts as text) & \"\" & quoted form of sep & \"\""))
     #expect(literals.contains("--one") && literals.contains("--two"))
     // A fresh separator per call.
     let (_, other) = AdminRunner.script(helper: "/h", invocations: [["--one"], ["--two"]], prompt: "Why")
@@ -71,9 +73,31 @@ private func lex(_ source: String) -> (literals: [String], code: String) {
 }
 
 @Test func splitOutputsBySeparator() {
-    #expect(AdminRunner.split("out1\n<sep>\nout2", separator: "<sep>") == ["out1\n", "out2"])
-    #expect(AdminRunner.split("only", separator: "<sep>") == ["only"])
-    #expect(AdminRunner.split("a\n<sep>\n\n<sep>\nc\n", separator: "<sep>") == ["a\n", "\n", "c\n"])
+    #expect(AdminRunner.split("out1\n<sep> 0\nout2<sep> 0\n", separator: "<sep>")
+            == [AdminOutput(stdout: "out1\n", status: 0), AdminOutput(stdout: "out2", status: 0)])
+    #expect(AdminRunner.split("<sep> 0\n", separator: "<sep>") == [AdminOutput(stdout: "", status: 0)])
+    #expect(AdminRunner.split("", separator: "<sep>") == [])
+}
+
+@Test func splitCarriesPerInvocationStatus() {
+    // A mixed batch: the first invocation succeeds, the second fails.
+    #expect(AdminRunner.split("ok\n<sep> 0\nboom\n<sep> 1\n", separator: "<sep>")
+            == [AdminOutput(stdout: "ok\n", status: 0), AdminOutput(stdout: "boom\n", status: 1)])
+}
+
+@Test func splitFailsClosedOnMalformedStatus() {
+    for output in [
+        "out",                       // no status line at all
+        "out\n<sep>\n",              // separator without a status
+        "out\n<sep> x\n",            // non-numeric status
+        "out\n<sep> -1\n",           // sign
+        "out\n<sep> 0",               // unterminated status line
+        "out\n<sep> 99999999999\n",  // out of range
+        "out\n<sep> 0\ntrailing",     // text after the last status line
+        "a<sep> 0 extra\n",           // junk after the status
+    ] {
+        #expect(AdminRunner.split(output, separator: "<sep>") == nil, "accepted \(output.debugDescription)")
+    }
 }
 
 @Test func promptIsEscaped() {
@@ -83,4 +107,16 @@ private func lex(_ source: String) -> (literals: [String], code: String) {
     #expect(literals.contains(prompt))
     #expect(!code.contains("C:"))
     #expect(!code.contains("needs"))
+}
+
+private struct StubRunner: AdminRunning {
+    let outputs: [AdminOutput]
+    func run(_ invocations: [[String]], prompt: String) async throws -> [AdminOutput] { outputs }
+}
+
+@Test func singleRunThrowsOnNonZeroExit() async throws {
+    await #expect(throws: AdminRunnerError.failed("helper exited 3")) {
+        try await StubRunner(outputs: [AdminOutput(stdout: "partial", status: 3)]).run(["--x"], prompt: "p")
+    }
+    #expect(try await StubRunner(outputs: [AdminOutput(stdout: "fine", status: 0)]).run(["--x"], prompt: "p") == "fine")
 }
