@@ -100,9 +100,11 @@ extension ResultView {
 }
 
 /// Inline banners under the toolbar: "… no longer exists" (dismissed after a
-/// few seconds) and, in a window kept up during a rescan, its progress.
+/// few seconds), in a window kept up during a rescan its progress, and the
+/// restricted folders notice (spec §4.2, §6a.1).
 private struct ResultBanners: View {
     let model: ResultViewModel
+    @Environment(\.windowRouter) private var router
 
     var body: some View {
         VStack(spacing: 0) {
@@ -110,6 +112,8 @@ private struct ResultBanners: View {
                 banner(icon: nil, text: model.session.isStopping ? "Stopping…" : "Rescanning…")
             } else if case .failed(let message) = model.session.state {
                 banner(icon: "exclamationmark.triangle", text: "Rescan failed: \(message)")
+            } else {
+                restrictedBanner
             }
             if let notice = model.notice {
                 banner(icon: "exclamationmark.triangle", text: notice.text) { model.dismissNotice() }
@@ -122,7 +126,40 @@ private struct ResultBanners: View {
         .animation(.easeInOut(duration: 0.15), value: model.notice)
     }
 
-    private func banner(icon: String?, text: String, dismiss: (() -> Void)? = nil) -> some View {
+    /// "N folders couldn't be read — Read with administrator rights" for
+    /// folders root can open, before a root read (or after a cancelled one);
+    /// then "N folders need Full Disk Access — Grant Access…" for privacy
+    /// folders and what root couldn't read either (or, with access already
+    /// on, "Relaunch Maclean to read them — Relaunch").
+    @ViewBuilder private var restrictedBanner: some View {
+        let session = model.session
+        let count = session.restrictedRoots.count
+        let needAccess = session.privacyCount + (session.stillNeedsAccessCount ?? 0)
+        if session.isReadingRestricted {
+            banner(icon: nil, text: "Reading restricted folders…")
+        } else if let batcher = router?.registry.batcher {
+            let coordinator = batcher.coordinator
+            if count > 0, session.stillNeedsAccessCount == nil {
+                banner(icon: "lock", text: "\(Self.folders(count)) couldn’t be read",
+                       action: ("Read with administrator rights", { Task { await session.readRestricted(using: batcher) } }))
+            } else if needAccess > 0, coordinator.accessIsGranted() {
+                // Access is on already; only a new process gets it.
+                banner(icon: "lock",
+                       text: coordinator.relaunchRefusal ?? "Full Disk Access is on. Relaunch Maclean to read them",
+                       action: ("Relaunch", { coordinator.relaunch() }))
+            } else if needAccess > 0 {
+                banner(icon: "lock", text: "\(Self.folders(needAccess)) need Full Disk Access",
+                       action: ("Grant Access…", { coordinator.reopenAccessSheet() }))
+            }
+        }
+    }
+
+    private static func folders(_ count: Int) -> String {
+        count == 1 ? "1 folder" : "\(count) folders"
+    }
+
+    private func banner(icon: String?, text: String, action: (String, () -> Void)? = nil,
+                        dismiss: (() -> Void)? = nil) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 if let icon {
@@ -135,6 +172,10 @@ private struct ResultBanners: View {
                     .truncationMode(.middle)
                     .help(text)
                 Spacer(minLength: 8)
+                if let action {
+                    Button(action.0, action: action.1)
+                        .controlSize(.small)
+                }
                 if let dismiss {
                     Button(action: dismiss) { Image(systemName: "xmark") }
                         .buttonStyle(.borderless)

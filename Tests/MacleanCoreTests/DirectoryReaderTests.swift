@@ -124,6 +124,12 @@ private let knownMountPoint: (parent: String, name: String)? = {
         }
     }
 
+    @Test func privacyRefusalIsNotPermitted() {
+        // macOS privacy (TCC) refuses with EPERM; file ownership with EACCES.
+        #expect(ReadError(errno: EPERM) == .notPermitted)
+        #expect(ReadError(errno: EACCES) == .permissionDenied)
+    }
+
     @Test func readsManyEntries() throws {
         let t = TempDir(); defer { withExtendedLifetime(t) {} }
         for i in 0..<5_000 { t.file("file-with-a-longish-name-\(i)") }

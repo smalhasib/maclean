@@ -23,12 +23,15 @@ public struct RawEntry: Sendable {
 }
 
 public enum ReadError: Error, Equatable {
-    case notFound, permissionDenied, notDirectory, other(Int32)
+    /// `permissionDenied`: file ownership or mode (EACCES), root can read it.
+    /// `notPermitted`: macOS privacy protection (EPERM), only Full Disk Access opens it.
+    case notFound, permissionDenied, notPermitted, notDirectory, other(Int32)
 
     init(errno code: Int32) {
         switch code {
         case ENOENT: self = .notFound
-        case EACCES, EPERM: self = .permissionDenied
+        case EACCES: self = .permissionDenied
+        case EPERM: self = .notPermitted
         case ENOTDIR: self = .notDirectory
         default: self = .other(code)
         }

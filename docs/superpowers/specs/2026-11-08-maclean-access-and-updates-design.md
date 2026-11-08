@@ -39,7 +39,7 @@ The owner also wants Maclean to **update itself**, checking automatically and on
 - **Content** (copy as in the mockup):
   - a lock icon and the title "Give Maclean Full Disk Access";
   - one sentence on what is hidden without it;
-  - three numbered steps;
+  - three numbered steps: "Open System Settings › Privacy & Security › Full Disk Access", "Turn on Maclean" and "Click Relaunch when you come back";
   - a primary **Open System Settings** button, which opens `x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles`;
   - a **Continue without Full Disk Access** link.
 - **After Continue:** the start screen shows a small persistent notice, "Scans will miss protected folders — Grant Access…", which reopens the sheet. Smart Clean already lists protected locations under Skipped.
@@ -117,7 +117,7 @@ The owner also wants Maclean to **update itself**, checking automatically and on
 - **Unpack:** unzip with `ditto` to a temp folder. Then check that the unpacked app's bundle id is `org.maclean.Maclean` and its version equals the release version.
 - **Replace:**
   - Swap the running app's bundle: move the old one to the Trash, then move the new one into the same path.
-  - This happens only when the parent folder is writable by the user (§6a.2). Otherwise the sheet shows **Download**.
+  - When the parent folder isn't writable by the user, the swap goes through the root helper after the administrator dialog (§6a.2).
   - Clear the quarantine flag on the new bundle; it came from a verified download.
 - **Relaunch:** start the new app with `open -n` after this process exits, using a tiny detached shell `sleep`-and-`open`, or `NSWorkspace` from a short-lived helper. Then quit.
 - **Not during a delete:** an update never starts while a delete or Smart Clean run is in progress. "Install and Relaunch" waits, or says why it can't start yet.
@@ -142,10 +142,17 @@ The README's "no network access" becomes: "The only network access is the update
    - Maclean asks whenever restricted folders exist. After the root read it reports what's still unreadable, as "N folders still need Full Disk Access", with **Grant Access…**.
    - The first plan task is a spike on a real Mac. It records what root can read with and without Full Disk Access when the dialog runs in-process.
    - If the spike shows root never helps with TCC folders, skip folders under known TCC locations when counting what to ask about.
-2. **No privileged swap.**
-   - The updater swaps the bundle only when the user can write to the app's parent folder. That's normal for `/Applications` on an administrator account and for drag-installed copies.
-   - Otherwise the sheet shows **Download** (it opens the release page) instead of Install. This adds no root write mode to the helper.
-   - The "needs your password to update itself" path in §5.3 is dropped.
+2. **Privileged swap (owner's decision, replacing "no privileged swap").**
+   - If the user can't replace the app's bundle, Maclean asks for the administrator password with the reason "Maclean needs your password to update itself.". The root helper then installs the update in a new `install-update` mode.
+   - Before writing, the helper re-checks everything itself:
+     - The zip and its signature arrive as 0600 files whose SHA-256 is in argv.
+     - It verifies the Ed25519 signature with the public key compiled into MacleanCore.
+     - It unzips into its own root-owned 0700 temp directory.
+     - It checks that the bundle id is `org.maclean.Maclean` and that the version matches the request.
+     - The target must be an existing bundle whose Info.plist bundle id is `org.maclean.Maclean`, at the path the request names, and that path must end in `.app`.
+     - It renames the old bundle aside, moves the new one in, then removes the old one, restoring it if the move fails.
+   - It writes nowhere else.
+   - Cancel leaves the app untouched, and the sheet offers **Download** as a fallback.
 3. **Prompt order: one coordinator.**
    - At launch: the Full Disk Access sheet first, then the update sheet, then any administrator dialog. Each waits until nothing is on screen above it.
    - Only one administrator dialog shows at a time. A scan read and a Smart Clean measure that are both waiting share one dialog: one helper call with both lists, and both reasons in one sentence.

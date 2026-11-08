@@ -24,8 +24,12 @@ struct AppCommands: Commands {
     let registry: SessionRegistry
     let router: WindowRouter
     let smartClean: SmartCleanController
+    let updates: UpdateController
 
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") { updates.checkNow() }
+        }
         CommandGroup(replacing: .newItem) {
             Button("Scan Folder…") { FolderPicker.scan(into: registry) }
                 .keyboardShortcut("o")
@@ -108,7 +112,7 @@ private struct ActionMenu: View {
         // "Delete Collected Items" is inserted here in AppKit (menu validation).
         Divider()
         Button("Check for Cleanable Items") {
-            smartClean.check()
+            smartClean.check(userInitiated: true)
             router.showStartScreen()   // where the card shows the checking state
         }
             .keyboardShortcut("k", modifiers: [.command, .shift])

@@ -22,6 +22,9 @@ public struct NodeFlags: OptionSet, Sendable {
     public static let cloneExtra = NodeFlags(rawValue: 1 << 6)
     /// A directory that is a mount point (a volume root); recorded empty, never descended.
     public static let mountPoint = NodeFlags(rawValue: 1 << 7)
+    /// With `.restricted`: macOS privacy protection refused it, so only Full
+    /// Disk Access opens it (an administrator password doesn't).
+    public static let privacy = NodeFlags(rawValue: 1 << 8)
 }
 
 /// Immutable, compact (struct-of-arrays) tree of a scanned directory.
@@ -161,5 +164,59 @@ public struct NodeChildren: RandomAccessCollection, Sendable, Equatable {
     public subscript(i: Int) -> NodeID {
         precondition(i >= 0 && i < length, "NodeChildren index out of range")
         return NodeID(index: Int32(first + i))
+    }
+}
+
+extension FileTree {
+    /// A new tree in which each `.restricted` node whose path is a key of
+    /// `subtrees` receives that subtree's contents (the folder read again, as
+    /// root): the subtree root's children are copied below the node with their
+    /// names, sizes, flags, inodes and devices, the node's own size becomes the
+    /// subtree root's own size, and `.restricted` is cleared on the node unless
+    /// the subtree root itself is restricted. `.restricted` flags deeper in the
+    /// subtree stay. Ancestor sizes and file counts follow (the tree is rebuilt
+    /// with `FileTreeBuilder`, so siblings are re-sorted). Keys that are not in
+    /// the tree, name nodes that aren't restricted, or whose subtree's
+    /// `rootPath` differs from the key are ignored. Hard links and clones are
+    /// not de-duplicated across a graft boundary.
+    public func grafting(_ subtrees: [String: FileTree]) -> FileTree {
+        var grafts: [Int32: FileTree] = [:]
+        for (path, subtree) in subtrees where subtree.rootPath == path {
+            if let id = node(atPath: path), flags(of: id).contains(.restricted) { grafts[id.index] = subtree }
+        }
+        guard !grafts.isEmpty else { return self }
+
+        let builder = FileTreeBuilder(rootPath: rootPath, rootInode: inode(of: root), rootDevice: device(of: root),
+                                      scanDate: scanDate)
+        // Own size of a node: its size less its children's (directories hold 0).
+        func ownSize(_ tree: FileTree, _ id: NodeID) -> Int64 {
+            tree.children(of: id).reduce(tree.size(of: id)) { $0 - tree.size(of: $1) }
+        }
+        // (source tree, source node, node in the builder); parents are always
+        // added before their children.
+        var stack: [(FileTree, NodeID, NodeID)] = []
+        if let subtree = grafts[root.index] {
+            if subtree.flags(of: subtree.root).contains(.restricted) { builder.markRestricted(builder.root) }
+            stack.append((subtree, subtree.root, builder.root))
+        } else {
+            if flags(of: root).contains(.restricted) { builder.markRestricted(builder.root) }
+            stack.append((self, root, builder.root))
+        }
+        while let (tree, id, target) = stack.popLast() {
+            for child in tree.children(of: id) {
+                var childFlags = tree.flags(of: child)
+                var source = (tree, child)
+                if tree === self, let subtree = grafts[child.index] {
+                    childFlags.remove(.restricted)
+                    childFlags.formUnion(subtree.flags(of: subtree.root).intersection(.restricted))
+                    source = (subtree, subtree.root)
+                }
+                let added = builder.add(parent: target, name: tree.name(of: child),
+                                        size: ownSize(source.0, source.1), flags: childFlags,
+                                        inode: tree.inode(of: child), device: tree.device(of: child))
+                stack.append((source.0, source.1, added))
+            }
+        }
+        return builder.finish()
     }
 }

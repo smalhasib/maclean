@@ -29,7 +29,7 @@ private final class FakeDeleter: DeleterProtocol, @unchecked Sendable {
     }
 }
 
-private final class FakeAdmin: AdminRunning, @unchecked Sendable {
+private final class FakeAdmin: AdminFake, @unchecked Sendable {
     private let lock = NSLock()
     private var _received: [[AdminDelete.Item]] = []
     private var _itemsFiles: [String] = []
@@ -41,7 +41,7 @@ private final class FakeAdmin: AdminRunning, @unchecked Sendable {
     /// The `--items-file` paths passed (the files exist only during `run`).
     var itemsFiles: [String] { lock.withLock { _itemsFiles } }
 
-    func run(_ arguments: [String]) async throws -> String {
+    override func runOne(_ arguments: [String]) async throws -> String {
         // Parsed now: the controller removes the items file after the run.
         let items = (try? AdminDelete.parse(arguments).items) ?? []
         lock.withLock {

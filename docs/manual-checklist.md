@@ -133,9 +133,39 @@ Use `~/maclean-scratch` or read-only checks only. Never clean real data.
 - [ ] 10. Untick everything and check that Clean is disabled. Read the confirmation text (permanent or Trash wording, and the administrator note) without confirming, then Cancel.
 - [ ] 11. On a user account without Full Disk Access for Maclean and without the Command Line Tools (or Xcode) installed, launch the app and let the check finish: no system dialog appears (no "would like to access files in your Downloads folder", "data from other apps", or "install the command line developer tools" prompt). Downloads, the Trash, Mail attachments and containers are listed under Skipped as "Needs Full Disk Access".
 
+## Access and updates
+
+Needs a real Mac. Use test releases only; never point the updater at your real `/Applications` copy except in the update checks below.
+
+Full Disk Access sheet:
+- [ ] Without Full Disk Access, launch the app: the sheet appears on every launch, before anything else.
+- [ ] Revoke access for a build that had it, then relaunch: the sheet returns.
+- [ ] Grant access in System Settings and choose **Relaunch**: the app restarts and the sheet is gone.
+
+Administrator reads:
+- Note: macOS may reuse an administrator authorization for a few minutes, so a second action soon after the first may not show a dialog. Wait a few minutes (or log out and in) before checks that expect a dialog.
+- [ ] **Release gate (before merge):** real-dialog check. With the real administrator dialog: delete a root-owned test item (allow, then cancel on a second try), read restricted folders during a scan (allow, then cancel), and confirm that Cancel leaves everything untouched each time.
+- [ ] Scan `/` without Full Disk Access: one administrator dialog names Maclean. Cancel it: the folders stay restricted and nothing else breaks.
+- [ ] Scan `/` again and allow: restricted folders are measured, and the result says how many folders still need Full Disk Access, with **Grant Access…**.
+- [ ] Turn off "Ask for the administrator password to read restricted folders" in Settings: no dialog appears.
+- [ ] Smart Clean measures system items automatically on launch and on ⇧⌘K, with one dialog shared with any waiting scan read. Cancelling suppresses it until the next user-initiated check.
+- [ ] **Release gate (before merge):** spike (spec §6a.1): record what root reads with and without Full Disk Access, with the dialog run in-process. Try a TCC folder (`~/Library/Mail`, `~/Library/Messages`) and a root-owned folder (`/private/var/root`, `/Library/Application Support/com.apple.TCC`). Note the results in the plan's outcome section.
+
+Updates:
+- [ ] Build and release a test 0.3.0 and a test 0.3.1 signed with "Maclean Release" and a separate **test** update key (generated into a scratch folder, with its public key in a local, uncommitted `UpdateKey.swift`). Never sign test builds with the production key. From 0.3.0, Check for Updates… offers 0.3.1 with its notes.
+- [ ] Install and Relaunch: 0.3.1 starts, and Full Disk Access is still granted (no sheet).
+- [ ] Skip This Version hides that version from the launch check, and Later dismisses until the next check.
+- [ ] Tamper with the zip or its `.sig` on a test release: the update is refused with a message.
+- [ ] A Homebrew install (`/Applications/Maclean.app` with the Caskroom entry) shows `brew upgrade --cask maclean` and Copy Command instead of Install and Relaunch.
+- [ ] Copy Maclean to a root-owned folder (for example `sudo cp -R` into `/Library/Maclean-test/`) and update it: the password dialog says "Maclean needs your password to update itself.", the swap succeeds, and the new bundle is owned by root (or the original owner). Cancel leaves the app untouched and offers Download. This covers the helper's root-only branches (chown, ACL strip, same-volume swap); check that no `.maclean-update-root-*` folder is left behind.
+- [ ] A downgrade (an older signed test release) is refused by the root install.
+- [ ] App Management (macOS 13+): updating a copy in `/Applications` replaces the bundle. If macOS asks to allow Maclean to update or delete other applications (Privacy & Security › App Management), allow it and check the swap then succeeds; if denied, the update fails with a message and the old copy still runs.
+- [ ] An update doesn't start during a delete or a Smart Clean run.
+- [ ] "Check for updates automatically" off: no launch check. Check for Updates… still works.
+
 ## Settings
 
-- [ ] ⌘, opens Settings with two tabs, General and Smart Clean. General holds "Open each scan in its own window" and "Move to Trash instead of deleting permanently" (off by default).
+- [ ] ⌘, opens Settings with two tabs, General and Smart Clean. General holds "Open each scan in its own window", "Move to Trash instead of deleting permanently" (off by default), "Ask for the administrator password to read restricted folders" and "Check for updates automatically" (both on by default).
 - [ ] The toggle persists across relaunches.
 
 ## Appearances

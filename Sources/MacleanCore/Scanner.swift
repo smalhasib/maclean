@@ -28,11 +28,14 @@ public struct ScanProgress: Sendable {
 /// from the nearest ancestor that is still open.
 public enum Scanner {
     /// Scans `path` with `ScanBoundary.forRoot` of its canonical path.
-    public static func scan(path: String,
+    /// `skipsPhotosLibraries` records `.photoslibrary` folders and `Library/Photos` unread (`.privacy`).
+    public static func scan(path: String, skipsPhotosLibraries: Bool = false,
                             qos: DispatchQoS.QoSClass = .userInitiated,
                             progress: @Sendable (ScanProgress) -> Void = { _ in }) async throws -> FileTree {
         let rootPath = try canonicalRoot(path)
-        return try await scan(path: rootPath, boundary: .forRoot(rootPath), qos: qos, progress: progress)
+        var boundary = ScanBoundary.forRoot(rootPath)
+        boundary.skipsPhotosLibraries = skipsPhotosLibraries
+        return try await scan(path: rootPath, boundary: boundary, qos: qos, progress: progress)
     }
 
     /// Scans `path` (canonicalized with `realpath`; the tree's `rootPath` is
@@ -272,9 +275,10 @@ private struct Walk {
         switch outcome {
         case .failed(.notFound):
             return nil  // vanished since its parent was listed
-        case .failed:
+        case .failed(let error):
             if let parent, let entry {
-                addDirectory(entry, in: parent, flags: flags.union(.restricted))
+                addDirectory(entry, in: parent,
+                             flags: flags.union(error == .notPermitted ? [.restricted, .privacy] : .restricted))
             } else {
                 builder.markRestricted(builder.root)
             }
@@ -345,6 +349,10 @@ private struct Walk {
                     } else {
                         addDirectory(e, in: ref, flags: .mountPoint)
                     }
+                } else if boundary.skipsPhotosLibraries,
+                          e.name.hasSuffix(".photoslibrary") || (e.name == "Photos" && Self.isLibrary(ref.name)) {
+                    // Opening these without Full Disk Access raises the Photos consent dialog.
+                    addDirectory(e, in: ref, flags: [.restricted, .privacy])
                 } else if checkSkips, boundary.skippedPaths.contains(join(base, e.name)) {
                     addDirectory(e, in: ref, flags: [])
                 } else {
@@ -380,6 +388,11 @@ private struct Walk {
                             inode: e.inode, device: e.device)
             }
         }
+    }
+
+    /// A `Library` folder (the root's name is its whole path).
+    private static func isLibrary(_ name: String) -> Bool {
+        name == "Library" || name.hasSuffix("/Library")
     }
 
     @discardableResult

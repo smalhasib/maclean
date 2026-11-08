@@ -27,25 +27,7 @@ public enum TreeArchive {
         var fdOpen = true
         defer { if fdOpen { close(fd) } }
         do {
-            var header = Data()
-            header.append(contentsOf: magic)
-            put(&header, version)
-            put(&header, UInt64(tree.count))
-            put(&header, tree.scanDate.timeIntervalSince1970.bitPattern)
-            let root = Array(tree.rootPath.utf8)
-            put(&header, UInt32(root.count))
-            header.append(contentsOf: root)
-            try header.withUnsafeBytes { try writeAll(fd, $0) }
-            try writeArray(fd, tree.parents)
-            try writeArray(fd, tree.firstChild)
-            try writeArray(fd, tree.childCount)
-            try writeArray(fd, tree.sizes)
-            try writeArray(fd, tree.flagBits)
-            try writeArray(fd, tree.inodes)
-            try writeArray(fd, tree.devices)
-            try writeArray(fd, tree.nameOffset)
-            try writeArray(fd, [UInt64(tree.names.count).littleEndian])
-            try writeArray(fd, tree.names)
+            try write(tree, toFD: fd)
             fdOpen = false
             guard close(fd) == 0 else { throw posixError() }
             guard rename(tmp.path, url.path) == 0 else { throw posixError() }
@@ -53,6 +35,29 @@ public enum TreeArchive {
             unlink(tmp.path)
             throw error
         }
+    }
+
+    /// Streams the archive of `tree` to the open file `fd` (which the caller owns).
+    static func write(_ tree: FileTree, toFD fd: Int32) throws {
+        var header = Data()
+        header.append(contentsOf: magic)
+        put(&header, version)
+        put(&header, UInt64(tree.count))
+        put(&header, tree.scanDate.timeIntervalSince1970.bitPattern)
+        let root = Array(tree.rootPath.utf8)
+        put(&header, UInt32(root.count))
+        header.append(contentsOf: root)
+        try header.withUnsafeBytes { try writeAll(fd, $0) }
+        try writeArray(fd, tree.parents)
+        try writeArray(fd, tree.firstChild)
+        try writeArray(fd, tree.childCount)
+        try writeArray(fd, tree.sizes)
+        try writeArray(fd, tree.flagBits)
+        try writeArray(fd, tree.inodes)
+        try writeArray(fd, tree.devices)
+        try writeArray(fd, tree.nameOffset)
+        try writeArray(fd, [UInt64(tree.names.count).littleEndian])
+        try writeArray(fd, tree.names)
     }
 
     private static func posixError() -> POSIXError {

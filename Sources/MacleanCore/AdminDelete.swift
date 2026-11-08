@@ -94,13 +94,15 @@ public enum AdminDelete {
     /// or stream something else), then requires its SHA-256 to be `sha256`
     /// (the fingerprint the app put in argv). Shared by `--delete` and
     /// `smart-measure`.
-    static func readVerifiedFile(path: String, sha256 expected: String) throws -> Data {
+    static func readVerifiedFile(path: String, sha256 expected: String, maxSize: Int = .max) throws -> Data {
         let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
         guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         var st = stat()
         guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else { throw ParseError.malformed("not a regular file") }
-        let data = try handle.readToEnd() ?? Data()
+        guard st.st_size <= maxSize else { throw ParseError.malformed("file too large") }
+        let data = try (maxSize == .max ? handle.readToEnd() : handle.read(upToCount: maxSize + 1)) ?? Data()
+        guard data.count <= maxSize else { throw ParseError.malformed("file too large") }
         guard sha256(data) == expected else { throw ParseError.malformed("file fingerprint mismatch") }
         return data
     }

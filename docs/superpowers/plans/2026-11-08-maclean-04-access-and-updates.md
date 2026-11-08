@@ -25,10 +25,10 @@
   - `@State` doesn't compile with Command Line Tools; use `State(initialValue:)`.
 - **Safety:** no test deletes real user files, runs the real updater against `/Applications`, or calls the real `NSAppleScript` admin dialog. Use fakes, TempDir, and a test Ed25519 key pair.
 - **Root helper:** it keeps every existing safety property.
-  - The new mode is **read-only**, requires uid 0, and reads its path list from a 0600 file whose SHA-256 is in argv (`readVerifiedFile`).
-  - The helper has no write mode for updates (§6a.2).
+  - The `read-restricted` mode is **read-only**, requires uid 0, and reads its path list from a 0600 file whose SHA-256 is in argv (`readVerifiedFile`).
+  - The `install-update` mode (Task 6b) writes only the verified Maclean bundle over an existing Maclean bundle, under the checks in spec §6a.2.
 - **Copy:**
-  - **FDA sheet:** "Give Maclean Full Disk Access"; the steps "Open System Settings › Privacy & Security › Full Disk Access", "Turn on Maclean" and "Maclean relaunches when you come back"; the button **Open System Settings**; the link "Continue without Full Disk Access".
+  - **FDA sheet:** "Give Maclean Full Disk Access"; the steps "Open System Settings › Privacy & Security › Full Disk Access", "Turn on Maclean" and "Click Relaunch when you come back"; the button **Open System Settings**; the link "Continue without Full Disk Access".
   - **Start-screen notice:** "Scans will miss protected folders — Grant Access…".
   - **After the grant:** "Full Disk Access is on. Relaunch Maclean to use it." with **Relaunch**.
   - **Admin reasons:** "Maclean needs to read N folders that only an administrator can open." and "Maclean needs to measure N system items for Smart Clean.". Joined with a space when one dialog serves both.
@@ -38,7 +38,7 @@
     - the box "Check for updates automatically";
     - the buttons **Skip This Version**, **Later** and **Install and Relaunch** (the default), on one line;
     - for Homebrew installs, `brew upgrade --cask maclean` with **Copy Command**;
-    - when Maclean can't replace itself, **Download**.
+    - when Maclean can't replace itself, **Install and Relaunch** asks for the administrator password ("Maclean needs your password to update itself."); **Download** is the fallback after a cancel.
 - **UserDefaults keys:**
   - `access.askForAdminReads` (Bool, default `true`)
   - `update.automatic` (Bool, default `true`)
@@ -58,7 +58,7 @@
 1. **Full Disk Access granted while the sheet is open, or revoked between launches.** On re-activation the sheet switches to the Relaunch state. When access is revoked, the sheet appears on the next launch. Test in Task 2.
 2. **The admin dialog cancelled.** Restricted folders stay restricted with the "Read with administrator rights" button. Smart Clean rows stay "size unknown". There is no second automatic prompt for that scan or check. Tests in Task 4.
 3. **A scan read and a Smart Clean measure pending at the same time.** One dialog, with the reasons joined, and both results applied. Test in Task 4.
-4. **A tampered or mismatched update.** A wrong signature, a wrong bundle id, a version that differs from the release, or a truncated download: each is refused with a message, and the installed app is untouched. Tests in Task 6.
+4. **A tampered or mismatched update, including through the password route.** A wrong signature, a wrong bundle id, a version that differs from the release, or a truncated download: each is refused with a message, and the installed app is untouched. Tests in Task 6.
 5. **Path checks.** A restricted path outside the scan root, an output directory that is a symlink or not owned by the uid, or a path list that doesn't match its hash: the helper refuses each one. Tests in Task 3.
 
 ---
@@ -289,7 +289,7 @@
   - `Sources/Maclean/UpdateController.swift`
   - `Sources/Maclean/UpdateInstaller.swift`
   - `Sources/Maclean/UpdateSheet.swift`
-  - `Sources/Maclean/UpdateKey.swift` (`static let publicKeyBase64`)
+  - `Sources/MacleanCore/UpdateKey.swift` (`public enum UpdateKey { public static let publicKeyBase64 }`, in Core so the root helper can verify too)
 - Modify:
   - `Sources/Maclean/AppCommands.swift` (Maclean › "Check for Updates…" after About)
   - `Sources/Maclean/SettingsView.swift` (the `update.automatic` toggle)
@@ -306,7 +306,7 @@
     - `func checkAutomatically()`: obeys `update.automatic`, the throttle and `update.skippedVersion`, and fails silently.
     - `func checkNow()`: always shows a result.
     - `func skip()`, `func later()`, and `func install() async`.
-    - `var action: InstallAction { get }`, an enum with `.install`, `.brew` and `.download`. It is computed from `InstallSource` and whether the bundle's parent folder is writable.
+    - `var action: InstallAction { get }`, an enum with `.install`, `.installWithPassword`, `.brew` and `.download`. It is computed from `InstallSource` and whether the bundle's parent folder is writable. `.download` appears only after the password dialog was cancelled.
   - `protocol UpdateInstalling { func install(zip: Data, signature: String, release: ReleaseInfo, replacing bundleURL: URL) async throws }`. `UpdateInstaller` is the live implementation:
     - verify the signature with `UpdateKey.publicKeyBase64`;
     - `ditto -x -k` into a temp folder;
@@ -322,7 +322,7 @@
 @Test func automaticCheckThrottledAndSilent()     // lastCheck 1 h ago → no fetch; fetch throws → state stays idle
 @Test func skippedVersionSuppressesAutomaticOnly()
 @Test func newerReleaseRequestsSheet()            // coordinator.sheet becomes .update after access sheet cleared
-@Test func homebrewActionIsBrew()                 // and non-writable parent → .download
+@Test func homebrewActionIsBrew()                 // and non-writable parent → .installWithPassword; after a cancel → .download
 @Test func installRefusedDuringDelete()
 @Test func installerRejectsBadSignature() async   // real UpdateInstaller with test key: tampered zip → throws, old bundle untouched
 @Test func installerRejectsWrongBundleOrVersion() async
@@ -338,6 +338,53 @@
 
 ---
 
+### Task 6b: Root install-update mode (password route)
+
+**Files:**
+- Create: `Sources/MacleanCore/AdminInstall.swift`
+- Modify:
+  - `Sources/maclean-scan/main.swift` (the `install-update` mode)
+  - `Sources/Maclean/UpdateController.swift` and `UpdateInstaller.swift` (the `.installWithPassword` path through the `AdminBatcher` or the runner, with the reason "Maclean needs your password to update itself.")
+- Test: `Tests/MacleanCoreTests/AdminInstallTests.swift`
+
+**Interfaces:**
+- Consumes:
+  - Task 5 `UpdateSignature`, `SemanticVersion`;
+  - `UpdateKey.publicKeyBase64` (Core);
+  - `readVerifiedFile`;
+  - Task 1 `AdminRunning`.
+- Produces:
+  - `AdminInstall.arguments(zip: String, zipSHA256: String, signature: String, signatureSHA256: String, version: String, target: String) -> [String]`, which gives `install-update --zip <p> --zip-sha256 <h> --sig <p> --sig-sha256 <h> --version <v> --target <path>`.
+  - `AdminInstall.parse(_:) throws -> Request`.
+  - `AdminInstall.perform(_ request: Request, publicKeyBase64: String, workDir: URL, unzip: (URL, URL) throws -> Void) -> Result<Void, InstallError>`, which runs these steps **in this order**:
+    1. Read the zip and the signature with `readVerifiedFile` (hash, `O_NOFOLLOW`, regular file).
+    2. Verify the signature.
+    3. Unzip into `workDir`. In production this is a fresh root-owned 0700 directory under `/private/var/tmp`, made with `mkdtemp`.
+    4. The unpacked bundle must be exactly one `Maclean.app`, with bundle id `org.maclean.Maclean` and `CFBundleShortVersionString == version`.
+    5. The target must be canonical with no symlinked components (`realpath` equals target), end in `.app`, be an existing directory whose `Contents/Info.plist` has bundle id `org.maclean.Maclean`, and not be `/` or a volume root.
+    6. Rename the target to `<target>.maclean-old-<uuid>` (same directory), then rename the new bundle into place. If that fails, rename the old one back. On success, remove the old copy.
+    7. Remove `workDir`.
+  - `InstallError` has a case and a user message per check.
+  - The CLI mode requires uid 0, prints one JSON line `{ok}` or `{error}`, and writes nowhere except `workDir` and the target's parent.
+
+- [ ] **Step 1: Tests** (TempDir; a test key pair; a fake "installed" `Maclean.app` built in TempDir; unzip with `ditto`)
+
+```swift
+@Test func installsVerifiedBundle()          // target replaced by new version, no *.maclean-old-* left, workDir gone
+@Test func rejectsBadSignature()             // target untouched
+@Test func rejectsTamperedFiles()            // zip bytes ≠ sha256 → refused before unzip
+@Test func rejectsWrongBundleIdOrVersion()
+@Test func rejectsTargetThatIsNotMaclean()   // target is another app / plain dir / symlinked path / "/" → refused, untouched
+@Test func restoresOldOnFailedMove()         // simulate failure (unzip produces read-only parent?) → old bundle back in place
+```
+
+- [ ] **Step 2:** Run T. The new tests fail.
+- [ ] **Step 3:** Implement the code. In the app, `.installWithPassword` writes the zip and the signature to 0600 files, runs the helper with the update reason, then relaunches. A cancel sets the action to `.download`.
+- [ ] **Step 4:** Run T and `scripts/build-app.sh`. Both pass.
+- [ ] **Step 5:** Commit: `feat: root install-update mode for password updates`.
+
+---
+
 ### Task 7: Release tooling, signing, docs
 
 **Files:**
@@ -346,7 +393,7 @@
   - `scripts/make-signing-cert.sh`
 - Modify:
   - `scripts/package-release.sh`
-  - `Sources/Maclean/UpdateKey.swift` (the real public key)
+  - `Sources/MacleanCore/UpdateKey.swift` (the real public key)
   - `README.md` (Getting started: the Full Disk Access sheet and the password prompts; Settings; Releasing)
   - `docs/manual-checklist.md` (an "Access and updates" section)
   - this plan (Outcome)
@@ -361,7 +408,7 @@
   - prints both paths and the zip's SHA-256.
 - **Controller-run steps, not the implementer's:**
   - generate the owner's key with `swift scripts/update-key.swift generate ~/.config/maclean/update-key`, only if it is absent;
-  - paste the public key into `UpdateKey.swift`;
+  - paste the public key into `Sources/MacleanCore/UpdateKey.swift`;
   - the owner runs `make-signing-cert.sh`.
 
 - [ ] **Step 1:** Write the scripts. Test `update-key.swift` with a round trip in a temp dir: generate, sign a file, check that `UpdateSignature.isValid` accepts the public key (a small test in UpdateTests that shells out, or a documented manual command).
@@ -376,3 +423,64 @@
   The README's Releasing steps also cover signing, and state that 0.2.0 users move to the first self-updating release by hand or with `brew upgrade` (spec §6a.4).
 - [ ] **Step 3:** Run T and `scripts/build-app.sh`.
 - [ ] **Step 4:** Commit: `docs: access and update guides, release signing tools`.
+
+## Outcome and follow-ups
+
+### Commits
+
+Branch `plan-04-access-updates`, from `2954c6e`:
+- Task 1, admin helper in-process with prompt: `f04a0c7`, `bb134c6` (per-invocation exit status in batches).
+- Task 2, Full Disk Access sheet and prompt coordinator: `554e3fa`, `a2e6826`.
+- Task 3, root read mode and tree graft: `50adb11`, `0c15510` (pin the restricted folder before the root scan).
+- Task 4, admin reads in scans and Smart Clean: `9e801ca`, `ddf530a`.
+- Task 5, update core (versions, signatures, install source): `5a341d9`, `2af1266`.
+- Task 6, auto-update: `52d213e`, `8c8320f` (same-volume staging, safe rollback).
+- Task 6b, root install-update mode: `f04e6f0` (plan), `f56964b`, `18fe74d` (refuse downgrades, strip ACLs).
+- Task 7, release tooling, signing and docs: the commit this section ships in.
+
+Tests at the end of Task 7: 473 pass (44 + 287 + 142 across the three test targets), including the new `UpdateKeyToolTests` (a real `generate`, `sign`, `public` round trip checked with `UpdateSignature.isValid`, and a forged identity-point signature rejected). `scripts/build-app.sh` builds. `package-release.sh` was exercised end to end with a temporary key and `MACLEAN_SIGN_IDENTITY=-`, and its missing-key failure was checked.
+
+### Rulings worth remembering
+
+- R1: `UpdateInstaller` takes injectable relaunch and trash closures. Tests never terminate the process or touch the real Trash.
+- R2: the owner's update key and signing certificate are made by the owner, never by a subagent or the test suite.
+- R3: updates that can't replace the bundle as the user ask for the administrator password (reverses §6a.2). The root helper re-verifies the Ed25519 signature (the public key lives in MacleanCore), unzips into its own 0700 directory, checks the bundle id and version, and swaps only an existing Maclean.app at the requesting app's path.
+- R4: each invocation's exit status travels on its separator line in a batch, and a non-zero status fails that invocation.
+- R5: `PromptCoordinator.admin` is `async throws`, so cancelled waiters never run.
+- R6: Smart Clean's automatic measure runs on the launch check and user-initiated checks only, never the background re-check after a clean. A cancel suppresses it until the next user-initiated check.
+- R7: `UpdateSignature.isValid` rejects an all-zero public key (CryptoKit accepts forged signatures for it), which protects the placeholder period and the root helper.
+- R8: the root install work directory is a root-owned 0700 `mkdtemp` in the target's parent, with renames relative to the opened parent fd (same-volume swap). A hidden `.maclean-update-root-*` directory may remain in `/Applications` if root crashes mid-install.
+- R9: the root install refuses downgrades (request version must exceed the installed one) and strips ACLs on the unpacked bundle.
+
+### Deferred minors
+
+- **Admin dialog and prompts:** NSAppleScript runs on a GCD worker, while Apple's note says main thread (check in the manual dialog checks); duplicated fake batching loop in tests; "1 system items" and "1 folders" are unpluralized.
+- **Sheets and UI (unseen):** Clean is disabled while an automatic measure waits behind a sheet; full-tree walks run on the main actor. (Fixed in the final review: the access sheet is no longer raised on activation over another view's sheet (R10), raising a sheet first shows the main window (R11), the update sheet queues in the coordinator behind the access sheet, and a superseded measure is dropped before the dialog.)
+- **Root read and graft:** hard links crossing a graft boundary are double-counted; stale `errno` in the pin non-directory branch; the over-cap case reuses the "outside the scan" message.
+- **Update core and installer:** homebrew detection uses lexical standardizing (symlinked `/Applications` edge cases); `shouldCheck` lives on the `UpdateCheck` enum; a `Loader` continuation race when cancelled before start; the live `Loader` is untested; the timing-based stale-download test may flake; failed checks retry on each launch; a narrow delete-during-install race.
+- **Root install:** old-bundle deletion as root over a user-owned tree is shared with `--delete`, and the XNU rename semantics are unverified; a leftover `.maclean-update-root-*` after a crash; the ownership test runs non-root only; the `.downgrade` message also covers an unparseable installed version; no test sets an ACL on a symlink entry.
+- **Task 7:** only the all-zero key is refused by `UpdateSignature`. A real key that is a small-order point isn't rejected, but `generate` always makes a valid random key. `scripts/make-signing-cert.sh` was only syntax-checked and never run. Task 7 committed it without the executable bit (mode 100644); the final-review fixes set it to 100755 in git. Running it as `sh scripts/make-signing-cert.sh` works either way.
+
+### Steps still owed by the owner
+
+1. Run `sh scripts/make-signing-cert.sh` to create "Maclean Release" in the login Keychain and trust it for code signing (it may ask for the Keychain password, and macOS asks you to authenticate for the trust setting). Check with `security find-identity -v -p codesigning`.
+2. Generate the update key: `mkdir -p ~/.config/maclean && swift scripts/update-key.swift generate ~/.config/maclean/update-key` (only if absent). Back the file up.
+3. Paste the printed public key into `Sources/MacleanCore/UpdateKey.swift` in place of the all-zero placeholder, and commit. Until then nothing installs.
+4. Release 0.3.0 with `scripts/package-release.sh` and `gh release create` (zip and `.sig`), then bump the cask. Note in the release notes that 0.2.0 users update by hand or with `brew upgrade --cask maclean`.
+5. Run the "Access and updates" section of `docs/manual-checklist.md`, including the root versus privacy-protection spike (record the results here), the 0.3.0 to 0.3.1 update that keeps Full Disk Access, and a real password update into a root-owned folder (the root-only chown and swap branches no automated test reaches).
+
+### Manual results (2026-11-08, macOS 27.3, 0.3.0 dev build)
+
+- Quit & Reopen from System Settings reopens the right copy, once its version differs from any other installed Maclean.
+- Root read: a root-only folder (`chmod 700`, 20 MiB) showed 21 MB after the password, and the home scan's password filled in 43 root-owned `~/.cache/mole/tmp` folders.
+- Admin delete of a root-owned folder works with the password.
+- Root versus privacy spike: root never opens TCC-protected folders (Mail, Messages, Safari). The scanner now tells them apart by errno (EPERM is privacy, EACCES is ownership), keeps privacy folders (`.privacy`) out of the password read, and offers Full Disk Access for them.
+- Without Full Disk Access, `*.photoslibrary` and `~/Library/Photos` raise the Photos consent dialog, so scans skip them; no prompt was seen afterwards.
+- Owner steps 1–3 are done: the signing certificate exists, and the update key is at `~/.config/maclean/update-key` (backup in `~/Documents/Maclean/update-key`) with its public key in `UpdateKey.swift`.
+
+### Developer ID follow-ups (spec §8)
+
+With a Developer ID:
+- notarize the app, so the quarantine workaround and the cask's postflight step go away;
+- move administrator actions to an `SMAppService` privileged helper with Authorization Services, replacing the per-action AppleScript dialog and the root `install-update` mode;
+- consider the self-declared `--context` (R31) closed at that point.

@@ -203,7 +203,7 @@ public struct Deleter: Sendable {
     private static func scanForRewalk(_ request: DeleteRequest, mode: DeleteMode) async -> Result<FileTree?, Early> {
         do {
             return .success(try await Scanner.scan(path: request.path))
-        } catch ReadError.permissionDenied {
+        } catch let error as ReadError where error == .permissionDenied || error == .notPermitted {
             let verified = request.fileCount == 0 && request.size == 0
             return mode == .trash ? .success(nil) : .failure(Early(outcome: .needsAdmin(started: false, verified: verified)))
         } catch {
@@ -270,6 +270,23 @@ public struct Deleter: Sendable {
         }
         if let url = result as URL? { trashed?(url) }
         return .deleted(freed: freed)
+    }
+
+    /// Removes directory `name` in `pfd`, which must still have inode
+    /// `expectIno`, with the same walk as a permanent delete: bottom-up,
+    /// every directory opened `O_NOFOLLOW` relative to its parent's fd, never
+    /// leaving the directory's device. False on any failure (part may remain).
+    static func removeDirectory(named name: String, in pfd: Int32, expectIno: UInt64) -> Bool {
+        var st = stat()
+        guard fstatat(pfd, name, &st, AT_SYMLINK_NOFOLLOW) == 0, isDirectory(st),
+              UInt64(st.st_ino) == expectIno else { return false }
+        var remover = Remover(device: st.st_dev)
+        do throws(RemoveError) {
+            try remover.removeTree(pfd, Array(name.utf8CString), expectIno: expectIno, top: true)
+            return true
+        } catch {
+            return false
+        }
     }
 
     private enum RemoveError: Error { case errno(Int32), replaced, otherDisk(String) }
@@ -393,7 +410,7 @@ public struct Deleter: Sendable {
     private static func outcome(scanError error: any Error) -> DeleteOutcome {
         switch error as? ReadError {
         case .notFound: .missing
-        case .permissionDenied: .needsAdmin(started: false)
+        case .permissionDenied, .notPermitted: .needsAdmin(started: false)
         case .notDirectory: .replaced
         case .other(let code): .failed(String(cString: strerror(code)))
         case nil: error is CancellationError ? .failed("Cancelled") : .failed(String(describing: error))

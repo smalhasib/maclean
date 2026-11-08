@@ -36,6 +36,8 @@ struct DeleteReport: Equatable {
     static let trashNeedsAdmin = "Needs administrator rights, so it can't be moved to the Trash. "
         + "Turn off “Move to Trash” in Settings to delete it."
     static let adminNotGiven = "Administrator password not given."
+    /// The administrator dialog's reason for a delete.
+    static let adminPrompt = "Maclean needs to delete items that only an administrator can remove."
     static let stoppedBeforeAdmin = "Stopped before the administrator step."
     static let adminNoReport = "The administrator step didn't report back. It may still be running — rescan to check."
 
@@ -130,7 +132,8 @@ struct DeleteReport: Equatable {
             defer { AdminDelete.removeItemsFile(file) }
             output = try await admin.run(AdminDelete.arguments(itemsFile: file.path, sha256: sha256,
                                                                environment: Self.environment(for: context, neverClean: neverClean),
-                                                               context: context))
+                                                               context: context),
+                                     prompt: Self.adminPrompt)
         } catch {
             // Anything but a cancelled prompt: root may have started, or may
             // still be deleting. Keep the items and say so.
