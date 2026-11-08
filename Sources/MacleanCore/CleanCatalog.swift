@@ -34,10 +34,12 @@ public enum CleanCatalog {
     private static let browsers: [R] =
         [R(id: "browser.safari", category: .browsers, pattern: "~/Library/Caches/com.apple.Safari", unit: .folder,
            ageTiers: [(0, .safe)], owner: .bundleID("com.apple.Safari"), reason: browserReason)]
-        + chromium.map {
-            R(id: "browser.\($0.id)", category: .browsers,
-              pattern: "~/Library/Application Support/\($0.folder)/\(browserCacheDirs)", unit: .folder,
-              ageTiers: [(0, .safe)], owner: .bundleID($0.bundle), reason: browserReason)
+        + chromium.flatMap { b in
+            // Profile data lives in Application Support; the disk caches also under ~/Library/Caches.
+            [("", "~/Library/Application Support"), (".caches", "~/Library/Caches")].map {
+                R(id: "browser.\(b.id)\($0.0)", category: .browsers, pattern: "\($0.1)/\(b.folder)/\(browserCacheDirs)",
+                  unit: .folder, ageTiers: [(0, .safe)], owner: .bundleID(b.bundle), reason: browserReason)
+            }
         }
         + [R(id: "browser.firefox", category: .browsers, pattern: "~/Library/Caches/Firefox/Profiles/*/cache2",
              unit: .folder, ageTiers: [(0, .safe)], owner: .bundleID("org.mozilla.firefox"), reason: browserReason)]
@@ -77,7 +79,8 @@ public enum CleanCatalog {
         R(id: "dev.pkg.\($0.id)", category: .developer, pattern: $0.pattern, unit: .folder,
           ageTiers: [(0, .review)], reason: packageReason)
     } + [
-        // Each download, so partial (`*.incomplete`) ones can be left alone.
+        // `.eachChild`, not the folder: each download is its own item so that partial
+        // (`*.incomplete`) downloads, which Homebrew may still be writing, are excluded.
         R(id: "dev.pkg.homebrew", category: .developer, pattern: "~/Library/Caches/Homebrew/downloads",
           unit: .eachChild, ageTiers: [(0, .review)], exclude: ["*.incomplete"], reason: packageReason),
         // The Gradle daemon runs as `java`: any running JVM keeps these.
@@ -141,6 +144,7 @@ public enum CleanCatalog {
           owner: $0.3, special: .removedAppLeftover, reason: leftoverReason)
     }
 
+    /// Claims every `*.savedState`; the owner is the stripped name when it is a bundle id.
     private static let windowState: [R] = [
         R(id: "windowState", category: .windowState, pattern: "~/Library/Saved Application State/*.savedState",
           unit: .folder, ageTiers: [(30, .review)], owner: .childNameIfBundleID,

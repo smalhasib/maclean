@@ -35,9 +35,11 @@ private func rule(_ id: String, _ pattern: String, unit: CleanRule.Unit = .eachC
                   category: CleanRule.Category = .appCaches,
                   tiers: [(days: Int, tier: CleanRule.Tier)] = [(0, .safe)],
                   owner: CleanRule.Owner = .none, fileFilter: [String]? = nil, exclude: [String] = [],
+                  requiresAdmin: Bool = false, requireNotOpen: Bool = false,
                   special: CleanRule.Special = .none) -> CleanRule {
     CleanRule(id: id, category: category, pattern: pattern, unit: unit, ageTiers: tiers, owner: owner,
-              fileFilter: fileFilter, exclude: exclude, special: special, reason: "test")
+              fileFilter: fileFilter, exclude: exclude, requiresAdmin: requiresAdmin,
+              requireNotOpen: requireNotOpen, special: special, reason: "test")
 }
 
 /// A fake home inside a TempDir.
@@ -234,5 +236,89 @@ private struct Fixture {
                              owner: .childNameIfBundleID, special: .removedAppLeftover)
         let r = await f.run([leftovers, rule("c", "~/Library/Caches", owner: .childNameIfBundleID)])
         #expect(r.candidates.map(\.ruleID) == ["c"])
+    }
+
+    @Test func sizeUnknownNeverSafe() async {
+        let f = Fixture()
+        defer { withExtendedLifetime(f) {} }
+        f.t.file("home/Library/Caches/big/x", bytes: 10)
+        f.t.file("home/Info/data/x", bytes: 10)
+        let r = await f.run([rule("c", "~/Library/Caches", tiers: [(0, .safe)]),
+                             rule("i", "~/Info", unit: .folder, category: .largeData, tiers: [(0, .info)])],
+                            budget: .zero)
+        let c = r.candidates.first { $0.ruleID == "c" }
+        #expect(c != nil && c?.measurement == nil)
+        #expect(c.map { $0.tier < .safe } == true)
+        #expect(c?.tier == .review)
+        #expect(r.candidates.first { $0.ruleID == "i" }?.tier == .info)
+    }
+
+    @Test func openFileWithoutOwnerIsInUse() async {
+        let f = Fixture()
+        defer { withExtendedLifetime(f) {} }
+        f.t.file("home/logs/a.log", bytes: 10)
+        let path = f.t.url("home/logs/a.log")
+        let r = await f.run([rule("l", "~/logs", category: .logs, requireNotOpen: true)],
+                            probes: FakeProbes(open: [path]))
+        #expect(r.candidates.isEmpty)
+        #expect(r.skipped == [SkippedItem(path: path, reason: .inUse)])
+    }
+
+    @Test func trashOffersDotNamedChildren() async {
+        let f = Fixture()
+        defer { withExtendedLifetime(f) {} }
+        f.t.file("home/.Trash/.hidden", bytes: 10)
+        f.t.file("home/.Trash/visible", bytes: 10)
+        f.t.file("home/Library/Caches/.dot/x", bytes: 10)
+        let r = await f.run([rule("t", "~/.Trash", category: .trash, tiers: [(0, .review)]),
+                             rule("c", "~/Library/Caches")])
+        #expect(r.candidates.map(\.path).sorted() == [f.t.url("home/.Trash/.hidden"), f.t.url("home/.Trash/visible")])
+        let trash = rule("t", "~/.Trash", category: .trash, tiers: [(0, .review)])
+        #expect(CleanEngine.rule(matching: f.t.url("home/.Trash/.hidden"), in: [trash], home: f.home)?.id == "t")
+    }
+
+    @Test func windowStateClaimsNonBundleNames() async {
+        let f = Fixture()
+        defer { withExtendedLifetime(f) {} }
+        f.t.file("home/SAS/Odd App.savedState/x", bytes: 10)
+        f.t.file("home/SAS/com.example.app.savedState/x", bytes: 10)
+        let ws = rule("ws", "~/SAS/*.savedState", unit: .folder, category: .windowState, tiers: [(0, .review)],
+                      owner: .childNameIfBundleID)
+        let r = await f.run([ws], probes: FakeProbes(running: ["com.example.app"]))
+        #expect(r.candidates.map(\.path) == [f.t.url("home/SAS/Odd App.savedState")])
+        #expect(r.candidates.first?.owner == nil)
+        #expect(r.skipped == [SkippedItem(path: f.t.url("home/SAS/com.example.app.savedState"),
+                                          reason: .appRunning("com.example.app"))])
+    }
+
+    @Test func unreadableUserItemIsNoAccess() async {
+        let f = Fixture()
+        defer { withExtendedLifetime(f) {} }
+        f.t.file("home/Library/Caches/locked/x", bytes: 10)
+        f.t.chmod("home/Library/Caches/locked", 0)
+        let r = await f.run([rule("c", "~/Library/Caches")])
+        #expect(r.candidates.isEmpty)
+        #expect(r.skipped == [SkippedItem(path: f.t.url("home/Library/Caches/locked"), reason: .noAccess)])
+    }
+
+    @Test func unreadableAdminItemIsSizeUnknown() async {
+        let f = Fixture()
+        defer { withExtendedLifetime(f) {} }
+        f.t.file("home/Library/Caches/locked/x", bytes: 10)
+        f.t.chmod("home/Library/Caches/locked", 0)
+        let r = await f.run([rule("c", "~/Library/Caches", tiers: [(7, .safe)], requiresAdmin: true)])
+        #expect(r.skipped.isEmpty)
+        #expect(r.candidates.count == 1)
+        #expect(r.candidates.first?.measurement == nil)
+        #expect(r.candidates.first?.tier == .review)
+        #expect(r.candidates.first?.requiresAdmin == true)
+    }
+
+    @Test func staticMatchPassesOverLeftoverRules() {
+        let leftovers = rule("left", "~/Library/Caches", category: .removedApps, tiers: [(30, .review)],
+                             owner: .childNameIfBundleID, special: .removedAppLeftover)
+        let generic = rule("c", "~/Library/Caches", owner: .childNameIfBundleID)
+        #expect(CleanEngine.rule(matching: "/h/Library/Caches/com.gone.app", in: [leftovers, generic], home: "/h")?.id == "c")
+        #expect(CleanEngine.rule(matching: "/h/Library/Caches/com.gone.app", in: [leftovers], home: "/h") == nil)
     }
 }

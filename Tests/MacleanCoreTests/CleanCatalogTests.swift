@@ -30,6 +30,16 @@ private func rule(_ path: String) -> CleanRule? {
         #expect(rule("/Users/me/Library/Caches/Yarn")?.category == .developer)
         #expect(rule("/Users/me/Library/Caches/com.apple.Safari")?.category == .browsers)
         #expect(rule("/Users/me/Library/Application Support/Google/Chrome/Default/Code Cache")?.category == .browsers)
+        let chromeCache = try #require(rule("/Users/me/Library/Caches/Google/Chrome/Default/Cache"))
+        #expect(chromeCache.category == .browsers && chromeCache.ageTiers.map(\.tier) == [.safe])
+        if case .bundleID("com.google.Chrome") = chromeCache.owner {} else { Issue.record("owner \(chromeCache.owner)") }
+        let generic = CleanCatalog.rules.firstIndex { $0.id == "cache.other" }!
+        #expect(CleanCatalog.rules.firstIndex { $0.id == chromeCache.id }! < generic)
+        #expect(rule("/Users/me/Library/Saved Application State/Odd App.savedState")?.category == .windowState)
+        // R12: string lookup passes over leftover rules, which need the installed set.
+        #expect(rule("/Users/me/Library/Logs/com.x.y")?.id == "logs.user")
+        #expect(rule("/Users/me/Library/Application Support/com.x.y") == nil)
+        #expect(rule("/Users/me/.Trash/.hidden")?.category == .trash)
         #expect(rule("/Users/me/Library/Application Support/Slack/GPUCache")?.category == .appCaches)
         #expect(rule("/Users/me/Library/Containers/com.x.y/Data/Library/Caches/z")?.category == .appCaches)
         #expect(rule("/Users/me/Library/Saved Application State/com.x.y.savedState")?.category == .windowState)

@@ -15,8 +15,9 @@ public struct CleanRule: Sendable, Identifiable {
     /// What is offered: each pattern match itself, or each (non-hidden) child of it.
     public enum Unit: Sendable { case folder, eachChild }
     /// Who must not be running.
-    /// - `childNameIfBundleID`: the item's own name (minus `.savedState`); the rule
-    ///   only claims items whose name is a bundle id.
+    /// - `childNameIfBundleID`: the item's own name (minus `.savedState`) when that is a
+    ///   bundle id, else no owner. On `.eachChild` rules it is also a claim condition:
+    ///   only bundle-id names are claimed (this splits the `~/Library/Caches` sweeps).
     /// - `containerBundleID`: the component after `Containers`; also checks open files.
     /// - `appSupportFolder`: the component after `Application Support`, resolved by the probes.
     public enum Owner: Sendable { case none, bundleID(String), childNameIfBundleID, containerBundleID, appSupportFolder, processName(String) }
@@ -60,8 +61,12 @@ public struct CleanRule: Sendable, Identifiable {
         self.reason = reason
     }
 
-    /// The tier given to items whose age is unknown (size unknown): never auto-ticked.
-    var lowestTier: Tier { ageTiers.map(\.tier).min() ?? .info }
+    /// The tier given to items whose age is unknown (size unknown): the rule's
+    /// lowest, capped at `.review` so it is never auto-ticked.
+    var sizeUnknownTier: Tier { min(ageTiers.map(\.tier).min() ?? .info, .review) }
+
+    /// The Trash is emptied whole, dot-named items included; other sweeps skip dot names.
+    var offersHiddenChildren: Bool { category == .trash }
 
     /// Whether `name` is a reverse-DNS bundle id: `^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+){2,}$`.
     static func isBundleID(_ name: String) -> Bool {
@@ -101,8 +106,10 @@ public struct CleanCandidate: Sendable, Identifiable, Equatable {
 
 /// Why something found was not offered.
 public enum SkipReason: Sendable, Equatable {
-    /// The owner is running, or (empty id) a process has the item open.
+    /// The owner (bundle id or process name) is running.
     case appRunning(String)
+    /// A process has the item open and no owning app is known.
+    case inUse
     case ownerUnknown, recent, protected(Refusal), noAccess, neverClean, macOSSystemCache, installedCheckFailed,
          containsGit, gitTracked, projectInUse, locallyPatched, sameOSInstaller, categoryOff
 }

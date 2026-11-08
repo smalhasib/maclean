@@ -101,7 +101,7 @@ public struct CleanEngine {
             guard let match = rule.ageTiers.first(where: { $0.days <= age }) else { return .skip(.recent) }
             tier = match.tier
         } else {
-            tier = rule.lowestTier
+            tier = rule.sizeUnknownTier
         }
 
         var owner: String?
@@ -140,7 +140,7 @@ public struct CleanEngine {
     private func openCheck(_ path: String, owner: String?) -> SkipReason? {
         switch probes.isOpen(path: path) {
         case false?: nil
-        case true?: .appRunning(owner ?? "")
+        case true?: owner.map { .appRunning($0) } ?? .inUse
         case nil: .ownerUnknown
         }
     }
@@ -189,7 +189,11 @@ public struct CleanEngine {
         return rules.first { rule in
             if case .removedAppLeftover = rule.special { return false }
             return patterns(of: rule, home: home).contains { segments in
-                segments.count == parts.count && zip(segments, parts).allSatisfy { glob($0, $1) }
+                segments.count == parts.count && zip(segments, parts).enumerated().allSatisfy { i, pair in
+                    // The `.eachChild` segment of a rule that offers hidden children matches any name.
+                    if i == parts.count - 1, rule.offersHiddenChildren, case .eachChild = rule.unit { return true }
+                    return glob(pair.0, pair.1)
+                }
             } && claims(rule, path: path, checkType: false)
         }
     }
@@ -215,7 +219,7 @@ public struct CleanEngine {
                 guard lstat(path, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { return false }
             }
         }
-        if case .childNameIfBundleID = rule.owner, ownName(path) == nil { return false }
+        if case .childNameIfBundleID = rule.owner, case .eachChild = rule.unit, ownName(path) == nil { return false }
         return true
     }
 
@@ -257,7 +261,7 @@ public struct CleanEngine {
         case .eachChild:
             for dir in e.roots where isRealDirectory(dir) {
                 switch list(dir) {
-                case .success(let names): e.items += names.filter { !$0.hasPrefix(".") }.sorted().map { join(dir, $0) }
+                case .success(let names): e.items += names.filter { rule.offersHiddenChildren || !$0.hasPrefix(".") }.sorted().map { join(dir, $0) }
                 case .failure(let err) where err.code == .EACCES || err.code == .EPERM: e.denied.append(dir)
                 case .failure: break
                 }
