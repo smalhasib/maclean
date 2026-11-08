@@ -126,14 +126,16 @@ Use `~/maclean-scratch` or read-only checks only. Never clean real data.
 - [ ] 4. Create `~/maclean-scratch/proj/package.json` and `~/maclean-scratch/proj/node_modules/x/file` (add `~/maclean-scratch` under Settings › Smart Clean › project folders, or work in a searched folder), then check again. Maclean's age includes ctime, which `touch -t` can't backdate, so a fresh `node_modules` must be listed under Skipped as "Used recently" and not offered. Don't try to backdate it.
 - [ ] 5. "Never clean this" on a row hides it and lists it in Settings › Smart Clean. Removing it there brings it back on the next check.
 - [ ] 6. "Measure with administrator rights" asks for the password once and fills in the sizes of system items.
-- [ ] 7. Cancel that password prompt: the system items stay listed as "administrator password not given".
+- [ ] 7. Cancel that password prompt: the system items simply stay "size unknown".
+- [ ] 7b. With only system items ticked (Move to Trash off), Clean, confirm, and cancel the password prompt: nothing is deleted and the summary lists them as "administrator password not given". With Move to Trash on, the confirmation says system items will be skipped and no password prompt appears.
 - [ ] 8. ⇧⌘K re-runs the check and shows the start screen with the card.
 - [ ] 9. Turn off the launch check in Settings › Smart Clean and relaunch: no check runs until you ask for one. The launch check never shows a password prompt.
 - [ ] 10. Untick everything and check that Clean is disabled. Read the confirmation text (permanent or Trash wording, and the administrator note) without confirming, then Cancel.
+- [ ] 11. On a user account without Full Disk Access for Maclean and without the Command Line Tools (or Xcode) installed, launch the app and let the check finish: no system dialog appears (no "would like to access files in your Downloads folder", "data from other apps", or "install the command line developer tools" prompt). Downloads, the Trash, Mail attachments and containers are listed under Skipped as "Needs Full Disk Access".
 
 ## Settings
 
-- [ ] ⌘, opens Settings with a General tab only, holding "Open each scan in its own window" and "Move to Trash instead of deleting permanently" (off by default).
+- [ ] ⌘, opens Settings with two tabs, General and Smart Clean. General holds "Open each scan in its own window" and "Move to Trash instead of deleting permanently" (off by default).
 - [ ] The toggle persists across relaunches.
 
 ## Appearances

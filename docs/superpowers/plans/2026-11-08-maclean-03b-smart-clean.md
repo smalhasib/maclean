@@ -613,7 +613,7 @@ func dismissSummary()
 
 Built on branch `plan-03b-smart-clean`, 20 commits from main 44023c3 (1 preflight docs commit, 9 feature commits, 9 fix commits, and this docs commit); 363 tests (44 MacleanKit + 244 MacleanCore + 75 MacleanApp), all passing, and `scripts/build-app.sh` builds and signs the bundle. Shipped: `DeleteBatch` extracted from the collector with a `ProtectionContext` threaded through `Deleter` and `AdminDelete` (`--context`), the timestamp-aware `Measurer`, the `.smartClean` protection context with its own dangerous-path corpus, the catalog of rules and `CleanEngine`, live probes (open files, running owners, installed apps), leftovers of removed apps, project build artifacts with a hardened Git probe, the root-side re-checks (`AdminMeasure`, launchd orphan re-check, bounded no-follow plist reads), `SmartCleanController`, `TreeView.markDeleted`, the start-screen card, the review sheet (tiers, Skipped, Never clean this, Measure with administrator rights), Settings › Smart Clean, and Action › Check for Cleanable Items (⇧⌘K). The README and manual checklist cover Smart Clean.
 
-**Rulings worth remembering** (the full list is R1–R26 in the SDD ledger)
+**Rulings worth remembering** (the full list is R1–R31 in the SDD ledger)
 - **Unknown means keep:** a failed probe goes to Skipped; a size-unknown item is capped at Review and never ticked.
 - **Protection:** smartClean refuses everything under `/private` outside the §6.2a allowlist, under `/usr` and under `/Volumes` unless inside home (R1, R2, R8, R10, R11); Apple names are allowed only where the spec lists them.
 - **ctime:** `Measurement.newest` is max(mtime, ctime), and tests can't backdate ctime, so tests inject `now` instead (R7).
@@ -622,9 +622,10 @@ Built on branch `plan-03b-smart-clean`, 20 commits from main 44023c3 (1 prefligh
 - **Git probe:** `git ls-files` runs with fsmonitor, hooks and global config disabled, because the repository is untrusted.
 - **Admin:** system rows reuse the collector's single-prompt admin batch; measuring with administrator rights is a separate single prompt.
 - **⇧⌘K** brings the main window back to the start screen, where the card is the result surface (R26).
+- **Final review (R27–R30):** system items skip the user-level attempt and go straight to the admin batch, so a partial delete can't trip root's age check (R27); the launch check raises no system dialogs: no TCC-protected rule is read without Full Disk Access, Desktop, Documents and Downloads are never auto-searched for projects, and git runs only when a real git is installed (R28, R29); in Trash mode the alert says system items will be skipped instead of promising a password prompt (R30).
 
 **Deferred minors**
-- Interface: collector items leave at the end of a run, not per item; `AdminDelete.resolvedRefusal` keeps a default context; `publish()` is an internal test seam; `isChecking`, `requestClean`, `cancelClean` and `stop` have thin test coverage.
+- Interface: collector items leave at the end of a run, not per item; default contexts remain only on `Deleter.init` and `ProtectionRules.refusal` (`AdminDelete.resolvedRefusal` takes the deleter's context); `publish()` is an internal test seam; `isChecking`, `requestClean`, `cancelClean` and `stop` have thin test coverage.
 - Measurer and engine: the clone test passes silently on non-APFS; recursion holds one fd per depth; a vanished-after-timeout item reports `.noAccess`; size-unknown age uses top-level times only; installed-app probing runs even with categories off.
 - Protection: any path ending in a `Safari` component is refused; personal-data names match at any depth.
 - Catalog and probes: Trash offers `.DS_Store` as separate rows; Gradle's owner is any `java` process and isn't re-checked at delete time; the macOS installer version check is best effort (R16); EDR skip says "protected" (R17); App Support leftovers match only by bundle-id name.
@@ -638,3 +639,4 @@ Built on branch `plan-03b-smart-clean`, 20 commits from main 44023c3 (1 prefligh
 
 **Before the next plan**
 - The helper-replacement caveat from Plan 3a still applies to the root batch (a signed `SMAppService` helper is the fix).
+- Accepted residual (R31): the request self-declares `--context`, so a tampered request can choose the collector root path instead of Smart Clean's. The argv SHA pin is the trust boundary; the Smart Clean root checks (catalog admin rule, root age re-check) are defence in depth.
