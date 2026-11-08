@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -5,10 +6,12 @@ import Foundation
 /// app runs as root (through an administrator prompt) for items it couldn't
 /// delete itself.
 ///
-/// Arguments: `--delete --env <JSON environment> --items-file <path>`. The
-/// items travel in a file (`writeItemsFile`) so a large batch can't exceed
-/// the argument size limit; the app removes it after the run
-/// (`removeItemsFile`).
+/// Arguments: `--delete --env <JSON environment> --items-file <path>
+/// --items-sha256 <hex>`. The items travel in a file (`writeItemsFile`) so a
+/// large batch can't exceed the argument size limit; the app removes it after
+/// the run (`removeItemsFile`). The file sits in the user's temp folder, so
+/// its SHA-256 travels in argv (fixed once the password prompt starts) and
+/// root refuses a file that doesn't match.
 /// Output: one JSON line per item (`encode`), read back with `decode`.
 public enum AdminDelete {
     public struct Item: Codable, Sendable, Equatable {
@@ -25,13 +28,14 @@ public enum AdminDelete {
 
     public enum ParseError: Error, Equatable { case usage, malformed(String) }
 
-    public static func arguments(itemsFile: String, environment: ProtectionEnvironment) -> [String] {
-        ["--delete", "--env", json(environment), "--items-file", itemsFile]
+    public static func arguments(itemsFile: String, sha256: String, environment: ProtectionEnvironment) -> [String] {
+        ["--delete", "--env", json(environment), "--items-file", itemsFile, "--items-sha256", sha256]
     }
 
     /// Writes `items` as JSON to a new file (mode 0600) in a fresh private
-    /// temporary directory (mode 0700) and returns the file's URL.
-    public static func writeItemsFile(_ items: [Item]) throws -> URL {
+    /// temporary directory (mode 0700) and returns the file's URL and the
+    /// SHA-256 (lowercase hex) of the bytes written.
+    public static func writeItemsFile(_ items: [Item]) throws -> (url: URL, sha256: String) {
         var template = Array((NSTemporaryDirectory() as NSString)
             .appendingPathComponent("maclean-admin-XXXXXX").utf8CString)
         guard let dir = mkdtemp(&template) else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
@@ -44,14 +48,15 @@ public enum AdminDelete {
             throw POSIXError(POSIXErrorCode(rawValue: e) ?? .EIO)
         }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        let data = Data(json(items).utf8)
         do {
-            try handle.write(contentsOf: Data(json(items).utf8))
+            try handle.write(contentsOf: data)
             try handle.close()
         } catch {
             removeItemsFile(file)
             throw error
         }
-        return file
+        return (file, sha256(data))
     }
 
     /// Removes an items file written by `writeItemsFile` and its directory.
@@ -60,19 +65,36 @@ public enum AdminDelete {
     }
 
     public static func parse(_ arguments: [String]) throws -> (items: [Item], environment: ProtectionEnvironment) {
-        guard arguments.count == 5, arguments[0] == "--delete", arguments[1] == "--env",
-              arguments[3] == "--items-file" else {
+        guard arguments.count == 7, arguments[0] == "--delete", arguments[1] == "--env",
+              arguments[3] == "--items-file", arguments[5] == "--items-sha256" else {
             throw ParseError.usage
         }
         let decoder = JSONDecoder()
         do {
             let env = try decoder.decode(ProtectionEnvironment.self, from: Data(arguments[2].utf8))
-            let data = try Data(contentsOf: URL(fileURLWithPath: arguments[4]))
+            let data = try readRegularFile(arguments[4])
+            guard sha256(data) == arguments[6] else { throw ParseError.malformed("items file fingerprint mismatch") }
             let items = try decoder.decode([Item].self, from: data)
             return (items, env)
         } catch {
             throw ParseError.malformed(String(describing: error))
         }
+    }
+
+    /// Reads `path` without following a symlink at its last component, and
+    /// only if it is a regular file (not a FIFO or device that could block
+    /// or stream something else).
+    private static func readRegularFile(_ path: String) throws -> Data {
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        var st = stat()
+        guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else { throw ParseError.malformed("items file is not a regular file") }
+        return try handle.readToEnd() ?? Data()
+    }
+
+    private static func sha256(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     /// One JSON line (JSON escapes control characters, so a path with a

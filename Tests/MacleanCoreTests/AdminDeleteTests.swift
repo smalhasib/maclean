@@ -17,7 +17,7 @@ private func req(_ path: String, dir: Bool = false) -> DeleteRequest {
         AdminDelete.Item(request: req("/Users/me/--delete"), force: true),
         AdminDelete.Item(request: req("/Users/me/$(rm -rf ~); `x` \\ é"), force: false),
     ]
-    let file = try AdminDelete.writeItemsFile(items)
+    let (file, hash) = try AdminDelete.writeItemsFile(items)
     defer { AdminDelete.removeItemsFile(file) }
     // Private: the file is the owner's only, in a fresh directory of its own.
     let attrs = try FileManager.default.attributesOfItem(atPath: file.path)
@@ -25,8 +25,8 @@ private func req(_ path: String, dir: Bool = false) -> DeleteRequest {
     let dirAttrs = try FileManager.default.attributesOfItem(atPath: file.deletingLastPathComponent().path)
     #expect((dirAttrs[.posixPermissions] as? Int) == 0o700)
 
-    let args = AdminDelete.arguments(itemsFile: file.path, environment: env)
-    #expect(args == ["--delete", "--env", args[2], "--items-file", file.path])
+    let args = AdminDelete.arguments(itemsFile: file.path, sha256: hash, environment: env)
+    #expect(args == ["--delete", "--env", args[2], "--items-file", file.path, "--items-sha256", hash])
     let parsed = try AdminDelete.parse(args)
     #expect(parsed.items == items)
     #expect(parsed.environment == env)
@@ -38,17 +38,17 @@ private func req(_ path: String, dir: Bool = false) -> DeleteRequest {
 @Test func manyItemsStayOutOfArgv() throws {
     let long = String(repeating: "x", count: 200)
     let items = (0..<5_000).map { AdminDelete.Item(request: req("/Users/me/\(long)/\($0)"), force: false) }
-    let file = try AdminDelete.writeItemsFile(items)
+    let (file, hash) = try AdminDelete.writeItemsFile(items)
     defer { AdminDelete.removeItemsFile(file) }
-    let args = AdminDelete.arguments(itemsFile: file.path, environment: env)
+    let args = AdminDelete.arguments(itemsFile: file.path, sha256: hash, environment: env)
     #expect(args.joined().utf8.count < 4096)
     #expect(try AdminDelete.parse(args).items.count == 5_000)
 }
 
 @Test func parseRejectsMalformedArguments() throws {
-    let file = try AdminDelete.writeItemsFile([AdminDelete.Item(request: req("/Users/me/x"), force: false)])
+    let (file, hash) = try AdminDelete.writeItemsFile([AdminDelete.Item(request: req("/Users/me/x"), force: false)])
     defer { AdminDelete.removeItemsFile(file) }
-    let good = AdminDelete.arguments(itemsFile: file.path, environment: env)
+    let good = AdminDelete.arguments(itemsFile: file.path, sha256: hash, environment: env)
     #expect(throws: (any Error).self) { try AdminDelete.parse([]) }
     #expect(throws: (any Error).self) { try AdminDelete.parse(Array(good.dropFirst())) }
     #expect(throws: (any Error).self) { try AdminDelete.parse(good + ["extra"]) }
@@ -63,6 +63,42 @@ private func req(_ path: String, dir: Bool = false) -> DeleteRequest {
     try Data("not json".utf8).write(to: junk)
     notJSON[4] = junk.path
     #expect(throws: (any Error).self) { try AdminDelete.parse(notJSON) }
+    var noHash = good
+    noHash[5] = "--items-file"
+    #expect(throws: (any Error).self) { try AdminDelete.parse(noHash) }
+}
+
+@Test func parseRefusesTamperedOrIrregularItemsFile() throws {
+    let items = [AdminDelete.Item(request: req("/Users/me/x"), force: false)]
+    let (file, hash) = try AdminDelete.writeItemsFile(items)
+    defer { AdminDelete.removeItemsFile(file) }
+    let dir = file.deletingLastPathComponent()
+    let good = AdminDelete.arguments(itemsFile: file.path, sha256: hash, environment: env)
+    #expect(try AdminDelete.parse(good).items == items)
+
+    // Rewritten after the hash was taken (as during the password prompt).
+    let other = [AdminDelete.Item(request: req("/Users/me/other"), force: true)]
+    let (otherFile, _) = try AdminDelete.writeItemsFile(other)
+    defer { AdminDelete.removeItemsFile(otherFile) }
+    let swapped = try Data(contentsOf: otherFile)
+    try swapped.write(to: file)
+    #expect(throws: (any Error).self) { try AdminDelete.parse(good) }
+
+    // Replaced by a symlink to a file with matching contents: not followed.
+    let original = dir.appending(path: "original.json")
+    let (fresh, freshHash) = try AdminDelete.writeItemsFile(items)
+    defer { AdminDelete.removeItemsFile(fresh) }
+    try FileManager.default.copyItem(at: fresh, to: original)
+    let link = dir.appending(path: "link.json")
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: original)
+    var viaLink = AdminDelete.arguments(itemsFile: link.path, sha256: freshHash, environment: env)
+    #expect(throws: (any Error).self) { try AdminDelete.parse(viaLink) }
+
+    // A FIFO is not a regular file (and must not block the helper).
+    let fifo = dir.appending(path: "fifo")
+    #expect(mkfifo(fifo.path, 0o600) == 0)
+    viaLink[4] = fifo.path
+    #expect(throws: (any Error).self) { try AdminDelete.parse(viaLink) }
 }
 
 @Test func outcomeLinesRoundTrip() {

@@ -179,6 +179,15 @@ private final class URLBox: @unchecked Sendable {
         #expect(await deleter.delete(r) == .needsAdmin(started: false, verified: true))
     }
 
+    @Test func itemUnreadableSinceScanNeedsUnverifiedAdmin() async throws {
+        let t = TempDir(); defer { withExtendedLifetime(t) {} }
+        t.file("d/a", bytes: 4096)
+        // Scanned while readable: root must re-walk it, not delete it forced.
+        let r = try await request(t.url("d"))
+        t.chmod("d", 0o000)
+        #expect(await deleter.delete(r) == .needsAdmin(started: false, verified: false))
+    }
+
     @Test(.enabled(if: trashWorks(), "FileManager.trashItem is unavailable in this environment"))
     func trashModeMovesFolderWithRestrictedContents() async throws {
         let t = TempDir(); defer { withExtendedLifetime(t) {} }

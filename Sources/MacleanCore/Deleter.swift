@@ -106,7 +106,7 @@ public struct Deleter: Sendable {
         var freed = request.size
         if !force {
             if Self.isDirectory(st) {
-                switch await Self.scanForRewalk(request.path, mode: mode) {
+                switch await Self.scanForRewalk(request, mode: mode) {
                 case .failure(let early): return early.outcome
                 case .success(nil):
                     break  // Unreadable item, trash mode: moving it needs no read access.
@@ -181,13 +181,15 @@ public struct Deleter: Sendable {
 
     /// The re-walk of directory item `path`, nil when the item itself can't
     /// be read in trash mode, or the outcome to report. An item unreadable at
-    /// its top level has nothing to verify as the user: in permanent mode it
-    /// needs administrator rights, `verified`.
-    private static func scanForRewalk(_ path: String, mode: DeleteMode) async -> Result<FileTree?, Early> {
+    /// its top level needs administrator rights in permanent mode. It is
+    /// `verified` only if the scan saw nothing inside it either: one that had
+    /// contents when scanned must get root's re-walk.
+    private static func scanForRewalk(_ request: DeleteRequest, mode: DeleteMode) async -> Result<FileTree?, Early> {
         do {
-            return .success(try await Scanner.scan(path: path))
+            return .success(try await Scanner.scan(path: request.path))
         } catch ReadError.permissionDenied {
-            return mode == .trash ? .success(nil) : .failure(Early(outcome: .needsAdmin(started: false, verified: true)))
+            let verified = request.fileCount == 0 && request.size == 0
+            return mode == .trash ? .success(nil) : .failure(Early(outcome: .needsAdmin(started: false, verified: verified)))
         } catch {
             return .failure(Early(outcome: outcome(scanError: error)))
         }

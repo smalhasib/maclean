@@ -244,9 +244,9 @@ struct DeleteReport: Equatable {
         awaitingAdmin = true
         defer { awaitingAdmin = false }
         do {
-            let file = try AdminDelete.writeItemsFile(items)
+            let (file, sha256) = try AdminDelete.writeItemsFile(items)
             defer { AdminDelete.removeItemsFile(file) }
-            output = try await admin.run(AdminDelete.arguments(itemsFile: file.path, environment: .current()))
+            output = try await admin.run(AdminDelete.arguments(itemsFile: file.path, sha256: sha256, environment: .current()))
         } catch {
             // Anything but a cancelled prompt: root may have started, or may
             // still be deleting. Keep the items and say so.
