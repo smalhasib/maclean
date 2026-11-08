@@ -17,6 +17,7 @@ import Foundation
     private struct Submission {
         let arguments: [String]
         let reason: String
+        let isWanted: @MainActor () -> Bool
         let continuation: CheckedContinuation<String, any Error>
     }
 
@@ -37,10 +38,15 @@ import Foundation
     /// returns its standard output. Throws `AdminRunnerError.cancelled` when the
     /// dialog is cancelled (to every caller in the batch), and
     /// `AdminRunnerError.failed` when this invocation exits non-zero (only this
-    /// caller) or the whole run fails.
-    func submit(_ arguments: [String], reason: String) async throws -> String {
+    /// caller) or the whole run fails. `isWanted` is asked again when the
+    /// dialog's turn comes: a submission no longer wanted (its tree was
+    /// replaced, its session forgotten) is dropped with `CancellationError`
+    /// and never shows in the dialog.
+    func submit(_ arguments: [String], reason: String,
+                isWanted: @escaping @MainActor () -> Bool = { true }) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
-            pending.append(Submission(arguments: arguments, reason: reason, continuation: continuation))
+            pending.append(Submission(arguments: arguments, reason: reason, isWanted: isWanted,
+                                      continuation: continuation))
             guard !flushScheduled else { return }
             flushScheduled = true
             Task { @MainActor in await self.flush() }
@@ -53,7 +59,12 @@ import Foundation
         let result: Result<[AdminOutput], any Error>
         do {
             result = try await coordinator.admin(pending.first?.reason ?? "") { [self] in
-                batch = takePending()
+                batch = takePending().filter { submission in
+                    if submission.isWanted() { return true }
+                    submission.continuation.resume(throwing: CancellationError())
+                    return false
+                }
+                guard !batch.isEmpty else { return .success([]) }
                 let runner = runner
                 let invocations = batch.map(\.arguments)
                 let prompt = batch.map(\.reason).joined(separator: " ")

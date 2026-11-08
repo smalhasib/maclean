@@ -8,9 +8,10 @@ import Observation
 /// `DeleteBatch` after the view's confirmation alert.
 ///
 /// The check pauses between targets while a scan of the target's volume runs
-/// and never deletes. A cancelled check publishes nothing. When it finds
-/// system items it couldn't measure, "Measure with administrator rights" runs
-/// once by itself (spec §4.3), unless Settings turns that off.
+/// and never deletes. A cancelled check publishes nothing. When the launch
+/// check or a user-started one finds system items it couldn't measure,
+/// "Measure with administrator rights" runs once by itself (spec §4.3, R6),
+/// unless Settings turns that off; background re-checks never ask.
 @MainActor @Observable final class SmartCleanController {
     enum Phase: Equatable {
         case idle, checking, ready, nothingFound, confirming
@@ -60,9 +61,6 @@ import Observation
     @ObservationIgnored private let admin: any AdminRunning
     /// Measures go through it, so they share a dialog with scan reads; nil runs `admin` directly.
     @ObservationIgnored private let batcher: AdminBatcher?
-    /// Size-unknown system items whose automatic measure was cancelled or
-    /// failed: never asked about automatically again.
-    @ObservationIgnored private var declinedAutoMeasure: Set<String> = []
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let scanning: (Int32) -> Bool
     /// Where `.macleanDidDelete` is posted after a clean that deleted something.
@@ -117,13 +115,15 @@ import Observation
 
     /// Runs `check()` if Settings' "Check for cleanable items at launch" is on (default on).
     func checkAtLaunchIfEnabled() {
-        if defaults.object(forKey: Self.checkAtLaunchKey) as? Bool ?? true { check() }
+        if defaults.object(forKey: Self.checkAtLaunchKey) as? Bool ?? true { check(userInitiated: true) }
     }
 
     /// Starts a check off the main actor at utility QoS, cancelling a running
     /// one first. Not while confirming or cleaning; behind a summary it runs
-    /// without changing the phase.
-    func check() {
+    /// without changing the phase. `userInitiated` (the launch check, ⇧⌘K,
+    /// Check again) lets its result measure system items automatically; the
+    /// re-checks after a clean or a never-clean don't.
+    func check(userInitiated: Bool = false) {
         switch phase {
         case .confirming, .cleaning: return
         case .summary: break
@@ -148,7 +148,7 @@ import Observation
             guard let self, mine == self.generation, !task.isCancelled else { return }
             self.checkTask = nil
             self.isChecking = false
-            self.publish(result)
+            self.publish(result, autoMeasure: userInitiated)
         }
     }
 
@@ -175,8 +175,9 @@ import Observation
     }
 
     /// Takes a check's result. Ticks carry over for paths already listed;
-    /// new paths get the default (Safe with a known size).
-    func publish(_ result: CleanReport) {
+    /// new paths get the default (Safe with a known size). `autoMeasure`
+    /// (a user-started check's result) measures size-unknown system items once.
+    func publish(_ result: CleanReport, autoMeasure: Bool = false) {
         let old = Set(report?.candidates.map(\.path) ?? [])
         selected = Set(result.candidates.filter { c in
             Self.isSelectable(c) && (old.contains(c.path) ? selected.contains(c.path) : c.tier == .safe)
@@ -184,20 +185,17 @@ import Observation
         report = result
         if case .summary = phase { return }
         phase = resting
-        measureAutomaticallyIfNeeded()
+        if autoMeasure { measureAutomaticallyIfNeeded() }
     }
 
-    /// Spec §4.3: one automatic measure per check that found size-unknown
-    /// system items, through the shared batcher; items whose automatic
-    /// measure was cancelled or failed aren't asked about again (the review
-    /// keeps the manual button).
+    /// Spec §4.3, R6: one automatic measure for a user-started check's
+    /// size-unknown system items, through the shared batcher. After a cancel
+    /// nothing asks again until the next user-started check (the review keeps
+    /// the manual button).
     private func measureAutomaticallyIfNeeded() {
-        guard batcher != nil, phase == .ready, AdminBatcher.asksAutomatically(defaults) else { return }
-        let unknown = Set(unknownAdminPaths)
-        guard !unknown.isEmpty, !unknown.isSubset(of: declinedAutoMeasure) else { return }
-        Task {
-            if await measure() == false { declinedAutoMeasure.formUnion(unknown) }
-        }
+        guard batcher != nil, phase == .ready, AdminBatcher.asksAutomatically(defaults),
+              !unknownAdminPaths.isEmpty else { return }
+        Task { await measure() }
     }
 
     private var unknownAdminPaths: [String] {
@@ -248,12 +246,10 @@ import Observation
         await measure()
     }
 
-    /// False when the prompt was cancelled or the helper failed; nil when nothing was asked.
-    @discardableResult
-    private func measure() async -> Bool? {
-        guard phase == .ready, !measuring, report != nil else { return nil }
+    private func measure() async {
+        guard phase == .ready, !measuring, report != nil else { return }
         let paths = unknownAdminPaths
-        guard !paths.isEmpty else { return nil }
+        guard !paths.isEmpty else { return }
         generation += 1
         let mine = generation
         measuring = true
@@ -273,10 +269,10 @@ import Observation
             }
             lines = AdminMeasure.decode(output)
         } catch {
-            return false
+            return
         }
         // A check started meanwhile owns the report now.
-        guard mine == generation, var current = self.report else { return true }
+        guard mine == generation, var current = self.report else { return }
         current.candidates = current.candidates.map { c in
             guard c.requiresAdmin, c.measurement == nil, let line = lines[c.path], line.error == nil,
                   let m = line.measurement else { return c }
@@ -285,7 +281,6 @@ import Observation
                                   requiresAdmin: c.requiresAdmin, owner: c.owner, group: c.group)
         }
         self.report = current
-        return true
     }
 
     // MARK: Clean

@@ -108,7 +108,7 @@ private struct ActionMenu: View {
         // "Delete Collected Items" is inserted here in AppKit (menu validation).
         Divider()
         Button("Check for Cleanable Items") {
-            smartClean.check()
+            smartClean.check(userInitiated: true)
             router.showStartScreen()   // where the card shows the checking state
         }
             .keyboardShortcut("k", modifiers: [.command, .shift])

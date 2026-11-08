@@ -114,7 +114,9 @@ private let readReason2 = "Maclean needs to read 2 folders that only an administ
     #expect(request.root == locked.path)
     // The out dir and paths file are gone.
     #expect(!FileManager.default.fileExists(atPath: request.outDir))
-    let file = try #require(root.arguments.first?[4])
+    let args = try #require(root.arguments.first)
+    let flag = try #require(args.firstIndex(of: "--paths-file"))
+    let file = args[flag + 1]
     #expect(!FileManager.default.fileExists(atPath: file))
 
     let tree = try #require(session.tree)
@@ -187,9 +189,79 @@ private let readReason2 = "Maclean needs to read 2 folders that only an administ
     #expect(tree.flags(of: try #require(tree.node(atPath: locked.path + "/q"))).contains(.restricted))
 }
 
+// MARK: - Rescans and forgotten sessions
+
+@Test @MainActor func rescanAsksAgainOnce() async throws {
+    let locked = Locked()
+    let root = Root()
+    let registry = makeRegistry(root)
+    let session = registry.startScan(path: locked.path)
+    await until { !session.isScanning && session.stillNeedsAccessCount != nil }
+    #expect(root.prompts == [readReason2])
+
+    registry.rescan(canonical: locked.path)
+    await until { !session.isScanning && root.prompts.count == 2 && session.stillNeedsAccessCount != nil
+        && !session.isReadingRestricted }
+    #expect(root.prompts == [readReason2, readReason2])
+    #expect(session.restrictedCount == 0)
+    try? await Task.sleep(for: .milliseconds(150))
+    #expect(root.prompts.count == 2)
+}
+
+@Test @MainActor func rescanWhileReadQueuedStillAsksOnceForNewTree() async throws {
+    let locked = Locked()
+    let root = Root()
+    let coordinator = PromptCoordinator(hasAccess: { false })
+    coordinator.launch()   // the sheet holds every admin job back
+    let registry = makeRegistry(root, coordinator: coordinator)
+    let batcher = try #require(registry.batcher)
+    let session = registry.startScan(path: locked.path)
+    await until { batcher.pendingCount == 1 }
+
+    registry.rescan(canonical: locked.path)
+    await until { !session.isScanning && batcher.pendingCount == 2 }
+    let newTree = try #require(session.tree)
+    #expect(session.isReadingRestricted)
+
+    coordinator.continueWithoutAccess()
+    await until { session.stillNeedsAccessCount != nil && !session.isReadingRestricted }
+    // The stale read gave way: one dialog, one invocation, for the new tree.
+    #expect(root.prompts == [readReason2])
+    #expect(root.requests.count == 1)
+    #expect(session.restrictedCount == 0)
+    #expect(session.tree !== newTree)
+    #expect(session.tree?.node(atPath: locked.path + "/q/inner/x.bin") != nil)
+}
+
+@Test @MainActor func forgottenSessionNeverPrompts() async throws {
+    let locked = Locked()
+    let root = Root()
+    let coordinator = PromptCoordinator(hasAccess: { false })
+    coordinator.launch()
+    let registry = makeRegistry(root, coordinator: coordinator)
+    let batcher = try #require(registry.batcher)
+    let session = registry.startScan(path: locked.path)
+    await until { batcher.pendingCount == 1 }
+
+    registry.forget(path: locked.path)
+    coordinator.continueWithoutAccess()
+    await until { !session.isReadingRestricted }
+    try? await Task.sleep(for: .milliseconds(150))
+    #expect(root.prompts.isEmpty)
+
+    // Asked by hand later, a forgotten session doesn't submit at all.
+    await session.readRestricted(using: batcher)
+    #expect(batcher.pendingCount == 0)
+    #expect(root.prompts.isEmpty)
+}
+
+@Test @MainActor func readReasonCountsWhatIsSent() {
+    #expect(ScanSession.readPrompt(count: 3) == "Maclean needs to read 3 folders that only an administrator can open.")
+}
+
 // MARK: - Smart Clean
 
-/// Probes that answer "nothing" (the engine never runs in these tests).
+/// Probes that answer "nothing open, nothing running".
 private struct NoProbes: CleanProbes {
     var now: Date { Date() }
     func isRunning(bundleID: String) -> Bool? { false }
@@ -203,15 +275,49 @@ private struct NoProbes: CleanProbes {
     func hasFullDiskAccess() -> Bool { true }
 }
 
+/// Never touches disk.
 private struct NoDeleter: DeleterProtocol {
     func delete(_ r: DeleteRequest, force: Bool) async -> DeleteOutcome { .deleted(freed: 0) }
 }
 
-@MainActor private func smartClean(_ root: Root, batcher: AdminBatcher, defaults: UserDefaults = defaults())
-    -> SmartCleanController {
-    SmartCleanController(engine: { CleanEngine(rules: [], home: "/nonexistent", environment: .current(), probes: NoProbes()) },
-                         probes: NoProbes(), makeDeleter: { _, _ in NoDeleter() }, admin: root, batcher: batcher,
-                         defaults: defaults, notifications: NotificationCenter(), scanning: { _ in false })
+/// A fake home with one ordinary cache (Safe, measurable) and one system log
+/// folder this user can't open (needs administrator rights, size unknown).
+private final class SystemHome {
+    let scratch = Scratch()
+    var path: String { scratch.path + "/home" }
+    var log: String { path + "/Library/Logs/sys" }
+
+    init() {
+        scratch.file("home/Library/Caches/c/x.bin", bytes: 4096)
+        scratch.file("home/Library/Logs/sys/x.log", bytes: 4096)
+        chmod(log, 0)
+    }
+
+    deinit { chmod(log, 0o755) }
+
+    func engine() -> CleanEngine {
+        let caches = CleanRule(id: "caches", category: .appCaches, pattern: "~/Library/Caches", unit: .eachChild,
+                               ageTiers: [(0, .safe)], reason: "test")
+        let logs = CleanRule(id: "logs", category: .systemLogs, pattern: "~/Library/Logs", unit: .eachChild,
+                             ageTiers: [(0, .review)], requiresAdmin: true, reason: "test")
+        return CleanEngine(rules: [caches, logs], home: path,
+                           environment: ProtectionEnvironment(home: path, appBundle: "/Applications/Maclean.app",
+                                                              mountPoints: ["/"], timeMachineMounts: []),
+                           probes: NoProbes())
+    }
+}
+
+@MainActor private func smartClean(_ root: Root, batcher: AdminBatcher, home: SystemHome? = nil,
+                                   defaults: UserDefaults = defaults()) -> SmartCleanController {
+    let engine: () -> CleanEngine = home.map { h in { h.engine() } }
+        ?? { CleanEngine(rules: [], home: "/nonexistent", environment: .current(), probes: NoProbes()) }
+    return SmartCleanController(engine: engine, probes: NoProbes(), makeDeleter: { _, _ in NoDeleter() },
+                                admin: root, batcher: batcher, defaults: defaults,
+                                notifications: NotificationCenter(), scanning: { _ in false })
+}
+
+@MainActor private func freeBatcher(_ root: Root) -> AdminBatcher {
+    AdminBatcher(runner: root, coordinator: PromptCoordinator(hasAccess: { true }))
 }
 
 private func unknownAdminReport() -> CleanReport {
@@ -220,35 +326,68 @@ private func unknownAdminReport() -> CleanReport {
                                             requiresAdmin: true, owner: nil)])
 }
 
+@MainActor private func logRow(_ c: SmartCleanController, _ home: SystemHome) -> CleanCandidate? {
+    c.report?.candidates.first { $0.path == home.log }
+}
+
 private let measureReason1 = "Maclean needs to measure 1 system items for Smart Clean."
 
 @Test @MainActor func smartCleanAutoMeasuresOnceAfterCheck() async throws {
+    let home = SystemHome()
     let root = Root()
-    let c = smartClean(root, batcher: AdminBatcher(runner: root, coordinator: PromptCoordinator(hasAccess: { true })))
-    c.publish(unknownAdminReport())
-    await until { c.report?.candidates.first?.measurement != nil }
+    let c = smartClean(root, batcher: freeBatcher(root), home: home)
+    c.check(userInitiated: true)
+    await until { logRow(c, home)?.measurement != nil }
     #expect(root.prompts == [measureReason1])
-    #expect(c.report?.candidates.first?.measurement == adminMeasurement)
+    #expect(logRow(c, home)?.measurement == adminMeasurement)
+}
 
-    // A cancelled prompt: size unknown, and the next check doesn't ask again.
-    let cancelling = Root(cancel: true)
-    let d = smartClean(cancelling,
-                       batcher: AdminBatcher(runner: cancelling, coordinator: PromptCoordinator(hasAccess: { true })))
-    d.publish(unknownAdminReport())
-    await until { cancelling.prompts.count == 1 && !d.awaitingAdmin }
-    #expect(d.report?.candidates.first?.measurement == nil)
-    d.publish(unknownAdminReport())
+@Test @MainActor func smartCleanPostCleanRecheckNeverPrompts() async throws {
+    let home = SystemHome()
+    let root = Root()
+    let c = smartClean(root, batcher: freeBatcher(root), home: home)
+    c.check(userInitiated: true)
+    await until { logRow(c, home)?.measurement != nil && !c.awaitingAdmin }
+    #expect(root.prompts.count == 1)
+    #expect(c.chosenCount == 1)   // the ordinary cache; the measured log stays unticked
+
+    await c.clean()
+    c.dismissSummary()   // the re-check is still running, so its result publishes into .ready
+    await until { !c.isChecking && c.phase == .ready }
+    #expect(logRow(c, home)?.measurement == nil)   // the re-check found it size unknown again
     try? await Task.sleep(for: .milliseconds(150))
-    #expect(cancelling.prompts == [measureReason1])
-    #expect(d.phase == .ready)
+    #expect(root.prompts.count == 1)
+}
+
+@Test @MainActor func smartCleanCancelThenUserCheckAsksAgain() async throws {
+    let home = SystemHome()
+    let root = Root(cancel: true)
+    let c = smartClean(root, batcher: freeBatcher(root), home: home)
+    c.check(userInitiated: true)
+    await until { root.prompts.count == 1 && !c.awaitingAdmin }
+    #expect(logRow(c, home)?.measurement == nil)
+
+    // A background re-check doesn't ask again.
+    c.check()
+    await until { !c.isChecking }
+    try? await Task.sleep(for: .milliseconds(150))
+    #expect(root.prompts.count == 1)
+
+    // ⇧⌘K does.
+    c.check(userInitiated: true)
+    await until { root.prompts.count == 2 && !c.awaitingAdmin }
+    #expect(root.prompts == [measureReason1, measureReason1])
+    #expect(c.phase == .ready)
 }
 
 @Test @MainActor func smartCleanSettingOffNeverMeasures() async throws {
+    let home = SystemHome()
     let root = Root()
-    let c = smartClean(root, batcher: AdminBatcher(runner: root, coordinator: PromptCoordinator(hasAccess: { true })),
-                       defaults: defaults(ask: false))
-    c.publish(unknownAdminReport())
+    let c = smartClean(root, batcher: freeBatcher(root), home: home, defaults: defaults(ask: false))
+    c.check(userInitiated: true)
+    await until { !c.isChecking }
     try? await Task.sleep(for: .milliseconds(150))
+    #expect(logRow(c, home) != nil)
     #expect(root.prompts.isEmpty)
 }
 
@@ -264,7 +403,7 @@ private let measureReason1 = "Maclean needs to measure 1 system items for Smart 
     let root = Root()
     let batcher = AdminBatcher(runner: root, coordinator: coordinator)
     let c = smartClean(root, batcher: batcher)
-    c.publish(unknownAdminReport())
+    c.publish(unknownAdminReport(), autoMeasure: true)
     let read = Task { await session.readRestricted(using: batcher) }
     await until { batcher.pendingCount == 2 }
     #expect(root.prompts.isEmpty)

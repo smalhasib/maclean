@@ -65,7 +65,7 @@ struct SmartCleanReviewView: View {
                 .lineLimit(1)
             Spacer(minLength: 8)
             if controller.isChecking { ProgressView().controlSize(.small) }
-            Button("Check again") { controller.check() }
+            Button("Check again") { controller.check(userInitiated: true) }
                 .disabled(isBusy)
             Button("Clean") { controller.requestClean() }
                 .buttonStyle(.borderedProminent)

@@ -63,6 +63,11 @@ public enum AdminRead {
         try AdminDelete.writePrivateFile(Data(AdminDelete.json(paths).utf8), name: "paths.json")
     }
 
+    /// Removes a file made by `writePathsFile`, with its private directory.
+    public static func removePathsFile(_ file: URL) {
+        AdminDelete.removeItemsFile(file)
+    }
+
     /// A fresh, empty 0700 directory (`mkdtemp`) for root's archives. The
     /// caller removes it when done.
     public static func makeOutDir() throws -> URL {

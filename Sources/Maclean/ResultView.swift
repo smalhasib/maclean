@@ -131,12 +131,12 @@ private struct ResultBanners: View {
     /// Access — Grant Access…" for what root couldn't read either.
     @ViewBuilder private var restrictedBanner: some View {
         let session = model.session
-        let count = session.restrictedCount
+        let count = session.restrictedRoots.count
         if session.isReadingRestricted {
             banner(icon: nil, text: "Reading restricted folders…")
         } else if count > 0, let batcher = router?.registry.batcher {
-            if session.stillNeedsAccessCount != nil {
-                banner(icon: "lock", text: "\(Self.folders(count)) still need Full Disk Access",
+            if let left = session.stillNeedsAccessCount {
+                banner(icon: "lock", text: "\(Self.folders(left)) still need Full Disk Access",
                        action: ("Grant Access…", { batcher.coordinator.reopenAccessSheet() }))
             } else {
                 banner(icon: "lock", text: "\(Self.folders(count)) couldn’t be read",

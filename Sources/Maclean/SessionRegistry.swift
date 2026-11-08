@@ -103,6 +103,7 @@ import Observation
         }
         sessions[key] = nil
         order.removeAll { $0 == key }
+        session.isForgotten = true
         session.cancel()
         session.uncollectAll()
         if presented === session { presented = nil }
@@ -131,7 +132,7 @@ import Observation
 
     private func finished(_ session: ScanSession) {
         // Spec §4.2: each finished scan with restricted folders asks once, right away.
-        if let batcher, sessions[session.rootPath] === session, session.restrictedCount > 0,
+        if let batcher, sessions[session.rootPath] === session, !session.restrictedRoots.isEmpty,
            AdminBatcher.asksAutomatically(defaults) {
             Task { await session.readRestricted(using: batcher) }
         }

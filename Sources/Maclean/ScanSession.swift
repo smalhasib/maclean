@@ -39,12 +39,20 @@ import Observation
     private(set) var carryOverDropped: Int?
     /// `.restricted` nodes in the finished tree (folders this user couldn't open).
     private(set) var restrictedCount = 0
-    /// After a root read of the restricted folders: how many are still
-    /// unreadable (root refused, so they need Full Disk Access). Nil before a
-    /// read of this tree, or after a cancelled or failed one.
+    /// The restricted folders a root read would ask for: restricted nodes
+    /// with no restricted ancestor, never a mount point. The dialog's and the
+    /// banner's count.
+    private(set) var restrictedRoots: [String] = []
+    /// After a root read of the restricted folders: how many of them are
+    /// still unreadable (root refused, so they need Full Disk Access). Nil
+    /// before a read of this tree, or after a cancelled or failed one.
     private(set) var stillNeedsAccessCount: Int?
-    /// True while `readRestricted` waits for the dialog or reads the result.
-    private(set) var isReadingRestricted = false
+    /// The tree a `readRestricted` is waiting on or reading for.
+    private var readingTree: FileTree?
+    /// True while a read for the current tree waits for the dialog or reads the result.
+    var isReadingRestricted: Bool { readingTree != nil && readingTree === tree }
+    /// Set when the registry forgets this session: it never asks for a password again.
+    var isForgotten = false
     /// Protection environment for collect-time refusals. Read fresh on each
     /// use (it checks mounts), unless a test sets it.
     var protection: ProtectionEnvironment {
@@ -138,6 +146,7 @@ import Observation
             history.remap { tree.node(atPath: $0) != nil }
             view = carriedOver(to: tree)
             restrictedCount = Self.restrictedCount(in: tree)
+            restrictedRoots = Self.restrictedRoots(in: tree)
             stillNeedsAccessCount = nil
             state = .finished(tree)
             onFinish?(self)
@@ -188,21 +197,27 @@ import Observation
     /// tree; the collector carries over by path. A cancel or failure leaves
     /// the tree as it is. Results are dropped if the tree was replaced or a
     /// delete started meanwhile (its node ids belong to the current tree).
+    /// A read still queued for the dialog when its tree is replaced (rescan)
+    /// or its session forgotten gives way and never prompts; a forgotten
+    /// session never submits.
     func readRestricted(using batcher: AdminBatcher) async {
-        guard !isReadingRestricted, !isDeleting, let tree, restrictedCount > 0 else { return }
-        let paths = Self.restrictedRoots(in: tree)
-        guard !paths.isEmpty else { return }
-        isReadingRestricted = true
-        defer { isReadingRestricted = false }
+        guard !isForgotten, !isReadingRestricted, !isDeleting, let tree, !restrictedRoots.isEmpty else { return }
+        let paths = restrictedRoots
+        readingTree = tree
+        defer { if readingTree === tree { readingTree = nil } }
         let subtrees: [String: FileTree]
         do {
             let (file, sha256) = try AdminRead.writePathsFile(paths)
-            defer { AdminDelete.removeItemsFile(file) }
+            defer { AdminRead.removePathsFile(file) }
             let outDir = try AdminRead.makeOutDir()
             defer { try? FileManager.default.removeItem(at: outDir) }
             let arguments = AdminRead.arguments(root: tree.rootPath, pathsFile: file.path, sha256: sha256,
                                                 outDir: outDir.path, uid: getuid())
-            let lines = AdminRead.decode(try await batcher.submit(arguments, reason: Self.readPrompt(count: restrictedCount)))
+            let output = try await batcher.submit(arguments, reason: Self.readPrompt(count: paths.count)) { [weak self] in
+                guard let self else { return false }
+                return !self.isForgotten && self.tree === tree && !self.isDeleting
+            }
+            let lines = AdminRead.decode(output)
             subtrees = await Self.readArchives(paths: paths, lines: lines, outDir: outDir.path)
         } catch {
             return
@@ -210,8 +225,8 @@ import Observation
         guard self.tree === tree, !isDeleting, task == nil else { return }
         let grafted = await Task.detached(priority: .userInitiated) { tree.grafting(subtrees) }.value
         guard self.tree === tree, !isDeleting, task == nil else { return }
-        let remaining = Self.restrictedCount(in: grafted)
-        stillNeedsAccessCount = remaining
+        let remainingRoots = Self.restrictedRoots(in: grafted)
+        stillNeedsAccessCount = remainingRoots.count
         guard grafted !== tree else { return }
         let removed = view.map { v in v.removed.map { tree.path(of: $0) } } ?? []
         carryOver = view.map { v in v.collected.map { tree.path(of: $0) } }
@@ -219,7 +234,8 @@ import Observation
         newView.markDeleted(removed.compactMap { grafted.node(atPath: $0) })
         history.remap { grafted.node(atPath: $0) != nil }
         view = newView
-        restrictedCount = remaining
+        restrictedCount = Self.restrictedCount(in: grafted)
+        restrictedRoots = remainingRoots
         state = .finished(grafted)
     }
 
