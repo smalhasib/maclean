@@ -1,13 +1,17 @@
 #!/bin/sh
 # Builds Maclean in release and assembles .build/Maclean.app (no Xcode needed).
 # Signs ad hoc unless MACLEAN_SIGN_IDENTITY names a signing identity.
+# MACLEAN_UNIVERSAL=1 builds for both Apple silicon and Intel.
 set -eu
 
 cd "$(dirname "$0")/.."
 
-swift build -c release --product Maclean
-swift build -c release --product maclean-scan
-bin_dir="$(swift build -c release --show-bin-path)"
+arch_flags=""
+if [ "${MACLEAN_UNIVERSAL:-0}" = 1 ]; then arch_flags="--arch arm64 --arch x86_64"; fi
+# arch_flags is split on purpose.
+swift build -c release $arch_flags --product Maclean
+swift build -c release $arch_flags --product maclean-scan
+bin_dir="$(swift build -c release $arch_flags --show-bin-path)"
 
 app=".build/Maclean.app"
 rm -rf "$app"

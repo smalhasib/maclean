@@ -2,10 +2,9 @@ import AppKit
 import MacleanCore
 import SwiftUI
 
-/// Where Help points. nil until the project's repository exists; the Help
-/// items are hidden until then.
+/// Where Help points.
 enum ProjectLinks {
-    static let repository: URL? = nil
+    static let repository: URL? = URL(string: "https://github.com/smalhasib/maclean")
     static var help: URL? { repository?.appending(path: "blob/main/README.md") }
     static var issues: URL? { repository?.appending(path: "issues/new") }
 }
