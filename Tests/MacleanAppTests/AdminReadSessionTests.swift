@@ -419,3 +419,22 @@ private let measureReason1 = "Maclean needs to measure 1 system items for Smart 
     #expect(root.arguments.count == 2)
     #expect(session.restrictedCount == 0)
 }
+
+/// A measure superseded (a new check) while waiting for its dialog is dropped
+/// by the batcher: no dialog at all.
+@Test @MainActor func supersededMeasureNeverShowsDialog() async throws {
+    let coordinator = PromptCoordinator(hasAccess: { false })
+    coordinator.launch()   // the access sheet holds the batcher
+    let root = Root()
+    let batcher = AdminBatcher(runner: root, coordinator: coordinator)
+    let c = smartClean(root, batcher: batcher)
+    c.publish(unknownAdminReport(), autoMeasure: true)
+    await until { batcher.pendingCount == 1 }
+    c.check()   // supersedes the measure
+    await until { !c.isChecking }
+    coordinator.continueWithoutAccess()
+    await until { batcher.pendingCount == 0 }
+    try? await Task.sleep(for: .milliseconds(100))
+    #expect(root.prompts.isEmpty)
+    #expect(root.arguments.isEmpty)
+}

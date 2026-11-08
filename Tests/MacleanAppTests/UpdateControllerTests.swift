@@ -162,6 +162,32 @@ private func freshDefaults() -> UserDefaults {
     #expect(coordinator.sheet == .update)
 }
 
+/// Spec §6a.3: behind the coordinator's own Full Disk Access sheet (the only
+/// reason `canPresent` is false) the update sheet queues in the coordinator,
+/// ahead of a waiting admin job.
+@MainActor @Test func updateSheetQueuesBehindAccessSheetAheadOfAdmin() async {
+    let net = FakeNet()
+    let coordinator = PromptCoordinator(hasAccess: { false })
+    coordinator.launch()
+    let controller = UpdateController(
+        currentVersion: "0.2.0", bundleURL: URL(fileURLWithPath: "/Users/x/Maclean.app"), fetch: { try await net.fetch($0) },
+        defaults: freshDefaults(), coordinator: coordinator, installer: FakeInstaller(),
+        canPresent: { [unowned coordinator] in coordinator.sheet == nil }, presentPoll: .seconds(60))
+    var adminRan = false
+    let admin = Task { try await coordinator.admin("r") { adminRan = true } }
+    controller.checkAutomatically()
+    await controller.checkTask?.value
+    for _ in 0..<20 { await Task.yield() }
+    #expect(coordinator.sheet == .fullDiskAccess(granted: false))
+    coordinator.continueWithoutAccess()
+    #expect(coordinator.sheet == .update)   // at once, not after a 60 s poll
+    for _ in 0..<20 { await Task.yield() }
+    #expect(!adminRan)
+    controller.later()
+    try? await admin.value
+    #expect(adminRan)
+}
+
 @MainActor @Test func homebrewActionIsBrew() async {
     let cask = Scratch()
     try! FileManager.default.createDirectory(atPath: cask.path + "/maclean", withIntermediateDirectories: true)

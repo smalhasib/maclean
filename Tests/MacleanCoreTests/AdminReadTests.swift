@@ -221,3 +221,34 @@ private func entries(_ dir: URL) -> [String] {
     #expect(lines.count == 1 && lines[0].error != nil && lines[0].file == nil)
     #expect(entries(out).isEmpty)
 }
+
+/// R13: the out dir must resolve under the allowed prefix (default `/private/var/folders/`).
+@Test func readRefusesOutDirOutsideAllowedPrefix() async throws {
+    let t = TempDir()
+    defer { withExtendedLifetime(t) {} }
+    t.file("r/a/f", bytes: 5000)
+    let paths = [t.url("r/a")]
+    // A good 0700 out dir under the per-user temp folders.
+    let out = try AdminRead.makeOutDir()
+    defer { removeDir(out) }
+
+    // Another prefix refuses it, without writing anything.
+    let refused = await AdminRead.perform(request(root: t.url("r"), paths: paths, outDir: out),
+                                          allowedOutDirPrefix: t.url("elsewhere/"), scan: scanner)
+    #expect(refused.allSatisfy { $0.file == nil && $0.error == AdminRead.badOutDir })
+    #expect(entries(out).isEmpty)
+
+    // Its own parent as the prefix accepts it.
+    let parent = try #require(ScanBoundary.canonicalPath(out.deletingLastPathComponent().path))
+    let accepted = await AdminRead.perform(request(root: t.url("r"), paths: paths, outDir: out),
+                                           allowedOutDirPrefix: parent + "/", scan: scanner)
+    #expect(accepted.first?.error == nil && accepted.first?.file != nil)
+
+    // The default prefix refuses a good 0700 dir outside /private/var/folders/.
+    var template = Array("/private/tmp/maclean-out-XXXXXX".utf8CString)
+    let outside = try #require(mkdtemp(&template).map { URL(fileURLWithPath: String(cString: $0)) })
+    defer { removeDir(outside) }
+    let defaulted = await AdminRead.perform(request(root: t.url("r"), paths: paths, outDir: outside), scan: scanner)
+    #expect(defaulted.allSatisfy { $0.file == nil && $0.error == AdminRead.badOutDir })
+    #expect(entries(outside).isEmpty)
+}

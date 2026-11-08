@@ -118,13 +118,17 @@ public enum AdminRead {
     /// `outDir/<i>.mtree`: created `O_EXCL | O_NOFOLLOW` under a temp name,
     /// mode 0600, `fchown`ed to `uid` when running as root, then renamed into
     /// place without replacing anything.
-    public static func perform(_ request: Request,
+    /// The out dir must also resolve (its open directory's path) under
+    /// `allowedOutDirPrefix`, the per-user temporary folders `makeOutDir` uses
+    /// (R13); tests pass another prefix.
+    public static func perform(_ request: Request, allowedOutDirPrefix: String = outDirPrefix,
                                scan: (String, ScanBoundary) async throws -> FileTree) async -> [Line] {
         func failAll(_ error: String) -> [Line] {
             request.paths.map { Line(path: $0, file: nil, error: error) }
         }
         guard request.paths.count <= maxPaths else { return failAll(outsideTheScan) }
-        guard request.uid != 0, let dirFD = openOutDir(request.outDir, uid: request.uid) else {
+        guard request.uid != 0,
+              let dirFD = openOutDir(request.outDir, uid: request.uid, allowedPrefix: allowedOutDirPrefix) else {
             return failAll(badOutDir)
         }
         defer { close(dirFD) }
@@ -215,18 +219,30 @@ public enum AdminRead {
         return .success((fd, UInt64(st.st_ino), st.st_dev))
     }
 
+    /// Where `makeOutDir`'s folders resolve: the per-user temporary folders.
+    public static let outDirPrefix = "/private/var/folders/"
+
     /// The open out dir, or nil unless it is a real directory (not a symlink)
-    /// with mode 0700 owned by `uid`.
-    static func openOutDir(_ path: String, uid: uid_t) -> Int32? {
+    /// with mode 0700 owned by `uid`, whose canonical path (read back from the
+    /// open fd, so it can't be swapped) is under `allowedPrefix`.
+    static func openOutDir(_ path: String, uid: uid_t, allowedPrefix: String = outDirPrefix) -> Int32? {
         let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard fd >= 0 else { return nil }
         var st = stat()
         guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR, (st.st_mode & 0o7777) == 0o700,
-              st.st_uid == uid else {
+              st.st_uid == uid, let resolved = openPath(fd),
+              resolved.hasPrefix(allowedPrefix.hasSuffix("/") ? allowedPrefix : allowedPrefix + "/") else {
             close(fd)
             return nil
         }
         return fd
+    }
+
+    /// The canonical path of the open `fd` (`F_GETPATH`).
+    static func openPath(_ fd: Int32) -> String? {
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard fcntl(fd, F_GETPATH, &buffer) == 0 else { return nil }
+        return String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
     /// Writes `tree` to `name` in the directory `dirFD`; false on any failure

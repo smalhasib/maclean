@@ -257,15 +257,17 @@ import Observation
         state = .available(latest)
     }
 
-    /// Asks the coordinator for the sheet once no other sheet is on screen.
+    /// Asks the coordinator for the sheet (spec §6a.3). Behind the
+    /// coordinator's own sheet it queues there at once (Full Disk Access, then
+    /// update, then admin); it polls only while another view's sheet is up.
     private func requestSheet() {
         guard coordinator.sheet != .update, presentTask == nil else { return }
-        if canPresent() {
+        if coordinator.sheet != nil || canPresent() {
             coordinator.requestUpdateSheet()
             return
         }
         presentTask = Task {
-            while !canPresent() {
+            while coordinator.sheet == nil, !canPresent() {
                 try? await Task.sleep(for: presentPoll)
                 if Task.isCancelled { return }
             }

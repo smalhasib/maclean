@@ -5,13 +5,16 @@ import SwiftUI
 /// steps, and a way into System Settings; after the grant, a Relaunch button.
 struct FullDiskAccessSheet: View {
     let granted: Bool
+    /// Why Relaunch didn't happen (a delete is running).
+    let refusal: String?
     let onContinue: () -> Void
     let onDismissGranted: () -> Void
+    let onRelaunch: () -> Void
 
     private static let steps = [
         "Open System Settings › Privacy & Security › Full Disk Access",
         "Turn on Maclean",
-        "Maclean relaunches when you come back",
+        "Click Relaunch when you come back",
     ]
 
     var body: some View {
@@ -26,7 +29,10 @@ struct FullDiskAccessSheet: View {
                 Text("Relaunch Maclean to use it.")
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
-                Button("Relaunch") { Relauncher.relaunch() }
+                if let refusal {
+                    Text(refusal).secondaryText()
+                }
+                Button("Relaunch", action: onRelaunch)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
                     .keyboardShortcut(.defaultAction)

@@ -12,8 +12,16 @@ set -eu
 cd "$(dirname "$0")/.."
 
 if [ -z "${MACLEAN_SIGN_IDENTITY:-}" ]; then
-    if security find-identity -v -p codesigning | grep -q '"Maclean Release"'; then
+    # Count "Maclean Release" identities, trusted or not (`-v` lists only valid
+    # ones), stopping at "Valid identities only", which repeats the valid ones.
+    count="$(security find-identity -p codesigning |
+        awk '/Valid identities only/ { exit } index($0, "\"Maclean Release\"") { c++ } END { print c + 0 }')"
+    if [ "$count" -eq 1 ]; then
         MACLEAN_SIGN_IDENTITY="Maclean Release"
+    elif [ "$count" -gt 1 ]; then
+        echo "\"Maclean Release\" is in your Keychain $count times; codesign can't tell them apart." >&2
+        echo "Delete the extra copies in Keychain Access, or set MACLEAN_SIGN_IDENTITY to one certificate's hash." >&2
+        exit 1
     else
         echo "No signing identity. Run scripts/make-signing-cert.sh once, or set MACLEAN_SIGN_IDENTITY." >&2
         exit 1
@@ -26,6 +34,24 @@ if [ ! -f "$key" ]; then
     echo "No update key at $key." >&2
     echo "Create one with: mkdir -p ~/.config/maclean && swift scripts/update-key.swift generate ~/.config/maclean/update-key" >&2
     echo "then put the printed public key in Sources/MacleanCore/UpdateKey.swift. Or set MACLEAN_UPDATE_KEY." >&2
+    exit 1
+fi
+
+# The key must match the public key built into the app, or every installed copy
+# refuses the update. Checked before the (slow) build and before signing.
+placeholder="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+embedded="$(sed -n 's/.*publicKeyBase64 = "\([^"]*\)".*/\1/p' Sources/MacleanCore/UpdateKey.swift)"
+if [ -z "$embedded" ] || [ "$embedded" = "$placeholder" ]; then
+    echo "Sources/MacleanCore/UpdateKey.swift still has the all-zero placeholder key; no copy would accept this release." >&2
+    echo "Put your public key there first (swift scripts/update-key.swift public \"$key\")." >&2
+    exit 1
+fi
+public="$(swift scripts/update-key.swift public "$key")"
+if [ "$public" != "$embedded" ]; then
+    echo "The update key $key doesn't match the public key in Sources/MacleanCore/UpdateKey.swift;" >&2
+    echo "every installed copy would refuse this release." >&2
+    echo "  key file: $public" >&2
+    echo "  embedded: $embedded" >&2
     exit 1
 fi
 

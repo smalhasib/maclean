@@ -65,10 +65,7 @@ struct MacleanApp: App {
             currentVersion: version, bundleURL: Bundle.main.bundleURL, fetch: UpdateFetch.fetch(version: version),
             defaults: .standard, coordinator: coordinator, installer: UpdateInstaller(),
             // Spec §5.3: never during a delete or a Smart Clean run.
-            isBusy: { [unowned self] in
-                if case .cleaning = smartClean.phase { return true }
-                return registry.all.contains { $0.isDeleting }
-            },
+            isBusy: { [unowned self] in isRunning },
             // A sheet set while another (Smart Clean's review) is up may never show.
             canPresent: { NSApp.windows.allSatisfy { $0.attachedSheet == nil } },
             // Straight to the runner, not the batcher: the coordinator holds admin
@@ -80,9 +77,19 @@ struct MacleanApp: App {
             download: UpdateFetch.download(version: version))
     }()
 
+    /// A delete or a Smart Clean clean is in progress.
+    var isRunning: Bool {
+        if case .cleaning = smartClean.phase { return true }
+        return registry.all.contains { $0.isDeleting }
+    }
+
     func applicationWillFinishLaunching(_ notification: Notification) {
         _ = router   // takes over presenting finished scans before any starts
         registry.batcher = adminBatcher
+        // R11: a sheet raised while the main window is closed (window per scan) brings it back.
+        coordinator.onSheetRaised = { [unowned self] in router.showLauncher() }
+        // Never relaunch mid-delete.
+        coordinator.isBusy = { [unowned self] in isRunning }
         NSWindow.allowsAutomaticWindowTabbing = true
         // Run unbundled (`swift run Maclean`), the process would otherwise get
         // no Dock icon and no focus.
@@ -155,15 +162,17 @@ struct RootView: View {
         .environment(\.windowRouter, router)
         // The coordinator's sheet gates admin jobs app-wide, so it is presented here, on
         // whatever fills the main window (start screen or a result), never on one view.
-        // Result windows need none: the main window is always open while the app runs.
+        // Result windows need none: raising a sheet first brings the main window
+        // back if it was closed (the coordinator's `onSheetRaised`, R11).
         // One sheet for both kinds: going from one straight to the other swaps its
         // content instead of dismissing and presenting in one update.
         .sheet(isPresented: Binding(get: { coordinator.sheet != nil },
                                     set: { if !$0 { dismissSheet() } })) {
             switch coordinator.sheet {
             case .fullDiskAccess(let granted):
-                FullDiskAccessSheet(granted: granted, onContinue: coordinator.continueWithoutAccess,
-                                    onDismissGranted: coordinator.dismissSheet)
+                FullDiskAccessSheet(granted: granted, refusal: coordinator.relaunchRefusal,
+                                    onContinue: coordinator.continueWithoutAccess,
+                                    onDismissGranted: coordinator.dismissSheet, onRelaunch: coordinator.relaunch)
                     .interactiveDismissDisabled(!granted)
             case .update:
                 UpdateSheet(controller: updates)

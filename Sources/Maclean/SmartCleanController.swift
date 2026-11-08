@@ -263,7 +263,8 @@ import Observation
             let arguments = AdminMeasure.arguments(pathsFile: file.path, sha256: sha256, environment: env)
             let prompt = Self.measurePrompt(count: paths.count)
             let output = if let batcher {
-                try await batcher.submit(arguments, reason: prompt)
+                // A measure superseded while waiting (a new check) never shows the dialog.
+                try await batcher.submit(arguments, reason: prompt, isWanted: { mine == self.generation })
             } else {
                 try await admin.run(arguments, prompt: prompt)
             }

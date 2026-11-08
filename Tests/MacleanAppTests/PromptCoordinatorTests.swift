@@ -57,7 +57,9 @@ private final class Access: @unchecked Sendable {
     coordinator.continueWithoutAccess()
     access.granted = true
     coordinator.becameActive()
-    #expect(coordinator.sheet == .fullDiskAccess(granted: true))
+    // R10: no sheet; the notice switches to Relaunch.
+    #expect(coordinator.sheet == nil)
+    #expect(coordinator.accessGranted)
 }
 
 @MainActor @Test func activationWithAccessAndNothingShowingStaysQuiet() {
@@ -153,7 +155,7 @@ private final class Access: @unchecked Sendable {
     #expect(coordinator.sheet == .fullDiskAccess(granted: false))
 }
 
-@MainActor @Test func grantDuringUpdateSheetShowsGrantedAfterwards() {
+@MainActor @Test func grantDuringUpdateSheetOnlySetsTheFlag() {
     let (coordinator, access) = make(false)
     coordinator.launch()
     coordinator.continueWithoutAccess()
@@ -162,7 +164,9 @@ private final class Access: @unchecked Sendable {
     coordinator.becameActive()
     #expect(coordinator.sheet == .update)
     coordinator.dismissSheet()
-    #expect(coordinator.sheet == .fullDiskAccess(granted: true))
+    // R10: no access sheet afterwards either; the notice offers Relaunch.
+    #expect(coordinator.sheet == nil)
+    #expect(coordinator.accessGranted && coordinator.showsAccessNotice)
 }
 
 @MainActor @Test func grantedSheetDismissedWithUpdatePendingShowsUpdate() {
@@ -203,4 +207,74 @@ private final class Access: @unchecked Sendable {
     coordinator.dismissSheet()
     try? await task.value
     #expect(ran)
+}
+
+// MARK: - Final review fixes (R10, R11, Later, Relaunch)
+
+@MainActor @Test func grantWithNoSheetOnlySetsTheFlag() {
+    let (coordinator, access) = make(false)
+    coordinator.launch()
+    coordinator.continueWithoutAccess()
+    var raised = 0
+    coordinator.onSheetRaised = { raised += 1 }
+    access.granted = true
+    coordinator.becameActive()
+    #expect(coordinator.sheet == nil)   // the notice offers Relaunch instead
+    #expect(coordinator.accessGranted)
+    #expect(coordinator.showsAccessNotice)
+    #expect(raised == 0)
+}
+
+@MainActor @Test func grantWhileAccessSheetShowingSwitchesToGranted() {
+    let (coordinator, access) = make(false)
+    coordinator.launch()
+    access.granted = true
+    coordinator.becameActive()
+    #expect(coordinator.sheet == .fullDiskAccess(granted: true))
+    #expect(coordinator.accessGranted)
+}
+
+@MainActor @Test func everyRaisedSheetCallsOnSheetRaised() {
+    let (coordinator, _) = make(false)
+    var raised: [PromptCoordinator.Sheet] = []
+    coordinator.onSheetRaised = { [unowned coordinator] in raised.append(coordinator.sheet!) }
+    coordinator.launch()
+    coordinator.requestUpdateSheet()        // queued behind the access sheet
+    coordinator.continueWithoutAccess()     // the update sheet takes its place
+    coordinator.dismissSheet()
+    coordinator.reopenAccessSheet()
+    #expect(raised == [.fullDiskAccess(granted: false), .update, .fullDiskAccess(granted: false)])
+}
+
+@MainActor @Test func laterOnGrantedSheetShowsRelaunchNotice() {
+    let (coordinator, access) = make(false)
+    coordinator.launch()
+    access.granted = true
+    coordinator.becameActive()
+    coordinator.dismissSheet()   // Later
+    #expect(coordinator.sheet == nil)
+    #expect(coordinator.showsAccessNotice)
+    #expect(coordinator.accessGranted)
+}
+
+@MainActor @Test func relaunchRefusedWhileARunIsInProgress() {
+    let (coordinator, _) = make(true)
+    var busy = true
+    var relaunched = 0
+    coordinator.isBusy = { busy }
+    coordinator.relauncher = { relaunched += 1 }
+    coordinator.relaunch()
+    #expect(relaunched == 0)
+    #expect(coordinator.relaunchRefusal == "Finish the current delete first.")
+    busy = false
+    coordinator.relaunch()
+    #expect(relaunched == 1)
+    #expect(coordinator.relaunchRefusal == nil)
+}
+
+@MainActor @Test func accessIsGrantedProbesFresh() {
+    let (coordinator, access) = make(false)
+    #expect(!coordinator.accessIsGranted())
+    access.granted = true
+    #expect(coordinator.accessIsGranted())
 }

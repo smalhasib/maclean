@@ -243,10 +243,10 @@ struct StartView: View {
         HStack(spacing: 8) {
             Image(systemName: "lock.fill").secondaryText()
             if coordinator.accessGranted {
-                Text("Full Disk Access is on. Relaunch Maclean to use it.")
+                Text(coordinator.relaunchRefusal ?? "Full Disk Access is on. Relaunch Maclean to use it.")
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
-                Button("Relaunch") { Relauncher.relaunch() }.fixedSize()
+                Button("Relaunch") { coordinator.relaunch() }.fixedSize()
             } else {
                 Text("Scans will miss protected folders —")
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true)
