@@ -26,11 +26,13 @@ struct ResultView: View {
     var body: some View {
         VStack(spacing: 0) {
             BreadcrumbBar(model: model, onDisks: onDisks)
+                .guideRegion(.breadcrumbs)
             Separator()
             ResultBanners(model: model)
             HStack(spacing: 0) {
                 SunburstView(model: model)
                     .frame(minWidth: 220, maxWidth: .infinity, maxHeight: .infinity)
+                    .guideRegion(.chart)
                     // A collected item dragged out of the panel is put back.
                     .onDrop(of: [.macleanNode],
                             delegate: ChartDropDelegate(model: model, targeted: chartTargeted.projectedValue))
@@ -54,9 +56,11 @@ struct ResultView: View {
                 Separator(vertical: true)
                 SideListView(model: model)
                     .frame(width: 280)
+                    .guideRegion(.list)
             }
             Separator()
             CollectorBar(model: model)
+                .guideRegion(.collector)
         }
         .background(GeometryReader { proxy in
             Color.clear
@@ -70,6 +74,13 @@ struct ResultView: View {
         .background(WindowGrower(minimum: Self.minimumSize) { grown.wrappedValue = true })
         .background(ResultWindowBridge(model: model, router: router, title: model.name(of: model.currentNode)))
         .environment(\.windowRouter, router)
+        // The chart walkthrough: on its own the first time a result opens, and from Help any time.
+        .overlayPreferenceValue(GuideRegionKey.self) { GuideOverlay(model: model, regions: $0) }
+        .task {
+            // After the window has grown into place, so the spotlights land on the real layout.
+            try? await Task.sleep(for: .milliseconds(900))
+            model.showGuideIfFirstTime()
+        }
         // The session's collector overlay changed (in this window or another on the session).
         .onChange(of: model.session.view?.generation) { _, _ in model.viewDidChange() }
         .onChange(of: model.session.carryOverDropped, initial: true) { _, _ in model.showCarryOverNote() }

@@ -176,6 +176,34 @@ import Observation
                   ownsSessionHistory: ownsSessionHistory, defaults: old.defaults)
     }
 
+    // MARK: Graph guide
+
+    /// The step of the chart walkthrough on screen; nil when it isn't showing.
+    private(set) var guideStep: Int?
+
+    /// Shows the walkthrough the first time a result is opened. It counts as seen as soon as it shows.
+    func showGuideIfFirstTime() {
+        guard !defaults.bool(forKey: GraphGuide.seenKey) else { return }
+        startGuide()
+    }
+
+    /// Help › Show Graph Guide, and the first-time start.
+    func startGuide() {
+        defaults.set(true, forKey: GraphGuide.seenKey)
+        guideStep = 0
+    }
+
+    func guideNext() {
+        guard let step = guideStep else { return }
+        guideStep = step + 1 < GraphGuide.steps.count ? step + 1 : nil
+    }
+
+    func guideBack() {
+        if let step = guideStep, step > 0 { guideStep = step - 1 }
+    }
+
+    func endGuide() { guideStep = nil }
+
     // MARK: Navigation
 
     /// Drills into a folder (or a package, for Show Package Contents).

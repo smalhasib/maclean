@@ -51,10 +51,25 @@ struct AppCommands: Commands {
         }
         CommandGroup(replacing: .help) {
             if let help = ProjectLinks.help, let issues = ProjectLinks.issues {
+                Button("Show Graph Guide") { Self.showGraphGuide(router) }
                 Button("Maclean Help") { NSWorkspace.shared.open(help) }
                 Button("Report an Issue") { NSWorkspace.shared.open(issues) }
             }
         }
+    }
+}
+
+extension AppCommands {
+    /// Plays the chart walkthrough on the front result. Without one there is nothing to point at, so say so.
+    @MainActor static func showGraphGuide(_ router: WindowRouter) {
+        if let model = router.frontModel {
+            model.startGuide()
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Open a scan result first"
+        alert.informativeText = "The graph guide walks through a result's chart. Scan a disk or folder, then choose Help › Show Graph Guide."
+        alert.runModal()
     }
 }
 

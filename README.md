@@ -50,7 +50,7 @@ scripts/build-app.sh && open .build/Maclean.app
 
 1. **Grant Full Disk Access** when Maclean asks, or macOS hides folders like Mail and Messages and totals come out low. Maclean asks again at launch until it's on. For folders only an administrator can open, it asks for your password once per scan; turn that off in Settings.
 2. **Pick a disk or folder** on the start screen, or choose File › Scan Folder… (⌘O).
-3. **Explore the map.** Click a segment to go in, the centre to go back out. Hover for sizes. Click the eye on a row (or right-click › Preview, or press Space) to see the file itself in its own window: images, video, audio, PDF, text and SVG, plus anything else Quick Look can open.
+3. **Explore the map.** Click a segment to go in, the centre to go back out. Hover for sizes. The first time, a short guide walks you through the chart (Help › Show Graph Guide plays it again). Click the eye on a row (or right-click › Preview, or press Space) to see the file itself in its own window: images, video, audio, PDF, text and SVG, plus anything else Quick Look can open.
 4. **Collect what you don't need.** Drag items to the collector bar (or press ⌘⌫). Folders shrink as you collect, so you see the space you'll get back before anything is deleted.
 5. **Delete.** A 5-second countdown, with Cancel, then the items go. Everything is re-checked right before removal. Turn on Settings › Move to Trash to use the Trash instead.
 6. **Or let Smart Clean find it.** It lists caches, logs, build output and leftovers of removed apps for you to review (⇧⌘K). Nothing is deleted until you tick items and confirm.
