@@ -28,6 +28,19 @@ import SwiftUI
         return .ok
     }
 
+    /// Opens the panel for `path`, or points an open panel at it (the explicit Preview actions).
+    @discardableResult
+    static func show(path: String) -> ActionResult {
+        guard Actions.exists(path) else { return .missing }
+        url = URL(fileURLWithPath: path)
+        if isVisible {
+            QLPreviewPanel.shared().reloadData()
+        } else {
+            QLPreviewPanel.shared().makeKeyAndOrderFront(nil)
+        }
+        return .ok
+    }
+
     /// Follows the selection while the panel is open.
     static func follow(path: String) {
         guard isVisible, Actions.exists(path), url?.path != path else { return }

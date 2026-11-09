@@ -46,6 +46,8 @@ extension Notification.Name {
     /// The items and total size the countdown announces.
     private(set) var pendingCount = 0
     private(set) var pendingSize: Int64 = 0
+    /// The item's name when exactly one is pending (the confirmation names it).
+    private(set) var pendingName: String?
     /// True while the administrator prompt (and the helper) runs; Stop is
     /// unavailable then.
     var awaitingAdmin: Bool { batch?.awaitingAdmin ?? false }
@@ -60,6 +62,10 @@ extension Notification.Name {
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var stopRequested = false
     @ObservationIgnored private var report = DeleteReport()
+    /// Set by `requestDelete(item:)`: the run deletes only these, not the whole collector.
+    @ObservationIgnored private var subset: Set<NodeID>?
+    /// Items `requestDelete(item:)` had to collect itself; they go back if the delete is cancelled.
+    @ObservationIgnored private var autoCollected: [NodeID] = []
     /// The snapshot taken at `start()`, by path (for Delete Anyway).
     @ObservationIgnored private var entries: [String: Entry] = [:]
     /// The tree the snapshot's node ids belong to.
@@ -105,9 +111,36 @@ extension Notification.Name {
         guard phase == .idle, let session, !session.isDeleting, let view = session.view,
               !view.collected.isEmpty else { return }
         mode = defaults.bool(forKey: Self.trashKey) ? .trash : .permanent
+        subset = nil
+        autoCollected = []
         pendingCount = view.collected.count
         pendingSize = view.collectedSize
+        pendingName = view.collected.count == 1 ? view.tree.name(of: view.collected[0]) : nil
         phase = .confirming
+    }
+
+    /// Delete from one item's row (hover button, context menu): collects it if it isn't
+    /// collected yet, then asks. Only that item is deleted, whatever else is in the collector.
+    /// Returns why the item can't be deleted (protected locations are refused as in the
+    /// collector); nil when it asks, or when there's nothing to do.
+    @discardableResult
+    func requestDelete(item node: NodeID) -> Refusal? {
+        guard phase == .idle, let session, !session.isDeleting, let before = session.view else { return nil }
+        var added = false
+        if !before.collected.contains(node) {
+            if let refusal = session.collect([node]).first { return refusal.1 }
+            added = session.view?.collected.contains(node) == true
+            guard added else { return nil }   // hidden or gone
+        }
+        guard let view = session.view else { return nil }
+        mode = defaults.bool(forKey: Self.trashKey) ? .trash : .permanent
+        subset = [node]
+        autoCollected = added ? [node] : []
+        pendingCount = 1
+        pendingSize = view.tree.size(of: node)
+        pendingName = view.tree.name(of: node)
+        phase = .confirming
+        return nil
     }
 
     /// The confirmation was accepted: starts the countdown.
@@ -123,11 +156,21 @@ extension Notification.Name {
     func cancelConfirmation() {
         guard phase == .confirming else { return }
         phase = .idle
+        putBackAutoCollected()
+    }
+
+    /// A row's Delete collected the item only to delete it: if that falls through, it goes back.
+    private func putBackAutoCollected() {
+        let items = autoCollected
+        autoCollected = []
+        subset = nil
+        if !items.isEmpty { session?.uncollect(items) }
     }
 
     /// The alert's wording: what will be deleted and whether it can be undone.
-    static func confirmCopy(count: Int, size: Int64, mode: DeleteMode) -> (title: String, message: String) {
-        let items = count == 1 ? "1 item" : "\(count.formatted()) items"
+    static func confirmCopy(count: Int, size: Int64, mode: DeleteMode,
+                            name: String? = nil) -> (title: String, message: String) {
+        let items = count == 1 ? (name.map { "“\($0)”" } ?? "1 item") : "\(count.formatted()) items"
         if mode == .trash {
             return ("Move \(items) (\(SizeText.string(size))) to the Trash?",
                     "You can restore \(count == 1 ? "it" : "them") from the Trash until it's emptied.")
@@ -142,7 +185,10 @@ extension Notification.Name {
         guard phase == .idle, let session, !session.isDeleting, let view = session.view,
               !view.collected.isEmpty else { return }
         let tree = view.tree
-        let snapshot = view.collected.map { id in
+        let nodes = subset.map { s in view.collected.filter(s.contains) } ?? view.collected
+        guard !nodes.isEmpty else { return }
+        subset = nil
+        let snapshot = nodes.map { id in
             Entry(request: DeleteRequest(path: tree.path(of: id), inode: tree.inode(of: id), device: tree.device(of: id),
                                          size: tree.size(of: id), fileCount: tree.fileCount(of: id),
                                          isDirectory: tree.flags(of: id).contains(.directory)),
@@ -152,7 +198,7 @@ extension Notification.Name {
         entries = Dictionary(snapshot.map { ($0.request.path, $0) }, uniquingKeysWith: { a, _ in a })
         mode = defaults.bool(forKey: Self.trashKey) ? .trash : .permanent
         pendingCount = snapshot.count
-        pendingSize = view.collectedSize
+        pendingSize = nodes.reduce(0) { $0 + tree.size(of: $1) }
         report = DeleteReport()
         stopRequested = false
         session.isDeleting = true
@@ -166,6 +212,7 @@ extension Notification.Name {
                 do { try await clock.sleep(for: .seconds(1)) } catch { return }
             }
             guard !Task.isCancelled else { return }
+            autoCollected = []   // past the countdown: it's a delete now
             await run(snapshot, force: false)
         }
     }
@@ -178,7 +225,9 @@ extension Notification.Name {
         case .countdown:
             task?.cancel()
             task = nil
+            let putBack = autoCollected
             reset()
+            if !putBack.isEmpty { session?.uncollect(putBack) }
         case .running:
             if !awaitingAdmin { stopRequested = true }
         case .idle, .confirming, .summary:
@@ -272,6 +321,8 @@ extension Notification.Name {
     }
 
     private func reset() {
+        autoCollected = []
+        subset = nil
         phase = .idle
         entries = [:]
         tree = nil

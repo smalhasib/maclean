@@ -50,7 +50,7 @@ scripts/build-app.sh && open .build/Maclean.app
 
 1. **Grant Full Disk Access** when Maclean asks, or macOS hides folders like Mail and Messages and totals come out low. Maclean asks again at launch until it's on. For folders only an administrator can open, it asks for your password once per scan; turn that off in Settings.
 2. **Pick a disk or folder** on the start screen, or choose File › Scan Folder… (⌘O).
-3. **Explore the map.** Click a segment to go in, the centre to go back out. Hover for sizes. A preview pane under the list shows the file itself: images, video, audio, PDF, text and SVG, plus anything else Quick Look can open. Space opens the full Quick Look.
+3. **Explore the map.** Click a segment to go in, the centre to go back out. Hover for sizes. Click the eye on a row (or right-click › Preview, or press Space) to see the file itself in its own window: images, video, audio, PDF, text and SVG, plus anything else Quick Look can open.
 4. **Collect what you don't need.** Drag items to the collector bar (or press ⌘⌫). Folders shrink as you collect, so you see the space you'll get back before anything is deleted.
 5. **Delete.** A 5-second countdown, with Cancel, then the items go. Everything is re-checked right before removal. Turn on Settings › Move to Trash to use the Trash instead.
 6. **Or let Smart Clean find it.** It lists caches, logs, build output and leftovers of removed apps for you to review (⇧⌘K). Nothing is deleted until you tick items and confirm.
@@ -78,7 +78,7 @@ Maclean checks for updates once a day and installs signed releases. Choose Macle
 ## Features
 
 - Fast, parallel scans of whole disks or any folder; hard links and APFS clones counted once.
-- Interactive sunburst map with a side list of the largest items, and an in-window preview of the file under the pointer.
+- Interactive sunburst map with a side list of the largest items, and a preview window for any file, to see what it is before you delete it.
 - Collector to see the space you'll free before deleting.
 - Safe delete: countdown, re-check before removal, never crosses disks or follows swapped links, optional Trash.
 - Smart Clean for caches, logs, developer junk and app leftovers, with the reason for anything it skips.

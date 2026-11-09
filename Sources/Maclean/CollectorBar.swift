@@ -69,7 +69,7 @@ struct CollectorBar: View {
     private var confirmCopy: (title: String, message: String) {
         let controller = model.session.deletion
         return DeleteController.confirmCopy(count: controller.pendingCount, size: controller.pendingSize,
-                                            mode: controller.mode)
+                                            mode: controller.mode, name: controller.pendingName)
     }
 
     /// The bar's right side: the collected total and Delete, or the

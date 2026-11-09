@@ -114,9 +114,27 @@ struct ContextItem {
         if kind == .folder || kind == .package { model.open(node) }
     }
 
+    /// Opens the item in Quick Look's own window (or points the open one at it).
     func preview(_ node: NodeID) {
         let path = tree.path(of: node)
+        if QuickLookBridge.show(path: path) == .missing { model.reportMissing(node) }
+    }
+
+    /// Space: opens Quick Look, or closes it when it's already open.
+    func togglePreview(_ node: NodeID) {
+        let path = tree.path(of: node)
         if QuickLookBridge.toggle(path: path) == .missing { model.reportMissing(node) }
+    }
+
+    /// The row's hover buttons: Quick Look has nothing to show for a folder.
+    func canPreviewFromRow(_ node: NodeID) -> Bool { model.kind(of: node) == .file }
+
+    /// Files, folders and packages; not unreadable folders, other volumes or "smaller objects".
+    func canDeleteFromRow(_ node: NodeID) -> Bool {
+        switch model.kind(of: node) {
+        case .file, .folder, .package: true
+        case .restricted, .mountPoint, .smallerObjects: false
+        }
     }
 
     func showInFinder(_ node: NodeID) {
@@ -171,7 +189,7 @@ struct ContextItem {
         case KeyCode.return, KeyCode.enter:
             if let target = model.actionTarget { enter(target) }
         case KeyCode.space:
-            if let target = model.actionTarget { preview(target) }
+            if let target = model.actionTarget { togglePreview(target) }
         case KeyCode.left where chart: model.traverse(.previous)
         case KeyCode.right where chart: model.traverse(.next)
         case KeyCode.up: if chart { model.traverse(.out) } else { model.moveSelection(.up) }
@@ -215,6 +233,9 @@ struct ContextItem {
         }
         items.append(ContextItem(title: "Move “\(name)” to Collector", shortcut: .command("\u{8}", .command),
                                  separatorBefore: true) { model.collect([node]) })
+        if canDeleteFromRow(node) {
+            items.append(ContextItem(title: "Delete “\(name)”…") { model.delete(node) })
+        }
         return items
     }
 

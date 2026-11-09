@@ -117,8 +117,10 @@ import MacleanKit
     let m = model(session)
     let a = try #require(session.tree?.node(atPath: s.path + "/a"))
     let actions = ResultActions(model: m, router: nil)
-    let move = try #require(actions.contextItems(for: a).last)
+    let items = actions.contextItems(for: a)
+    let move = try #require(items.first { $0.title.hasPrefix("Move") })
     #expect(move.title == "Move “a” to Collector")
+    #expect(items.last?.title == "Delete “a”…")   // after Move, set apart as the destructive one
     move.action()
     #expect(m.view.collected == [a])
     #expect(actions.collectorItems(for: a).map(\.title)

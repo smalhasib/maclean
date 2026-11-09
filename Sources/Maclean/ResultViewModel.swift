@@ -41,14 +41,11 @@ import Observation
     enum LayoutChange { case navigation, overlay }
     private(set) var layoutChange = LayoutChange.navigation
 
-    var hovered: NodeID? { didSet { updatePreview() } }
+    var hovered: NodeID?
     private(set) var hoverSource: HoverSource = .chart
     /// The parent of the chart's "smaller objects" segment under the pointer.
     private(set) var hoveredSmallerObjects: NodeID?
-    var selected: NodeID? { didSet { updatePreview() } }
-    /// The file the preview pane shows: the one under the pointer, else the selected one. It stays
-    /// when the pointer leaves (so a video can be played); only a file that is hidden clears it.
-    private(set) var previewNode: NodeID?
+    var selected: NodeID?
     /// The list target whose "smaller objects" row was clicked open.
     var expandedTarget: NodeID?
     /// The toolbar control holding the keyboard focus (Tab cycle: toolbar →
@@ -104,23 +101,6 @@ import Observation
     var listTarget: NodeID {
         if hoverSource == .chart, let hovered { return hovered }
         return currentNode
-    }
-
-    /// Points the preview at `actionTarget` when that is a regular file; a folder or other
-    /// kind leaves the last file showing, unless that file has been hidden.
-    private func updatePreview() {
-        if let target = actionTarget, canPreview(target) {
-            if previewNode != target { previewNode = target }
-        } else if let current = previewNode, view.isHidden(current) {
-            previewNode = nil
-        }
-    }
-
-    /// Files only (not folders, packages, restricted or other-volume nodes), never a symlink,
-    /// and not one collected or deleted.
-    private func canPreview(_ node: NodeID) -> Bool {
-        let flags = tree.flags(of: node)
-        return kind(of: node) == .file && !flags.contains(.symlink) && !view.isHidden(node)
     }
 
     /// What keyboard actions apply to: under the pointer first, else the selection.
@@ -428,6 +408,14 @@ import Observation
         }
     }
 
+    /// Delete from the item's row: asks for confirmation, then deletes just that item. A
+    /// protected item is refused with the same message as the collector's.
+    func delete(_ node: NodeID) {
+        if let refusal = session.deletion.requestDelete(item: node) {
+            collectorRefusal = Notice(text: refusal.message(name: name(of: node)))
+        }
+    }
+
     /// Action › Move All Items from Current Folder to Collector.
     func collectAllInCurrentFolder() {
         collect(Array(view.children(of: currentNode)))
@@ -513,7 +501,6 @@ import Observation
         }
         if let h = hovered, view.isHidden(h) { hovered = nil }
         if let s = selected, view.isHidden(s) { selected = nil }
-        updatePreview()
         if let e = expandedTarget, view.isHidden(e) { expandedTarget = nil }
         if let p = previousFolder, view.isHidden(p) { previousFolder = nil }
         layout = Self.computeLayout(view: view, root: currentNode)

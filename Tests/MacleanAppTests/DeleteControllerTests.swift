@@ -541,3 +541,89 @@ private struct Fixture {
     #expect(trash.title.hasPrefix("Move 1 item"))
     #expect(trash.message.contains("Trash"))
 }
+
+// MARK: Deleting one item from its row (hover button, context menu)
+
+/// A scanned session with `collected` files collected and one more, extra.bin, not collected.
+@MainActor private func fixtureWithExtra(collected: Int) async throws -> (Fixture, NodeID) {
+    let s = Scratch()
+    for i in 0..<collected { s.file("f\(i).bin", bytes: 4096 * (i + 1)) }
+    s.file("extra.bin", bytes: 8192)
+    let session = await scannedSession(s)
+    let tree = try #require(session.tree)
+    let paths = (0..<collected).map { s.path + "/f\($0).bin" }
+    session.collect(paths.compactMap { tree.node(atPath: $0) })
+    let extra = try #require(tree.node(atPath: s.path + "/extra.bin"))
+    return (Fixture(scratch: s, session: session, paths: paths), extra)
+}
+
+@Test @MainActor func deletingOneItemAsksThenDeletesOnlyThatItem() async throws {
+    let (f, extra) = try await fixtureWithExtra(collected: 2)
+    let deleter = FakeDeleter(), clock = TestClock()
+    let c = controller(f, deleter, clock: clock)
+    #expect(c.requestDelete(item: extra) == nil)
+    #expect(c.phase == .confirming)
+    #expect(c.pendingCount == 1)
+    #expect(c.pendingName == "extra.bin")
+    #expect(c.pendingSize == f.session.tree!.size(of: extra))
+
+    c.confirmDelete()
+    let report = try #require(await runToSummary(c, clock))
+    let path = f.scratch.path + "/extra.bin"
+    #expect(report.deleted == [path])
+    #expect(deleter.calls.map(\.path) == [path])
+    #expect(collectedPaths(f) == f.paths.sorted())   // the others in the collector weren't touched
+}
+
+@Test @MainActor func cancellingTheConfirmationLeavesTheItemUncollected() async throws {
+    let (f, extra) = try await fixtureWithExtra(collected: 2)
+    let deleter = FakeDeleter(), clock = TestClock()
+    let c = controller(f, deleter, clock: clock)
+    c.requestDelete(item: extra)
+    c.cancelConfirmation()
+    #expect(c.phase == .idle)
+    #expect(collectedPaths(f) == f.paths.sorted())   // extra went back to where it was
+    #expect(deleter.calls.isEmpty)
+}
+
+@Test @MainActor func cancellingTheCountdownLeavesTheItemUncollected() async throws {
+    let (f, extra) = try await fixtureWithExtra(collected: 2)
+    let deleter = FakeDeleter(), clock = TestClock()
+    let c = controller(f, deleter, clock: clock)
+    c.requestDelete(item: extra)
+    c.confirmDelete()
+    await until { clock.sleeperCount > 0 }
+    c.cancel()
+    #expect(c.phase == .idle)
+    #expect(collectedPaths(f) == f.paths.sorted())
+    #expect(deleter.calls.isEmpty)
+}
+
+@Test @MainActor func deletingAnItemAlreadyInTheCollectorKeepsItThereWhenCancelled() async throws {
+    let (f, _) = try await fixtureWithExtra(collected: 2)
+    let deleter = FakeDeleter(), clock = TestClock()
+    let c = controller(f, deleter, clock: clock)
+    let first = try #require(f.session.tree?.node(atPath: f.paths[0]))
+    c.requestDelete(item: first)
+    #expect(c.pendingCount == 1)   // just that one, not the whole collector
+    c.cancelConfirmation()
+    #expect(collectedPaths(f) == f.paths.sorted())
+}
+
+@Test @MainActor func aProtectedItemIsRefusedWithoutAsking() async throws {
+    let (f, extra) = try await fixtureWithExtra(collected: 1)
+    f.session.protection.home = f.scratch.path + "/extra.bin"
+    let c = controller(f, FakeDeleter(), clock: TestClock())
+    #expect(c.requestDelete(item: extra) != nil)
+    #expect(c.phase == .idle)
+    #expect(collectedPaths(f) == f.paths.sorted())
+}
+
+@Test @MainActor func confirmCopyNamesASingleItem() {
+    let permanent = DeleteController.confirmCopy(count: 1, size: 4096, mode: .permanent, name: "photo.png")
+    #expect(permanent.title == "Delete “photo.png” (4 KB)?")
+    let trash = DeleteController.confirmCopy(count: 1, size: 4096, mode: .trash, name: "photo.png")
+    #expect(trash.title == "Move “photo.png” (4 KB) to the Trash?")
+    let many = DeleteController.confirmCopy(count: 3, size: 4096, mode: .permanent, name: nil)
+    #expect(many.title.hasPrefix("Delete 3 items"))
+}

@@ -28,7 +28,6 @@ struct SideListView: View {
                     if let row = model.selectedRow { proxy.scrollTo(row) }
                 }
             }
-            PreviewPane(model: model)
         }
         .font(.body)
     }
@@ -212,9 +211,11 @@ private struct RowHost: View {
     let parent: NodeID
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.windowRouter) private var router
 
     var body: some View {
         let c = model.colorInputs(child: node, index: index, parent: parent)
+        let items = ResultActions(model: model, router: router)
         ListRow(name: model.tree.name(of: node), size: model.view.size(of: node),
                 kind: ResultViewModel.kindWord(model.kind(of: node)),
                 color: SideListView.color(c.kind, top: c.top, ring: c.ring, dark: colorScheme == .dark,
@@ -222,12 +223,30 @@ private struct RowHost: View {
                 outlined: c.kind == .mountPoint, drillable: model.isDrillable(node),
                 // `hovered` is only read for list hovers, so chart hovers don't invalidate rows.
                 highlighted: model.hoverSource == .list && model.hovered == node,
-                selected: model.selected == node)
+                selected: model.selected == node,
+                actions: RowActions(canPreview: items.canPreviewFromRow(node), canDelete: items.canDeleteFromRow(node),
+                                    preview: { items.preview(node) }, delete: { model.delete(node) }))
             .equatable()
             // Drags carry only `org.maclean.node`, never a file URL.
             .onDrag { NodeDrag.provider(for: model.dragPayload(for: node)) }
             .contextMenu { ContextMenuContent(model: model, node: node) }
             .accessibilityAction { model.activate(node) }
+            .accessibilityAction(named: "Preview") { if items.canPreviewFromRow(node) { items.preview(node) } }
+            .accessibilityAction(named: "Delete") { if items.canDeleteFromRow(node) { model.delete(node) } }
+    }
+}
+
+/// What a row's hover buttons do. Equal when they offer the same buttons: the closures only
+/// capture this row's model and node, so they never differ otherwise (and a closure can't be
+/// compared, which `ListRow`'s `Equatable` needs to skip redraws).
+struct RowActions: Equatable {
+    let canPreview: Bool
+    let canDelete: Bool
+    let preview: () -> Void
+    let delete: () -> Void
+
+    static func == (a: RowActions, b: RowActions) -> Bool {
+        a.canPreview == b.canPreview && a.canDelete == b.canDelete
     }
 }
 
@@ -243,6 +262,7 @@ private struct ListRow: View, Equatable {
     let drillable: Bool
     let highlighted: Bool
     let selected: Bool
+    let actions: RowActions
 
     var body: some View {
         let row = HStack(spacing: 10) {
@@ -258,14 +278,22 @@ private struct ListRow: View, Equatable {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 8)
-            Text(SizeText.string(size))
-                .secondaryText()
-                .monospacedDigit()
-                .fixedSize()
-            Image(systemName: "chevron.right")
-                .imageScale(.small)
-                .foregroundStyle(.tertiary)
-                .opacity(drillable ? 1 : 0)
+            if highlighted, actions.canPreview || actions.canDelete {
+                // Only under the pointer: Preview opens the file in Quick Look's window, Delete asks first.
+                HStack(spacing: 2) {
+                    if actions.canPreview { actionButton("eye", label: "Preview", action: actions.preview) }
+                    if actions.canDelete { actionButton("trash", label: "Delete…", action: actions.delete, tint: .red) }
+                }
+            } else {
+                Text(SizeText.string(size))
+                    .secondaryText()
+                    .monospacedDigit()
+                    .fixedSize()
+                Image(systemName: "chevron.right")
+                    .imageScale(.small)
+                    .foregroundStyle(.tertiary)
+                    .opacity(drillable ? 1 : 0)
+            }
         }
         .padding(.horizontal, 10)
         .frame(maxHeight: .infinity)
@@ -282,6 +310,20 @@ private struct ListRow: View, Equatable {
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
 
         if highlighted { row.help(name) } else { row }
+    }
+
+    private func actionButton(_ symbol: String, label: String, action: @escaping () -> Void,
+                              tint: Color? = nil) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .imageScale(.medium)
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(tint ?? Color.secondary)
+        .help(label)
+        .accessibilityLabel(label)
     }
 }
 
