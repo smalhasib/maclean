@@ -1,4 +1,13 @@
 # Changelog
+## 0.6.0 - 2026-11-09
+
+### Features
+- Preview file contents in the result window
+
+
+### Fixes
+- Quit the old copy when an update relaunches
+
 ## 0.5.0 - 2026-11-08
 
 ### Features
