@@ -126,8 +126,8 @@ struct ContextItem {
         if QuickLookBridge.toggle(path: path) == .missing { model.reportMissing(node) }
     }
 
-    /// The row's hover buttons: Quick Look has nothing to show for a folder.
-    func canPreviewFromRow(_ node: NodeID) -> Bool { model.kind(of: node) == .file }
+    /// The row's hover Preview (the eye), beside Move to Collector: the same items.
+    func canPreviewFromRow(_ node: NodeID) -> Bool { canDeleteFromRow(node) }
 
     /// The hover Move to Collector button: the same items as Delete.
     func canCollectFromRow(_ node: NodeID) -> Bool { canDeleteFromRow(node) }

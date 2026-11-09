@@ -29,7 +29,7 @@ import MacleanCore
     let d = try #require(m.tree.node(atPath: s.path + "/d"))
     let actions = ResultActions(model: m, router: nil)
     #expect(actions.canPreviewFromRow(a))
-    #expect(!actions.canPreviewFromRow(d))   // Quick Look has nothing to show for a folder
+    #expect(actions.canPreviewFromRow(d))    // the eye sits beside the collect button on every item
     #expect(actions.canCollectFromRow(a))   // the hover button collects; Delete stays in the menu
     #expect(actions.canCollectFromRow(d))
     #expect(actions.canDeleteFromRow(a))
