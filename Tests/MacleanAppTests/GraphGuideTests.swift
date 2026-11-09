@@ -99,3 +99,44 @@ private func freshDefaults() -> UserDefaults { UserDefaults(suiteName: "guide-\(
     let tiny = GraphGuide.chartGeometry(in: CGRect(x: 0, y: 0, width: 100, height: 100))
     #expect(tiny.inner >= 40)
 }
+
+@Test @MainActor func theGuideSurvivesTheWindowGettingAFreshTree() async throws {
+    // A rescan, or the password read that adds the locked folders, gives the window a new model.
+    // The guide used to vanish mid-way because its step lived only in the old one.
+    let s = Scratch(); s.file("a.bin", bytes: 4096)
+    let session = await scannedSession(s)
+    let cache = ResultModelCache(ownsSessionHistory: false)
+    let first = try #require(cache.model(for: session, tree: session.tree))
+    first.startGuide()
+    first.guideNext()
+    first.guideNext()
+    #expect(first.guideStep == 2)
+
+    session.rescan()
+    while session.isScanning { try? await Task.sleep(for: .milliseconds(10)) }
+    let second = try #require(cache.model(for: session, tree: session.tree))
+    #expect(second !== first)           // really a different model
+    #expect(second.guideStep == 2)      // and the guide is still where it was
+}
+
+@Test @MainActor func rescanWaitsWhileTheGuideIsShowing() async throws {
+    // The guide covers the window; a Rescan chosen from the menu meanwhile would send the window
+    // back to the start screen under it and leave it small.
+    let s = Scratch(); s.file("a.bin", bytes: 4096)
+    let registry = SessionRegistry()
+    registry.startScan(path: s.path)
+    let session = try #require(registry.session(canonical: ScanBoundary.canonicalPath(s.path)!))
+    while session.isScanning { try? await Task.sleep(for: .milliseconds(10)) }
+    let router = WindowRouter(registry: registry,
+                              startModel: StartModel(defaults: UserDefaults(suiteName: "g-\(UUID().uuidString)")!))
+    let m = ResultViewModel(session: session, ownsSessionHistory: false, defaults: freshDefaults())
+
+    m.startGuide()
+    router.rescan(m)
+    #expect(!session.isScanning)        // ignored while the guide is up
+
+    m.endGuide()
+    router.rescan(m)
+    #expect(session.isScanning)         // and works again once it's done
+    while session.isScanning { try? await Task.sleep(for: .milliseconds(10)) }
+}

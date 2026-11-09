@@ -174,6 +174,8 @@ import Observation
         history.remap { tree.node(atPath: $0) != nil }
         self.init(session: old.session, history: history, selectedPath: old.selected.map { old.tree.path(of: $0) },
                   ownsSessionHistory: ownsSessionHistory, defaults: old.defaults)
+        // A rescan or the password read swaps the window's model mid-walkthrough: it carries on.
+        guideStep = old.guideStep
     }
 
     // MARK: Graph guide

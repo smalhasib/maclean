@@ -200,13 +200,15 @@ import SwiftUI
     /// ⌘R: rescans the session root in full; every window on it remaps by
     /// path. A no-op while the session deletes.
     func rescan(_ model: ResultViewModel) {
+        // The graph guide covers the window: a rescan under it would send the window back to the start screen.
+        guard model.guideStep == nil else { return }
         registry.rescan(canonical: model.session.rootPath)
     }
 
     /// ⇧⌘R: rescans the volume the result lives on. A no-op while the
     /// result's session deletes.
     func rescanDisk(_ model: ResultViewModel) {
-        guard !model.session.isDeleting else { return }
+        guard !model.session.isDeleting, model.guideStep == nil else { return }
         let root = model.tree.rootPath
         let volume = startModel.volumes
             .filter { PathUtil.isInside(root, orEqualTo: $0.entry.scanPath) }
