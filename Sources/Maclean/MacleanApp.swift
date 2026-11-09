@@ -86,6 +86,7 @@ struct MacleanApp: App {
     func applicationWillFinishLaunching(_ notification: Notification) {
         _ = router   // takes over presenting finished scans before any starts
         registry.batcher = adminBatcher
+        AppQuit.dismissSheets = { [unowned self] in coordinator.dismissForQuit() }
         // R11: a sheet raised while the main window is closed (window per scan) brings it back.
         coordinator.onSheetRaised = { [unowned self] in router.showLauncher() }
         // Never relaunch mid-delete.
@@ -132,15 +133,7 @@ struct MacleanApp: App {
     /// coordinator's sheets, wait for SwiftUI to take them down, then quit.
     /// Other sheets (Smart Clean review, summaries) still block, as ⌘Q does.
     @objc func handleQuit(_ event: NSAppleEventDescriptor, withReply reply: NSAppleEventDescriptor) {
-        coordinator.dismissForQuit()
-        quitWhenSheetsAreGone(attempt: 0)
-    }
-
-    private func quitWhenSheetsAreGone(attempt: Int) {
-        // ponytail: ~1 s of polling; a sheet we don't own stays and the quit is refused as before.
-        let sheetsUp = NSApp.windows.contains { $0.attachedSheet != nil }
-        guard sheetsUp, attempt < 20 else { NSApp.terminate(nil); return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { self.quitWhenSheetsAreGone(attempt: attempt + 1) }
+        AppQuit.quit()
     }
 
     /// Folders dropped on the Dock icon (or opened with the app) are scanned.

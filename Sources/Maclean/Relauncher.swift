@@ -6,7 +6,7 @@ enum Relauncher {
     @MainActor static func relaunch(bundleURL: URL = Bundle.main.bundleURL) {
         // Unbundled (`swift run`): there is no app to open, so just quit.
         guard bundleURL.pathExtension == "app" else {
-            NSApp.terminate(nil)
+            AppQuit.quit()
             return
         }
         let process = Process()
@@ -15,6 +15,7 @@ enum Relauncher {
         process.arguments = ["-c", "sleep 1; open -n \"$0\"", bundleURL.path]
         // Quit only if the new instance is on its way.
         do { try process.run() } catch { return }
-        NSApp.terminate(nil)
+        // Not `NSApp.terminate`: the update sheet is up, and a sheet blocks it (see AppQuit).
+        AppQuit.quit()
     }
 }
