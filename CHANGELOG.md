@@ -1,4 +1,17 @@
 # Changelog
+## 0.7.0 - 2026-11-09
+
+### Features
+- Preview and delete buttons on rows, preview in its own window
+- Row hover button collects instead of deleting
+- First-scan graph guide, replayable from Help
+
+
+### Fixes
+- No relaunch banner when access was on for the scan
+- Preview eye beside collect on every row
+- Graph guide survives a new tree and ignores rescan
+
 ## 0.6.0 - 2026-11-09
 
 ### Features
