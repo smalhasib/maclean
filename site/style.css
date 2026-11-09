@@ -47,6 +47,8 @@ h1 { font-size: clamp(34px, 5.6vw, 56px); letter-spacing: -.02em; margin-bottom:
 .chip { display: inline-flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 9px; border: 0; cursor: pointer;
   background: var(--soft); color: var(--ink); font: inherit; }
 .chip code { font-size: 13px; }
+a.chip { text-decoration: none; font-size: 14px; }
+a.chip:hover { background: color-mix(in srgb, var(--soft) 80%, var(--ink) 8%); }
 .copy-hint { font-size: 12px; color: var(--muted); }
 .fine { font-size: 13px; color: var(--muted); margin: 16px 0 0; }
 .sunburst { flex: 0 0 min(380px, 42%); height: auto; }

@@ -42,9 +42,7 @@
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"/></svg>
         <span id="download-label">Download for macOS</span>
       </a>
-      <button class="chip" data-copy="brew install --cask maclean" aria-label="Copy the Homebrew install command">
-        <code>brew install --cask maclean</code><span class="copy-hint">Copy</span>
-      </button>
+      <a class="chip" href="#install" data-tab="t-brew">Install with Homebrew <span class="copy-hint" aria-hidden="true">↓</span></a>
     </div>
     <p class="fine">macOS 14 or later · Apple silicon and Intel · MIT licensed</p>
   </div>
@@ -85,7 +83,7 @@
     <div class="code"><code>brew tap smalhasib/maclean</code><button data-copy="brew tap smalhasib/maclean" aria-label="Copy">Copy</button></div>
     <div class="code"><code>brew trust smalhasib/maclean</code><button data-copy="brew trust smalhasib/maclean" aria-label="Copy">Copy</button></div>
     <div class="code"><code>brew install --cask maclean</code><button data-copy="brew install --cask maclean" aria-label="Copy">Copy</button></div>
-    <p class="note">Update later with <code>brew upgrade --cask maclean</code>. The cask also installs the <code>maclean-scan</code> command.</p>
+    <p class="note">Run all three, in this order. <code>brew install</code> alone can’t find Maclean until the tap is added and trusted. Update later with <code>brew upgrade --cask maclean</code>. The cask also installs the <code>maclean-scan</code> command.</p>
   </div>
 
   <div class="panel" role="tabpanel" id="p-dmg" aria-labelledby="t-dmg" hidden>

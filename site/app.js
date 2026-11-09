@@ -22,6 +22,11 @@
     });
   });
 
+  // Links that point at an install method open its tab first (the Homebrew chip in the hero).
+  document.querySelectorAll("[data-tab]").forEach((link) => {
+    link.addEventListener("click", () => show(document.getElementById(link.dataset.tab)));
+  });
+
   // Copy buttons
   document.addEventListener("click", async (e) => {
     const el = e.target.closest("[data-copy]");
