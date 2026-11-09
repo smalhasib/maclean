@@ -224,14 +224,15 @@ private struct RowHost: View {
                 // `hovered` is only read for list hovers, so chart hovers don't invalidate rows.
                 highlighted: model.hoverSource == .list && model.hovered == node,
                 selected: model.selected == node,
-                actions: RowActions(canPreview: items.canPreviewFromRow(node), canDelete: items.canDeleteFromRow(node),
-                                    preview: { items.preview(node) }, delete: { model.delete(node) }))
+                actions: RowActions(canPreview: items.canPreviewFromRow(node), canCollect: items.canCollectFromRow(node),
+                                    preview: { items.preview(node) }, collect: { model.collect([node]) }))
             .equatable()
             // Drags carry only `org.maclean.node`, never a file URL.
             .onDrag { NodeDrag.provider(for: model.dragPayload(for: node)) }
             .contextMenu { ContextMenuContent(model: model, node: node) }
             .accessibilityAction { model.activate(node) }
             .accessibilityAction(named: "Preview") { if items.canPreviewFromRow(node) { items.preview(node) } }
+            .accessibilityAction(named: "Move to Collector") { if items.canCollectFromRow(node) { model.collect([node]) } }
             .accessibilityAction(named: "Delete") { if items.canDeleteFromRow(node) { model.delete(node) } }
     }
 }
@@ -241,12 +242,12 @@ private struct RowHost: View {
 /// compared, which `ListRow`'s `Equatable` needs to skip redraws).
 struct RowActions: Equatable {
     let canPreview: Bool
-    let canDelete: Bool
+    let canCollect: Bool
     let preview: () -> Void
-    let delete: () -> Void
+    let collect: () -> Void
 
     static func == (a: RowActions, b: RowActions) -> Bool {
-        a.canPreview == b.canPreview && a.canDelete == b.canDelete
+        a.canPreview == b.canPreview && a.canCollect == b.canCollect
     }
 }
 
@@ -278,11 +279,15 @@ private struct ListRow: View, Equatable {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 8)
-            if highlighted, actions.canPreview || actions.canDelete {
-                // Only under the pointer: Preview opens the file in Quick Look's window, Delete asks first.
+            if highlighted, actions.canPreview || actions.canCollect {
+                // Only under the pointer: Preview opens the file in Quick Look's window; collecting is
+                // undoable, and everything collected is deleted together (after one confirmation).
                 HStack(spacing: 2) {
                     if actions.canPreview { actionButton("eye", label: "Preview", action: actions.preview) }
-                    if actions.canDelete { actionButton("trash", label: "Delete…", action: actions.delete, tint: .red) }
+                    if actions.canCollect {
+                        actionButton("tray.and.arrow.down", label: "Move to Collector", action: actions.collect,
+                                     tint: .accentColor)
+                    }
                 }
             } else {
                 Text(SizeText.string(size))

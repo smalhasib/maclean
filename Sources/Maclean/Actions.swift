@@ -129,6 +129,9 @@ struct ContextItem {
     /// The row's hover buttons: Quick Look has nothing to show for a folder.
     func canPreviewFromRow(_ node: NodeID) -> Bool { model.kind(of: node) == .file }
 
+    /// The hover Move to Collector button: the same items as Delete.
+    func canCollectFromRow(_ node: NodeID) -> Bool { canDeleteFromRow(node) }
+
     /// Files, folders and packages; not unreadable folders, other volumes or "smaller objects".
     func canDeleteFromRow(_ node: NodeID) -> Bool {
         switch model.kind(of: node) {

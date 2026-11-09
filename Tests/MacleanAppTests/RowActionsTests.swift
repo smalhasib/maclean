@@ -30,6 +30,8 @@ import MacleanCore
     let actions = ResultActions(model: m, router: nil)
     #expect(actions.canPreviewFromRow(a))
     #expect(!actions.canPreviewFromRow(d))   // Quick Look has nothing to show for a folder
+    #expect(actions.canCollectFromRow(a))   // the hover button collects; Delete stays in the menu
+    #expect(actions.canCollectFromRow(d))
     #expect(actions.canDeleteFromRow(a))
     #expect(actions.canDeleteFromRow(d))
 }
