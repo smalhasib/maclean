@@ -50,6 +50,11 @@ import Observation
     /// still unreadable (root refused, so they need Full Disk Access). Nil
     /// before a read of this tree, or after a cancelled or failed one.
     private(set) var stillNeedsAccessCount: Int?
+    /// Whether Full Disk Access was on when the current scan started. It decides what the
+    /// "couldn't be read" banner can offer (see `RestrictedNotice`).
+    private(set) var scannedWithAccess = false
+    /// Answers "is Full Disk Access on?" (replaced in tests).
+    @ObservationIgnored var accessProbe: () -> Bool = { FullDiskAccess.isGranted() }
     /// The tree a `readRestricted` is waiting on or reading for.
     private var readingTree: FileTree?
     /// True while a read for the current tree waits for the dialog or reads the result.
@@ -102,12 +107,14 @@ import Observation
         isStopping = false
         state = .scanning(bytes: 0, expected: expected)
         let path = rootPath
+        // Without Full Disk Access, opening the Photos library raises a consent dialog.
+        let hasAccess = accessProbe()
+        scannedWithAccess = hasAccess
         // Strong captures: the session lives at least until its scan ends.
         task = Task {
             let result: Result<FileTree, any Error>
             do {
-                // Without Full Disk Access, opening the Photos library raises a consent dialog.
-                let tree = try await Scanner.scan(path: path, skipsPhotosLibraries: !FullDiskAccess.isGranted()) { progress in
+                let tree = try await Scanner.scan(path: path, skipsPhotosLibraries: !hasAccess) { progress in
                     Task { @MainActor in self.report(bytes: progress.bytes) }
                 }
                 result = .success(tree)

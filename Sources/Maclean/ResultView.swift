@@ -133,23 +133,33 @@ private struct ResultBanners: View {
     /// on, "Relaunch Maclean to read them — Relaunch").
     @ViewBuilder private var restrictedBanner: some View {
         let session = model.session
-        let count = session.restrictedRoots.count
-        let needAccess = session.privacyCount + (session.stillNeedsAccessCount ?? 0)
         if session.isReadingRestricted {
             banner(icon: nil, text: "Reading restricted folders…")
         } else if let batcher = router?.registry.batcher {
             let coordinator = batcher.coordinator
-            if count > 0, session.stillNeedsAccessCount == nil {
+            switch RestrictedNotice.make(adminReadable: session.restrictedRoots.count,
+                                         stillNeedsAccess: session.stillNeedsAccessCount,
+                                         privacy: session.privacyCount,
+                                         scannedWithAccess: session.scannedWithAccess,
+                                         accessNow: coordinator.accessIsGranted()) {
+            case .none:
+                EmptyView()
+            case .readWithAdmin(let count):
                 banner(icon: "lock", text: "\(Self.folders(count)) couldn’t be read",
                        action: ("Read with administrator rights", { Task { await session.readRestricted(using: batcher) } }))
-            } else if needAccess > 0, coordinator.accessIsGranted() {
-                // Access is on already; only a new process gets it.
+            case .relaunch:
+                // Access came on after this scan; only a new process gets it.
                 banner(icon: "lock",
                        text: coordinator.relaunchRefusal ?? "Full Disk Access is on. Relaunch Maclean to read them",
                        action: ("Relaunch", { coordinator.relaunch() }))
-            } else if needAccess > 0 {
-                banner(icon: "lock", text: "\(Self.folders(needAccess)) need Full Disk Access",
+            case .grantAccess(let count):
+                banner(icon: "lock", text: "\(Self.folders(count)) need Full Disk Access",
                        action: ("Grant Access…", { coordinator.reopenAccessSheet() }))
+            case .protectedByMacOS(let count):
+                // The scan had access already: this is system data nothing can open, so no button.
+                banner(icon: "lock", text: count == 1 ? "1 folder is protected by macOS and can’t be read"
+                                                      : "\(count) folders are protected by macOS and can’t be read")
+                    .help("System-protected locations, such as parts of /Library and /private/var. Full Disk Access doesn’t open them.")
             }
         }
     }
