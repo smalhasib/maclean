@@ -28,6 +28,7 @@ struct SideListView: View {
                     if let row = model.selectedRow { proxy.scrollTo(row) }
                 }
             }
+            PreviewPane(model: model)
         }
         .font(.body)
     }
