@@ -1,5 +1,5 @@
 (() => {
-  const repo = "smalhasib/maclean-site";
+  const repo = "smalhasib/maclean";
 
   // Install tabs
   const tabs = [...document.querySelectorAll('[role="tab"]')];
