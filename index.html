@@ -41,6 +41,7 @@ html{scroll-behavior:smooth;scroll-padding-top:80px}
 a:focus-visible,button:focus-visible{outline:2px solid #8BB5E8;outline-offset:3px}
 button{cursor:pointer}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+dialog::backdrop{background:rgba(5,6,8,.72);backdrop-filter:blur(4px)}
 </style>
 </head>
 <body>
@@ -74,7 +75,7 @@ button{cursor:pointer}
       </a>
       <a class="btn" href="#install" style="background: #1A1E24; color: #E8EAED; border: 1px solid #2A2E35">Install with Homebrew</a>
     </div>
-    <p style="margin: 0; font-size: 13px; color: #8C939B">macOS 14 Sonoma or later · Apple silicon and Intel</p>
+    <p style="margin: 0; font-size: 13px; color: #8C939B">macOS 14 Sonoma or later · Apple silicon and Intel · <a href="#first-launch" style="color: #8BB5E8">First launch: allow it once</a></p>
   </div>
 
   <div class="wrap" style="margin-top: 64px">
@@ -300,7 +301,15 @@ button{cursor:pointer}
     <div class="card" style="flex: 1 1 420px; min-width: 0; padding: 32px">
       <p class="mono" style="margin: 0; color: #9FE1CB">Disk image</p>
       <h4 style="font-size: 24px">Download and drag</h4>
-      <p>1. Download the latest <span class="kbd">.dmg</span> and open it.<br>2. Drag Maclean onto Applications.<br>3. Open it. macOS may ask you to allow it once in System Settings › Privacy &amp; Security.</p>
+      <p>1. Download the latest <span class="kbd">.dmg</span> and open it.<br>2. Drag Maclean onto Applications, then eject the disk image.<br>3. Open Maclean from Applications.</p>
+      <div id="first-launch" style="margin-top: 6px; padding: 16px 18px; border-radius: 12px; background: #0E1013; border: 1px solid #23272D">
+        <p class="mono" style="margin: 0 0 8px; color: #E8AE6C">First launch: allow it once</p>
+        <p style="margin: 0 0 10px">Maclean isn't notarized by Apple, so macOS may say it can't verify it. You only do this once:</p>
+        <p style="margin: 0 0 8px"><strong style="color: #E8EAED">macOS 15 or later:</strong> try to open Maclean, then System Settings › Privacy &amp; Security, scroll to Security, click <strong style="color: #E8EAED">Open Anyway</strong> next to Maclean, and confirm with your password.</p>
+        <p style="margin: 0 0 8px"><strong style="color: #E8EAED">macOS 14:</strong> right-click Maclean in Applications, choose <strong style="color: #E8EAED">Open</strong>, then <strong style="color: #E8EAED">Open</strong> again.</p>
+        <p style="margin: 0 0 8px"><strong style="color: #E8EAED">Terminal, any version:</strong></p>
+        <div class="code"><span style="min-width: 0; overflow-wrap: anywhere">xattr -dr com.apple.quarantine /Applications/Maclean.app</span><button data-copy="xattr -dr com.apple.quarantine /Applications/Maclean.app" aria-label="Copy the command" style="font: 600 12px -apple-system, sans-serif; padding: 6px 10px; border-radius: 7px; border: 1px solid #2A2E35; background: #1A1E24; color: #E8EAED; min-height: 32px; flex: none">Copy</button></div>
+      </div>
       <a class="btn" id="dmg-link" href="https://github.com/smalhasib/maclean/releases/latest" rel="noopener" style="align-self: flex-start; margin-top: 8px; background: #3B82F6; color: #FFFFFF">Download Maclean</a>
       <p style="font-size: 13px">macOS 14 or later · Apple silicon and Intel</p>
     </div>
@@ -311,7 +320,7 @@ button{cursor:pointer}
   <div class="wrap" style="display: flex; flex-direction: column; align-items: center; text-align: center; gap: 20px">
     <img src="icon.png" alt="" style="width: 88px; height: 88px; border-radius: 20px">
     <h2 style="margin: 0; font-size: 44px; letter-spacing: -.03em; font-weight: 800; color: #F5F7F9">Make your Mac lean.</h2>
-    <a class="btn" href="https://github.com/smalhasib/maclean/releases/latest" rel="noopener" style="background: #3B82F6; color: #FFFFFF">Download for macOS</a>
+    <a class="btn" id="cta-download" href="https://github.com/smalhasib/maclean/releases/latest" rel="noopener" style="background: #3B82F6; color: #FFFFFF">Download for macOS</a>
   </div>
 </section>
 
@@ -325,6 +334,24 @@ button{cursor:pointer}
 </footer>
 
 </div>
+<dialog id="after-download" aria-labelledby="ad-title" style="max-width: 520px; width: calc(100% - 40px); padding: 0; border: 1px solid #2A2E35; border-radius: 18px; background: #14171B; color: #E8EAED; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif">
+  <div style="padding: 28px; display: flex; flex-direction: column; gap: 14px">
+    <p class="mono" style="margin: 0; color: #9FE1CB">Downloading Maclean</p>
+    <h2 id="ad-title" style="margin: 0; font-size: 26px; letter-spacing: -.02em; color: #F5F7F9">Three steps to finish</h2>
+    <ol style="margin: 0; padding-left: 20px; line-height: 1.7; color: #D3D7DC">
+      <li>Open the downloaded <span class="kbd">.dmg</span>.</li>
+      <li>Drag <strong>Maclean</strong> onto <strong>Applications</strong>, then eject the disk image.</li>
+      <li>Open Maclean from Applications.</li>
+    </ol>
+    <div style="padding: 14px 16px; border-radius: 12px; background: #0E1013; border: 1px solid #23272D; color: #A9AFB7; font-size: 14px; line-height: 1.6">
+      <strong style="color: #E8AE6C">If macOS says it can't verify Maclean,</strong> that's expected, because it isn't notarized by Apple. Open System Settings › Privacy &amp; Security and click <strong style="color: #E8EAED">Open Anyway</strong> next to Maclean (macOS 15 or later), or right-click Maclean and choose Open (macOS 14). Or run this once in Terminal:
+      <div class="code" style="margin-top: 10px"><span style="min-width: 0; overflow-wrap: anywhere">xattr -dr com.apple.quarantine /Applications/Maclean.app</span><button data-copy="xattr -dr com.apple.quarantine /Applications/Maclean.app" aria-label="Copy the command" style="font: 600 12px -apple-system, sans-serif; padding: 6px 10px; border-radius: 7px; border: 1px solid #2A2E35; background: #1A1E24; color: #E8EAED; min-height: 32px; flex: none">Copy</button></div>
+    </div>
+    <div style="display: flex; justify-content: flex-end">
+      <button id="ad-close" class="btn" style="border: 0; background: #3B82F6; color: #FFFFFF; font-family: inherit">Got it</button>
+    </div>
+  </div>
+</dialog>
 <script src="app.js" defer></script>
 </body>
 </html>

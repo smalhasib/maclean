@@ -52,7 +52,17 @@
   fetch(`https://api.github.com/repos/${repo}/releases/latest`).then((r) => (r.ok ? r.json() : Promise.reject())).then((rel) => {
     const dmg = rel.assets.find((a) => a.name.endsWith(".dmg"));
     if (!dmg) return;
-    ["download", "dmg-link", "nav-download"].forEach((id) => { const a = document.getElementById(id); if (a) a.href = dmg.browser_download_url; });
+    ["download", "dmg-link", "nav-download", "cta-download"].forEach((id) => { const a = document.getElementById(id); if (a) a.href = dmg.browser_download_url; });
     document.getElementById("download-label").textContent = `Download Maclean ${rel.tag_name.replace(/^v/, "")}`;
   }).catch(() => {});
+
+  // Once a disk image download starts, show how to open it, since people who click a top button never see the install section.
+  const dialog = document.getElementById("after-download");
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest("#download, #nav-download, #cta-download, #dmg-link");
+    if (!a || !a.href.endsWith(".dmg") || !dialog || typeof dialog.showModal !== "function") return;
+    setTimeout(() => dialog.showModal(), 250);
+  });
+  document.getElementById("ad-close")?.addEventListener("click", () => dialog.close());
+  dialog?.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
 })();
