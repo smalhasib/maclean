@@ -1,70 +1,58 @@
 (() => {
   const repo = "smalhasib/maclean";
 
-  // Install tabs
-  const tabs = [...document.querySelectorAll('[role="tab"]')];
-  const show = (tab) => {
-    tabs.forEach((t) => {
+  // Tab lists (the tools showcase and the install methods). Without JS every panel simply shows.
+  const lists = [...document.querySelectorAll('[role="tablist"]')];
+  const show = (list, tab) => {
+    [...list.querySelectorAll('[role="tab"]')].forEach((t) => {
       const on = t === tab;
       t.setAttribute("aria-selected", on);
       t.tabIndex = on ? 0 : -1;
       document.getElementById(t.getAttribute("aria-controls")).hidden = !on;
     });
   };
-  tabs.forEach((t, i) => {
-    t.addEventListener("click", () => show(t));
-    t.addEventListener("keydown", (e) => {
-      const next = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
-      if (!next) return;
-      const to = tabs[(i + next + tabs.length) % tabs.length];
-      show(to);
-      to.focus();
+  lists.forEach((list) => {
+    const tabs = [...list.querySelectorAll('[role="tab"]')];
+    show(list, tabs.find((t) => t.getAttribute("aria-selected") === "true") || tabs[0]);
+    tabs.forEach((t, i) => {
+      t.addEventListener("click", () => show(list, t));
+      t.addEventListener("keydown", (e) => {
+        const next = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+        if (!next) return;
+        const to = tabs[(i + next + tabs.length) % tabs.length];
+        show(list, to);
+        to.focus();
+      });
     });
   });
 
-  // Links that point at an install method open its tab first (the Homebrew chip in the hero).
+  // Links that point at a tab open it first (the Homebrew button in the hero).
   document.querySelectorAll("[data-tab]").forEach((link) => {
-    link.addEventListener("click", () => show(document.getElementById(link.dataset.tab)));
+    link.addEventListener("click", () => {
+      const tab = document.getElementById(link.dataset.tab);
+      show(tab.parentElement, tab);
+    });
   });
 
   // Copy buttons
   document.addEventListener("click", async (e) => {
     const el = e.target.closest("[data-copy]");
     if (!el) return;
-    const label = el.querySelector(".copy-hint") || el;
-    const before = label.textContent;
+    const before = el.textContent;
     try {
       await navigator.clipboard.writeText(el.dataset.copy);
-      label.textContent = "Copied";
+      el.textContent = "Copied";
     } catch {
-      label.textContent = "Press ⌘C";
+      el.textContent = "Press ⌘C";
     }
-    setTimeout(() => (label.textContent = before), 1600);
+    setTimeout(() => { el.textContent = before; }, 1400);
   });
 
-  // Scroll reveal
-  const items = document.querySelectorAll(".reveal");
-  if ("IntersectionObserver" in window) {
-    const io = new IntersectionObserver((entries) => {
-      entries.forEach((en) => {
-        if (!en.isIntersecting) return;
-        en.target.classList.add("in");
-        io.unobserve(en.target);
-      });
-    }, { threshold: 0.12 });
-    items.forEach((el) => io.observe(el));
-  } else {
-    items.forEach((el) => el.classList.add("in"));
-  }
-
-  // Live release from GitHub. The static links still work if this fails.
-  const get = (path) => fetch(`https://api.github.com/repos/${repo}${path}`).then((r) => (r.ok ? r.json() : Promise.reject()));
-
-  get("/releases/latest").then((rel) => {
+  // The latest release's name and disk image. The static links still work if this fails.
+  fetch(`https://api.github.com/repos/${repo}/releases/latest`).then((r) => (r.ok ? r.json() : Promise.reject())).then((rel) => {
     const dmg = rel.assets.find((a) => a.name.endsWith(".dmg"));
     if (!dmg) return;
-    document.getElementById("download").href = dmg.browser_download_url;
-    document.getElementById("dmg-link").href = dmg.browser_download_url;
+    ["download", "dmg-link", "nav-download"].forEach((id) => { const a = document.getElementById(id); if (a) a.href = dmg.browser_download_url; });
     document.getElementById("download-label").textContent = `Download Maclean ${rel.tag_name.replace(/^v/, "")}`;
   }).catch(() => {});
 })();
