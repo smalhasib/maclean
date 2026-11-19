@@ -3,229 +3,330 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Maclean: a free toolkit for your Mac</title>
-<meta name="description" content="Maclean is one free Mac app that cleans and analyzes your disk, uninstalls apps, monitors your system, adds trackpad gestures, keeps a clipboard history and replaces the menu bar clock.">
-<meta name="theme-color" content="#FAFAF8" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#101216" media="(prefers-color-scheme: dark)">
-<meta property="og:title" content="Maclean: a free toolkit for your Mac">
-<meta property="og:description" content="Disk cleaner, app uninstaller, system status, trackpad gestures, clipboard history and a menu bar clock in one native app.">
-<meta property="og:image" content="https://smalhasib.github.io/maclean/img/analyze.jpg">
+<title>Maclean: clean your Mac, retire six other apps</title>
+<meta name="description" content="Maclean is a free, native Mac app: disk cleaner and space analyzer, duplicate finder, app uninstaller, maintenance, system status, menu bar dashboard, trackpad gestures, clipboard history and a compact menu bar clock.">
+<meta name="theme-color" content="#0E1013">
+<meta name="color-scheme" content="dark">
+<meta property="og:title" content="Maclean: clean your Mac, retire six other apps">
+<meta property="og:description" content="Disk cleaner, space analyzer, app uninstaller, system status, trackpad gestures, clipboard history and a menu bar clock in one free, native app.">
+<meta property="og:image" content="https://smalhasib.github.io/maclean/img/analyze-collect.webp">
 <meta property="og:url" content="https://smalhasib.github.io/maclean/">
 <link rel="icon" href="icon.png">
-<link rel="stylesheet" href="style.css">
+<style>
+body{margin:0;background:#0E1013}
+a{color:#8BB5E8}a:hover{color:#B9D3F3}
+.wrap{max-width:1200px;margin:0 auto;padding:0 32px;box-sizing:border-box}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:.12em;text-transform:uppercase;font-size:12px}
+.shot{display:block;width:100%;height:auto;filter:drop-shadow(0 28px 48px rgba(0,0,0,.55))}
+.btn{display:inline-flex;align-items:center;gap:10px;min-height:48px;padding:0 24px;border-radius:12px;font-weight:600;font-size:16px;text-decoration:none;box-sizing:border-box}
+.chip{padding:8px 14px;border-radius:999px;border:1px solid #2A2E35;color:#C5CAD1;font-size:14px;background:#14171B}
+.feature{display:flex;flex-wrap:wrap;gap:56px;align-items:center}
+.feature.flip{flex-direction:row-reverse}
+.ftext{flex:1 1 360px;min-width:0;display:flex;flex-direction:column;gap:16px}
+.fmedia{flex:1.7 1 560px;min-width:0;position:relative}
+.ftext h3{margin:0;font-size:40px;line-height:1.08;letter-spacing:-.02em;color:#F2F4F6;font-weight:700}
+.ftext p{margin:0;font-size:17px;line-height:1.6;color:#A9AFB7}
+.ftext ul{margin:4px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:10px}
+.ftext li{font-size:15px;line-height:1.5;color:#D3D7DC;padding-left:22px;position:relative}
+.ftext li:before{content:"";position:absolute;left:2px;top:9px;width:7px;height:7px;border-radius:50%;background:var(--tone)}
+.kbd{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12px;padding:3px 8px;border-radius:6px;background:#1C2026;border:1px solid #2A2E35;color:#D3D7DC}
+.card{background:#14171B;border:1px solid #23272D;border-radius:18px;padding:26px;display:flex;flex-direction:column;gap:10px}
+.card h4{margin:0;font-size:19px;color:#F2F4F6}
+.card p{margin:0;font-size:15px;line-height:1.55;color:#A9AFB7}
+.code{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 16px;border-radius:10px;background:#0E1013;border:1px solid #23272D;font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:14px;color:#D3D7DC}
+.cap{margin:14px 0 0;font-size:14px;color:#8C939B;text-align:center}
+@media (max-width:760px){.ftext h3{font-size:32px}.feature{gap:32px}.hero-h1{font-size:44px !important}.hide-sm{display:none !important}}
+
+html{scroll-behavior:smooth;scroll-padding-top:80px}
+a:focus-visible,button:focus-visible{outline:2px solid #8BB5E8;outline-offset:3px}
+button{cursor:pointer}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style>
 </head>
 <body>
+<div style="background: #0E1013; color: #E8EAED; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; min-height: 100vh">
 
-<header class="nav">
-  <a class="brand" href="#top"><img src="icon.png" alt="" width="28" height="28">Maclean</a>
-  <nav aria-label="Main">
-    <a href="#tools">Tools</a>
-    <a href="#why">Why Maclean</a>
-    <a href="#install">Install</a>
-    <a href="#shortcuts">Shortcuts</a>
-    <a class="btn small primary" href="https://github.com/smalhasib/maclean/releases/latest" id="nav-download" rel="noopener">Download</a>
-  </nav>
+<header style="position: sticky; top: 0; z-index: 5; background: rgba(14,16,19,.86); backdrop-filter: blur(14px); border-bottom: 1px solid #1C2026">
+  <div class="wrap" style="display: flex; align-items: center; justify-content: space-between; gap: 16px; height: 64px">
+    <a href="#top" style="display: flex; align-items: center; gap: 10px; text-decoration: none; color: #F2F4F6; font-weight: 700; font-size: 18px"><img src="icon.png" alt="" style="width: 30px; height: 30px; border-radius: 7px">Maclean</a>
+    <nav aria-label="Main" style="display: flex; align-items: center; gap: 26px; font-size: 14px">
+      <a class="hide-sm" href="#clean" style="color: #A9AFB7; text-decoration: none">Clean</a>
+      <a class="hide-sm" href="#analyze" style="color: #A9AFB7; text-decoration: none">Analyze</a>
+      <a class="hide-sm" href="#menubar" style="color: #A9AFB7; text-decoration: none">Menu bar</a>
+      <a class="hide-sm" href="#utilities" style="color: #A9AFB7; text-decoration: none">Utilities</a>
+      <a class="hide-sm" href="#install" style="color: #A9AFB7; text-decoration: none">Install</a>
+      <a class="btn" id="nav-download" href="https://github.com/smalhasib/maclean/releases/latest" rel="noopener" style="min-height: 40px; padding: 0 16px; font-size: 14px; background: #3B82F6; color: #FFFFFF">Download</a>
+    </nav>
+  </div>
 </header>
 
 <main id="top">
 
-<section class="hero">
-  <p class="pill">Free · Native Swift · No telemetry</p>
-  <h1>Your Mac's toolkit,<br>in one app.</h1>
-  <p class="lead">Clean and analyze your disk, uninstall apps, watch your system, add trackpad gestures, keep a clipboard history and replace the menu bar clock. One small app, eight tools.</p>
-  <div class="cta">
-    <a id="download" class="btn primary big" href="https://github.com/smalhasib/maclean/releases/latest" rel="noopener">
-      <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"/></svg>
-      <span id="download-label">Download for macOS</span>
-    </a>
-    <a class="btn ghost big" href="#install" data-tab="t-brew">Install with Homebrew</a>
+<section style="padding: 96px 0 40px">
+  <div class="wrap" style="display: flex; flex-direction: column; align-items: center; text-align: center; gap: 22px">
+    <p class="mono" style="margin: 0; padding: 7px 14px; border-radius: 999px; background: #17202C; color: #8BB5E8; border: 1px solid #22344A">Free · Native Swift · No telemetry</p>
+    <h1 class="hero-h1" style="margin: 0; font-size: 76px; line-height: 1.02; letter-spacing: -.035em; font-weight: 800; color: #F5F7F9; max-width: 980px">Clean your Mac. Then retire six other apps.</h1>
+    <p style="margin: 0; font-size: 20px; line-height: 1.55; color: #A9AFB7; max-width: 720px">Maclean finds what you can delete and shows where your space went. It also uninstalls apps, watches your system, turns your trackpad's edges into controls, keeps your clipboard history and gives you a better menu bar clock.</p>
+    <div style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-top: 8px">
+      <a class="btn" id="download" href="https://github.com/smalhasib/maclean/releases/latest" rel="noopener" style="background: #3B82F6; color: #FFFFFF">
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"></path></svg>
+        <span id="download-label">Download for macOS</span>
+      </a>
+      <a class="btn" href="#install" style="background: #1A1E24; color: #E8EAED; border: 1px solid #2A2E35">Install with Homebrew</a>
+    </div>
+    <p style="margin: 0; font-size: 13px; color: #8C939B">macOS 14 Sonoma or later · Apple silicon and Intel</p>
   </div>
-  <p class="fine">macOS 14 or later · Apple silicon and Intel</p>
-  <figure class="hero-shot"><img src="img/analyze.jpg" alt="Maclean's Analyze section showing a colourful map of disk usage" width="980" height="660"></figure>
-</section>
 
-<section class="replaces" aria-label="What Maclean covers">
-  <p>Takes the place of</p>
-  <ul>
-    <li>Disk cleaner</li><li>Disk analyzer</li><li>App uninstaller</li><li>System monitor</li><li>Trackpad gestures</li><li>Clipboard manager</li><li>Menu bar clock</li>
-  </ul>
-</section>
+  <div class="wrap" style="margin-top: 64px">
+    <div style="position: relative; max-width: 1120px; margin: 0 auto">
+      <img class="shot" src="img/analyze-collect.webp" alt="Maclean's Analyze view: a map of a disk with folders ranked by size and 335 MB of duplicates collected" style="width: 82%">
+      <img class="shot hide-sm" src="img/maclean-popover.webp" alt="Maclean's menu bar popover with a health score, CPU, memory, disk, battery and top processes" style="position: absolute; right: 0; top: 8%; width: 25%">
+    </div>
+  </div>
 
-<section id="tools" class="section">
-  <h2>Eight tools, one window</h2>
-  <p class="sub">Clean, Analyze, Apps, Optimize and Status are ready when you open it. Gestures, Clipboard and Clock are off until you turn them on, and cost nothing while off.</p>
-  <div class="tabs" role="tablist" aria-label="Maclean tools"><button role="tab" id="t-clean" aria-controls="p-clean" aria-selected="true">Clean</button><button role="tab" id="t-analyze" aria-controls="p-analyze" aria-selected="false" tabindex="-1">Analyze</button><button role="tab" id="t-apps" aria-controls="p-apps" aria-selected="false" tabindex="-1">Apps</button><button role="tab" id="t-optimize" aria-controls="p-optimize" aria-selected="false" tabindex="-1">Optimize</button><button role="tab" id="t-status" aria-controls="p-status" aria-selected="false" tabindex="-1">Status</button><button role="tab" id="t-gestures" aria-controls="p-gestures" aria-selected="false" tabindex="-1">Gestures</button><button role="tab" id="t-clipboard" aria-controls="p-clipboard" aria-selected="false" tabindex="-1">Clipboard</button><button role="tab" id="t-clock" aria-controls="p-clock" aria-selected="false" tabindex="-1">Clock</button></div>
-  <div class="tool" role="tabpanel" id="p-clean" aria-labelledby="t-clean">
-    <div class="tool-text">
-      <p class="eyebrow">Cleaning </p>
-      <h3>Find what can go.</h3>
-      <p>Check Now looks for caches, logs, build output, installers and leftovers of removed apps. Review the list, tick what you want gone, and it moves to the Trash with Undo.</p>
-      <ul><li>Every item carries a badge: Safe, Opt-in, Review or Needs password.</li><li>It says why it skipped anything, and never pre-selects risky items.</li><li>Quit and include, when the owning app is open, always asks first.</li><li>Empty the Trash from the same screen.</li></ul>
-      <p class="open">Open it with <kbd>⌘1</kbd></p>
+  <div class="wrap" style="margin-top: 56px; display: flex; flex-direction: column; align-items: center; gap: 16px">
+    <p class="mono" style="margin: 0; color: #8C939B">One app instead of</p>
+    <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 10px">
+      <span class="chip">Disk cleaner</span><span class="chip">Disk space analyzer</span><span class="chip">Duplicate finder</span><span class="chip">App uninstaller</span><span class="chip">Maintenance tool</span><span class="chip">System monitor</span><span class="chip">Trackpad gestures</span><span class="chip">Clipboard manager</span><span class="chip">Menu bar clock</span>
     </div>
-    <figure class="shot"><img src="img/clean.jpg" alt="Maclean's Clean section showing free space as a ring and a Check Now button" loading="lazy" width="980"></figure>
-  </div>
-  <div class="tool" role="tabpanel" id="p-analyze" aria-labelledby="t-analyze">
-    <div class="tool-text">
-      <p class="eyebrow">Cleaning </p>
-      <h3>See where your space went.</h3>
-      <p>Scan a whole disk or any folder and explore it on an interactive map. Click a segment to go in, the centre to come back out.</p>
-      <ul><li>Large Files, Old Files and Duplicates sit beside the map as flat, sortable lists.</li><li>Preview any file before deleting it: images, video, PDF, text and more.</li><li>Collect items first and see the space you'll free, then delete behind a 5-second countdown.</li><li>Hard links and APFS clones are counted once; it never crosses disks.</li></ul>
-      <p class="open">Open it with <kbd>⌘2</kbd></p>
-    </div>
-    <figure class="shot"><img src="img/analyze.jpg" alt="Maclean's Analyze section with a colourful disk map and a list of disks" loading="lazy" width="980"></figure>
-  </div>
-  <div class="tool" role="tabpanel" id="p-apps" aria-labelledby="t-apps">
-    <div class="tool-text">
-      <p class="eyebrow">Cleaning </p>
-      <h3>Uninstall apps, with what they leave behind.</h3>
-      <p>See every app with its size and when you last used it. Tick some and review every cache, preference and support file before anything is removed.</p>
-      <ul><li>Spot unused apps and the space removing them would free.</li><li>See how each app updates, and check online only when you ask.</li><li>Switch login items and launch agents on or off, and clear orphaned ones.</li><li>A Keep list stops apps being uninstalled by accident.</li></ul>
-      <p class="open">Open it with <kbd>⌘3</kbd></p>
-    </div>
-    <figure class="shot"><img src="img/apps.jpg" alt="Maclean's Apps section summarising 42 apps and 14.96 GB installed" loading="lazy" width="980"></figure>
-  </div>
-  <div class="tool" role="tabpanel" id="p-optimize" aria-labelledby="t-optimize">
-    <div class="tool-text">
-      <p class="eyebrow">Maintenance </p>
-      <h3>Maintenance, with the details first.</h3>
-      <p>Seventeen tasks such as flushing DNS, rebuilding the Quick Look and icon caches, or compacting Mail and Safari databases. Every row says what it fixes and what it touches.</p>
-      <ul><li>Checks that change nothing are separated from tasks that do.</li><li>Tick tasks, review exactly what will run, then run them.</li><li>Tasks that need your password ask once per run.</li><li>A live CPU, memory, swap and load readout while they run.</li></ul>
-      <p class="open">Open it with <kbd>⌘4</kbd></p>
-    </div>
-    <figure class="shot"><img src="img/optimize.jpg" alt="Maclean's Optimize section listing maintenance tasks" loading="lazy" width="980"></figure>
-  </div>
-  <div class="tool" role="tabpanel" id="p-status" aria-labelledby="t-status">
-    <div class="tool-text">
-      <p class="eyebrow">Monitoring </p>
-      <h3>Your Mac at a glance.</h3>
-      <p>CPU, GPU, memory, disk, network, battery and fans, with a health score and a process table you can sort, search and quit.</p>
-      <ul><li>Free up memory without a password, in one click.</li><li>Test your connection speed only when you click.</li><li>The same readings live in a menu bar popover with the busiest processes.</li><li>Quit a heavy process from the table without opening Activity Monitor.</li></ul>
-      <p class="open">Open it with <kbd>⌘5</kbd></p>
-    </div>
-    <figure class="shot"><img src="img/status.jpg" alt="Maclean's Status section with CPU, GPU, memory, disk and network tiles" loading="lazy" width="980"></figure>
-  </div>
-  <div class="tool" role="tabpanel" id="p-gestures" aria-labelledby="t-gestures">
-    <div class="tool-text">
-      <p class="eyebrow">Replaces a utility <span class="tag opt">Off until you turn it on</span></p>
-      <h3>Your trackpad's edges are controls.</h3>
-      <p>Slide along the right edge for volume and the left for brightness. The top and bottom edges can switch apps, scrub video, adjust the keyboard backlight or control media.</p>
-      <ul><li>Corner taps for Mute and Screenshot; normal clicks and scrolling are untouched.</li><li>Pause it for chosen apps, and swap the sides if you prefer.</li><li>Keeps working after sleep and when a Magic Trackpad reconnects.</li><li>Off until you turn it on, and free while off.</li></ul>
-      <p class="open">Open it with <kbd>⌘6</kbd></p>
-    </div>
-    <figure class="shot"><img src="img/gestures.jpg" alt="Maclean's Gestures section showing the trackpad edge controls" loading="lazy" width="980"></figure>
-  </div>
-  <div class="tool" role="tabpanel" id="p-clipboard" aria-labelledby="t-clipboard">
-    <div class="tool-text">
-      <p class="eyebrow">Replaces a utility <span class="tag opt">Off until you turn it on</span></p>
-      <h3>Everything you copy, saved and sorted.</h3>
-      <p>Text, code, links, files, images and colours land in their own columns. Open the panel from the menu bar or with your shortcut, then click an item to paste it.</p>
-      <ul><li>Search, pins, and a History column for everything else.</li><li>Colours paste in 11 formats; code is detected and highlighted.</li><li>Links show their title and can lose tracking parameters.</li><li>Privacy filters keep passwords and keys out, and you can pause copying any time.</li></ul>
-      <p class="open">Open it with <kbd>⌘7</kbd></p>
-    </div>
-    <figure class="shot"><img src="img/clipboard.jpg" alt="Maclean's Clipboard section with a preview of its columns" loading="lazy" width="980"></figure>
-  </div>
-  <div class="tool" role="tabpanel" id="p-clock" aria-labelledby="t-clock">
-    <div class="tool-text">
-      <p class="eyebrow">Replaces a utility <span class="tag opt">Off until you turn it on</span></p>
-      <h3>Time, date, battery and Wi‑Fi in one small item.</h3>
-      <p>A stacked clock for the menu bar: the date sits under the time, so it takes half the width. Click it for one popover that replaces Apple's three.</p>
-      <ul><li>Battery bar with colour thresholds and a bolt while charging; Wi‑Fi dots in the size you choose.</li><li>The popover shows power details and a live list of nearby networks to join.</li><li>24 or 12 hour, date styles or your own pattern, fonts, spacing and widths.</li><li>A guide walks you through hiding Apple's own icons, and ticks each step.</li></ul>
-      <p class="open">Open it with <kbd>⌘8</kbd></p>
-    </div>
-    <figure class="shot"><img src="img/clock.jpg" alt="Maclean's Clock section with a preview of the menu bar item" loading="lazy" width="980"></figure>
   </div>
 </section>
 
-<section id="why" class="section">
-  <h2>Built to be trusted with your Mac</h2>
-  <div class="grid why">
-    <article class="card"><h3>Safe by design</h3><p>Deleting is slow on purpose: collect first, a 5-second countdown, a re-check right before removal, and Undo for cleans. System folders, keychains, Mail, Messages and Photos can't be deleted.</p></article>
-    <article class="card"><h3>Private</h3><p>No analytics, no accounts, no tracking. Clipboard filters keep passwords and keys out. Network checks like update lookups and speed tests only run when you ask or on a daily update check.</p></article>
-    <article class="card"><h3>Light and native</h3><p>Written in Swift and SwiftUI. The optional tools do no work at all while off. Signed updates install themselves.</p></article>
-    <article class="card"><h3>One app instead of many</h3><p>Stop juggling a cleaner, an uninstaller, a monitor, a gestures utility, a clipboard manager and a menu bar clock. They share one look, one set of shortcuts and one update.</p></article>
-  </div>
-</section>
-
-<section id="install" class="section">
-  <h2>Install</h2>
-  <p class="sub">Needs macOS 14 Sonoma or later, on Apple silicon or Intel.</p>
-
-  <div class="tabs" role="tablist" aria-label="Install method">
-    <button role="tab" id="t-brew" aria-controls="p-brew" aria-selected="true">Homebrew</button>
-    <button role="tab" id="t-dmg" aria-controls="p-dmg" aria-selected="false" tabindex="-1">Disk image</button>
-  </div>
-
-  <div class="panel" role="tabpanel" id="p-brew" aria-labelledby="t-brew">
-    <div class="code"><code>brew tap smalhasib/maclean</code><button data-copy="brew tap smalhasib/maclean" aria-label="Copy">Copy</button></div>
-    <div class="code"><code>brew trust smalhasib/maclean</code><button data-copy="brew trust smalhasib/maclean" aria-label="Copy">Copy</button></div>
-    <div class="code"><code>brew install --cask maclean</code><button data-copy="brew install --cask maclean" aria-label="Copy">Copy</button></div>
-    <p class="note">Run all three, in this order. <code>brew install</code> alone can’t find Maclean until the tap is added and trusted. Update later with <code>brew upgrade --cask maclean</code>. The cask also installs the <code>maclean-scan</code> command.</p>
-  </div>
-
-  <div class="panel" role="tabpanel" id="p-dmg" aria-labelledby="t-dmg" hidden>
-    <ol class="steps">
-      <li>Download the <a id="dmg-link" href="https://github.com/smalhasib/maclean/releases/latest" rel="noopener">latest <code>.dmg</code></a> and open it.</li>
-      <li>Drag <strong>Maclean</strong> onto the <strong>Applications</strong> shortcut, then eject the disk image.</li>
-      <li>Open Maclean from Applications.</li>
-    </ol>
-    <details class="help">
-      <summary>macOS says it can't verify Maclean</summary>
-      <p>Maclean isn't notarized by Apple, so macOS may block the first launch. Allow it once:</p>
+<section id="clean" style="padding: 112px 0 0; --tone: #9FE1CB">
+  <div class="wrap feature">
+    <div class="ftext">
+      <p class="mono" style="margin: 0; color: #9FE1CB">Clean · ⌘1</p>
+      <h3>Find what can go, and see why.</h3>
+      <p>Check Now walks your developer tools, browsers, app caches, logs, installers and leftovers of removed apps, and fills a ring as it finds space. Then you review every item before anything moves.</p>
       <ul>
-        <li><strong>macOS 15 or later:</strong> try to open Maclean, then open System Settings › Privacy &amp; Security, scroll to Security, click <strong>Open Anyway</strong> next to Maclean, and confirm with your password.</li>
-        <li><strong>macOS 14:</strong> right-click Maclean in Applications, choose <strong>Open</strong>, then <strong>Open</strong> again.</li>
-        <li><strong>Terminal, any version:</strong>
-          <div class="code"><code>xattr -dr com.apple.quarantine /Applications/Maclean.app</code><button data-copy="xattr -dr com.apple.quarantine /Applications/Maclean.app" aria-label="Copy">Copy</button></div>
-        </li>
+        <li>Each item says what it is and why it is safe: Safe, Opt-in or Review.</li>
+        <li>Safe items come ticked; your choices are remembered for next time.</li>
+        <li>An app is open? Quit and include it, only if you say so.</li>
+        <li>Everything goes to the Trash, so a clean can be undone.</li>
       </ul>
-    </details>
-    <p class="note">Once it opens, Maclean installs updates itself.</p>
+    </div>
+    <div class="fmedia">
+      <img class="shot" loading="lazy" src="img/clean-review.webp" alt="Clean's review screen: 35.84 GB found, grouped into Developer, Project builds, Browsers, App caches, Logs, Installers and Leftovers, with badges on each item">
+      <img class="shot hide-sm" src="img/clean-scanning.webp" alt="Clean while checking: a ring filling as items are found, with each category's progress" style="position: absolute; left: -4%; bottom: -14%; width: 44%">
+    </div>
   </div>
 </section>
 
-<section id="start" class="section">
-  <h2>First steps</h2>
-  <ol class="grid how">
-    <li class="card"><span class="n">1</span><h3>Grant Full Disk Access</h3><p>Maclean asks until it's on. Without it, macOS hides folders like Mail and Messages and totals come out low. Folders only an administrator can open ask for your password once per scan.</p></li>
-    <li class="card"><span class="n">2</span><h3>Start with Clean or Analyze</h3><p>Press <kbd>Check Now</kbd> in Clean, or map a disk in Analyze. Nothing is deleted until you review and confirm.</p></li>
-    <li class="card"><span class="n">3</span><h3>Turn on what you want</h3><p>Open Gestures, Clipboard or Clock and choose Turn On. Choose what appears in the menu bar in Settings › General.</p></li>
-  </ol>
-</section>
-
-<section id="shortcuts" class="section">
-  <h2>Keyboard shortcuts</h2>
-  <div class="keys">
-    <div><span>Clean, Analyze, Apps, Optimize, Status, Gestures, Clipboard, Clock</span><span><kbd>⌘1</kbd> – <kbd>⌘8</kbd></span></div>
-    <div><span>In a scan: Folders, Large, Old, Duplicates</span><span><kbd>⌘1</kbd> – <kbd>⌘4</kbd></span></div>
-    <div><span>Scan folder</span><kbd>⌘O</kbd></div>
-    <div><span>Open in new window</span><kbd>⇧⌘N</kbd></div>
-    <div><span>Back / forward</span><span><kbd>⌘[</kbd> <kbd>⌘]</kbd></span></div>
-    <div><span>Enter / enclosing folder</span><span><kbd>⌘↓</kbd> <kbd>⌘↑</kbd></span></div>
-    <div><span>Rescan folder / rescan</span><span><kbd>⌘R</kbd> <kbd>⇧⌘R</kbd></span></div>
-    <div><span>Quick Look</span><kbd>Space</kbd></div>
-    <div><span>Move to collector</span><kbd>⌘⌫</kbd></div>
-    <div><span>Check for cleanable items</span><kbd>⇧⌘K</kbd></div>
-    <div><span>Find in Apps</span><kbd>⌘F</kbd></div>
-    <div><span>Settings</span><kbd>⌘,</kbd></div>
+<section id="analyze" style="padding: 160px 0 0; --tone: #8BB5E8">
+  <div class="wrap feature flip">
+    <div class="ftext">
+      <p class="mono" style="margin: 0; color: #8BB5E8">Analyze · ⌘2</p>
+      <h3>See exactly where your space went.</h3>
+      <p>Map a whole disk or any folder. The inner ring is the top level and every ring out is one folder deeper: click to go in, the centre to come back.</p>
+      <ul>
+        <li>Collect what you don't need and watch folders shrink before anything is deleted.</li>
+        <li>Delete runs behind a 5-second countdown you can cancel.</li>
+        <li>Preview any file first, in its own window.</li>
+        <li>Hard links and APFS clones are counted once.</li>
+      </ul>
+    </div>
+    <div class="fmedia">
+      <img class="shot" loading="lazy" src="img/analyze-folders.webp" alt="Analyze's Folders view: Movies, Developer, Downloads, Pictures, Music and Documents ranked by size beside a sunburst map">
+    </div>
+  </div>
+  <div class="wrap" style="margin-top: 72px; display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 32px">
+    <figure style="margin: 0">
+      <img class="shot" loading="lazy" src="img/analyze-large.webp" alt="Large Files: the biggest files in the folder with where they live and when they changed">
+      <figcaption class="cap"><strong style="color: #E8EAED">Large Files.</strong> The biggest single files, wherever they hide.</figcaption>
+    </figure>
+    <figure style="margin: 0">
+      <img class="shot" loading="lazy" src="img/analyze-dupes.webp" alt="Duplicates: two groups of identical files with the extra copies ticked and 335.5 MB ready to delete">
+      <figcaption class="cap"><strong style="color: #E8EAED">Duplicates.</strong> Byte-identical copies; one of each always stays.</figcaption>
+    </figure>
   </div>
 </section>
 
-<section id="support" class="section">
-  <h2>Releases and support</h2>
-  <div class="grid docs">
-    <a class="card link" href="https://github.com/smalhasib/maclean/releases" rel="noopener"><h3>Changelog</h3><p>What changed in every release.</p></a>
-    <a class="card link" href="https://github.com/smalhasib/maclean/issues" rel="noopener"><h3>Report an issue</h3><p>Bugs and ideas are welcome.</p></a>
+<section id="apps" style="padding: 160px 0 0; --tone: #C4B5FD">
+  <div class="wrap feature">
+    <div class="ftext">
+      <p class="mono" style="margin: 0; color: #C4B5FD">Apps · ⌘3</p>
+      <h3>Uninstall apps with everything they leave behind.</h3>
+      <p>Every app with its size and when you last used it, sorted into active, recent and unused. Tick some and review each cache, preference and support file before anything is removed.</p>
+      <ul>
+        <li>See how much removing your unused apps would free.</li>
+        <li>Filter by unused, Intel-only or larger than 1 GB.</li>
+        <li>Updates and Startup tabs: see how each app updates, and switch login items on or off.</li>
+      </ul>
+    </div>
+    <div class="fmedia">
+      <img class="shot" loading="lazy" src="img/apps.webp" alt="Apps: 42 apps and 14.96 GB installed, split into active, recent, unused and unknown, with a list ready for review">
+    </div>
+  </div>
+</section>
+
+<section id="optimize" style="padding: 160px 0 0; --tone: #E8AE6C">
+  <div class="wrap feature flip">
+    <div class="ftext">
+      <p class="mono" style="margin: 0; color: #E8AE6C">Optimize · ⌘4</p>
+      <h3>Maintenance, with the details first.</h3>
+      <p>Seventeen tasks, from checking the Spotlight index to rebuilding Launch Services and compacting Mail and Safari databases. Each row says what it fixes and what it touches.</p>
+      <ul>
+        <li>Checks that change nothing are kept apart from tasks that do.</li>
+        <li>Tasks that need your password, or a closer look, say so up front.</li>
+        <li>A live CPU, memory, swap and load readout while they run.</li>
+      </ul>
+    </div>
+    <div class="fmedia">
+      <img class="shot" loading="lazy" src="img/optimize.webp" alt="Optimize: maintenance tasks grouped into checks, tidy up and refresh, with a summary of the selected task and a live readout">
+    </div>
+  </div>
+</section>
+
+<section id="status" style="padding: 160px 0 0; --tone: #E98FB0">
+  <div class="wrap feature">
+    <div class="ftext">
+      <p class="mono" style="margin: 0; color: #E98FB0">Status · ⌘5</p>
+      <h3>Your Mac at a glance.</h3>
+      <p>A health score with what affects it, plus CPU, GPU, memory, battery, disk, network and fans, each with a short history. Below, every process, sortable and searchable, with energy impact.</p>
+      <ul>
+        <li>Free up memory from the memory tile, no password needed.</li>
+        <li>Test your connection speed, only when you ask.</li>
+        <li>Quit a runaway process without opening Activity Monitor.</li>
+      </ul>
+    </div>
+    <div class="fmedia">
+      <img class="shot" loading="lazy" src="img/status-top.webp" alt="Status: health 81 Fair, CPU 57 percent, GPU, memory 83 percent, battery, disk, network and fans tiles">
+    </div>
+  </div>
+</section>
+
+<section id="menubar" style="margin-top: 160px; padding: 112px 0; background: #121519; border-top: 1px solid #1C2026; border-bottom: 1px solid #1C2026">
+  <div class="wrap" style="display: flex; flex-direction: column; align-items: center; text-align: center; gap: 16px">
+    <p class="mono" style="margin: 0; color: #8BB5E8">In your menu bar</p>
+    <h2 style="margin: 0; font-size: 52px; line-height: 1.05; letter-spacing: -.03em; font-weight: 800; color: #F5F7F9; max-width: 860px">Everything important, one click away.</h2>
+    <p style="margin: 0; font-size: 18px; line-height: 1.6; color: #A9AFB7; max-width: 700px">Maclean lives in the menu bar too. Its icon opens a dashboard of your Mac; the clock opens your time, battery and network in one place. Pick what shows in Settings: Maclean and the clock, either one, or nothing.</p>
+  </div>
+  <div class="wrap" style="margin-top: 64px; display: flex; flex-wrap: wrap; gap: 48px; justify-content: center; align-items: flex-start">
+    <figure style="margin: 0; flex: 0 1 360px; min-width: 0">
+      <img class="shot" src="img/maclean-popover.webp" alt="Maclean's menu bar popover">
+      <figcaption class="cap"><strong style="color: #E8EAED">Maclean icon.</strong> Health, CPU, memory, disk, battery and Wi‑Fi, space ready to clean and the busiest processes.</figcaption>
+    </figure>
+    <figure style="margin: 0; flex: 0 1 340px; min-width: 0">
+      <img class="shot" loading="lazy" src="img/clock-popover.webp" alt="The clock popover with time, date, battery details, Wi‑Fi switch and nearby networks">
+      <figcaption class="cap"><strong style="color: #E8EAED">Clock.</strong> One popover for the time, battery and Wi‑Fi, with a live list of networks to join.</figcaption>
+    </figure>
+    <div style="flex: 0 1 380px; min-width: 0; display: flex; flex-direction: column; gap: 40px">
+      <figure style="margin: 0">
+        <img class="shot" loading="lazy" src="img/menu-gestures.webp" alt="Maclean's right-click menu with the Gestures submenu open">
+        <figcaption class="cap"><strong style="color: #E8EAED">Right-click.</strong> Open Maclean, Settings, and Gestures on or off.</figcaption>
+      </figure>
+      <figure style="margin: 0">
+        <img class="shot" loading="lazy" src="img/menu-clipboard.webp" alt="The Clipboard menu with Open Clipboard, Pause Copying and Settings">
+        <figcaption class="cap"><strong style="color: #E8EAED">Clipboard.</strong> Open it, or pause copying for a while.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section id="utilities" style="padding: 140px 0 0">
+  <div class="wrap" style="display: flex; flex-direction: column; gap: 14px; max-width: 1200px">
+    <p class="mono" style="margin: 0; color: #8C939B">Optional utilities · off until you turn them on</p>
+    <h2 style="margin: 0; font-size: 52px; line-height: 1.05; letter-spacing: -.03em; font-weight: 800; color: #F5F7F9; max-width: 860px">Small tools you'd otherwise buy separately.</h2>
+    <p style="margin: 0; font-size: 18px; line-height: 1.6; color: #A9AFB7; max-width: 720px">Turn on only what you want. While off they do no work at all: no polling, no menu bar icon, no hotkey.</p>
+  </div>
+
+  <div class="wrap feature" style="margin-top: 80px; --tone: #5EEAD4">
+    <div class="ftext">
+      <p class="mono" style="margin: 0; color: #5EEAD4">Gestures · ⌘6</p>
+      <h3>Your trackpad's edges are controls.</h3>
+      <p>Slide along the right edge for volume and the left for brightness. The top and bottom edges can switch apps, scrub video, set the keyboard backlight or control media. Normal clicks and scrolling are untouched.</p>
+      <ul>
+        <li>Brightness can drive external displays too, on Apple silicon.</li>
+        <li>Swap the sides, or pause gestures in chosen apps.</li>
+      </ul>
+    </div>
+    <div class="fmedia">
+      <img class="shot" loading="lazy" src="img/gestures.webp" alt="Gestures: a trackpad diagram with Switch Apps on top, Brightness left, Volume right and Keyboard Backlight at the bottom">
+    </div>
+  </div>
+
+  <div class="wrap feature flip" style="margin-top: 140px; --tone: #F0ABFC">
+    <div class="ftext">
+      <p class="mono" style="margin: 0; color: #F0ABFC">Clipboard · ⌘7</p>
+      <h3>Everything you copy, saved and sorted.</h3>
+      <p>Text, code, links, files, images and colours land in their own columns, with a History column for all of it. Open the panel with ⌃Space or from the menu bar, then click to paste.</p>
+      <ul>
+        <li>Search, pins, and colours you can paste in 11 formats.</li>
+        <li>Code is detected and highlighted; links show their page title.</li>
+        <li>Passwords and API keys are skipped, and you can pause copying.</li>
+      </ul>
+    </div>
+    <div class="fmedia">
+      <img class="shot" loading="lazy" src="img/clipboard-panel.webp" alt="The Clipboard panel with History, Text, Code, Links and Colors columns">
+    </div>
+  </div>
+
+  <div class="wrap feature" style="margin-top: 140px; --tone: #8BB5E8">
+    <div class="ftext">
+      <p class="mono" style="margin: 0; color: #8BB5E8">Clock · ⌘8</p>
+      <h3>Time, date, battery and Wi‑Fi in one small item.</h3>
+      <p>The date sits under the time, so the clock takes about half the width, with a battery bar and Wi‑Fi dots beside it. A short guide shows how to hide Apple's own icons and ticks each step as you do it.</p>
+      <ul>
+        <li>12 or 24 hour, date styles or your own pattern, fonts and spacing.</li>
+        <li>A bolt in the battery while it charges; dots turn orange without internet.</li>
+      </ul>
+    </div>
+    <div class="fmedia">
+      <img class="shot" loading="lazy" src="img/clock-section.webp" alt="Clock settings with a menu bar preview and the guide to hide Apple's Wi‑Fi, battery and clock icons">
+    </div>
+  </div>
+</section>
+
+<section id="trust" style="padding: 160px 0 0">
+  <div class="wrap">
+    <h2 style="margin: 0 0 40px; font-size: 44px; line-height: 1.08; letter-spacing: -.03em; font-weight: 800; color: #F5F7F9">Built to be trusted with your Mac.</h2>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px">
+      <div class="card"><h4>Careful by design</h4><p>Nothing is deleted without a review, a countdown and a last check. System folders, keychains, Mail, Messages and Photos can never be removed.</p></div>
+      <div class="card"><h4>Private</h4><p>No analytics, no accounts, no tracking. The speed test and online update checks only run when you ask.</p></div>
+      <div class="card"><h4>Native and light</h4><p>Written in Swift for macOS, light and dark aware, keyboard friendly from ⌘1 to ⌘8.</p></div>
+      <div class="card"><h4>Free, and keeps itself current</h4><p>No trial, no upsell. Signed updates install themselves from inside the app.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="install" style="padding: 160px 0 0">
+  <div class="wrap" style="display: flex; flex-wrap: wrap; gap: 24px">
+    <div class="card" style="flex: 1 1 420px; min-width: 0; padding: 32px">
+      <p class="mono" style="margin: 0; color: #8BB5E8">Homebrew</p>
+      <h4 style="font-size: 24px">Install from the terminal</h4>
+      <div class="code"><span>brew tap smalhasib/maclean</span><button data-copy="brew tap smalhasib/maclean" aria-label="Copy brew tap smalhasib/maclean" style="font: 600 12px -apple-system, sans-serif; padding: 6px 10px; border-radius: 7px; border: 1px solid #2A2E35; background: #1A1E24; color: #E8EAED; min-height: 32px">Copy</button></div>
+      <div class="code"><span>brew trust smalhasib/maclean</span><button data-copy="brew trust smalhasib/maclean" aria-label="Copy brew trust smalhasib/maclean" style="font: 600 12px -apple-system, sans-serif; padding: 6px 10px; border-radius: 7px; border: 1px solid #2A2E35; background: #1A1E24; color: #E8EAED; min-height: 32px">Copy</button></div>
+      <div class="code"><span>brew install --cask maclean</span><button data-copy="brew install --cask maclean" aria-label="Copy brew install --cask maclean" style="font: 600 12px -apple-system, sans-serif; padding: 6px 10px; border-radius: 7px; border: 1px solid #2A2E35; background: #1A1E24; color: #E8EAED; min-height: 32px">Copy</button></div>
+      <p>Update later with <span class="kbd">brew upgrade --cask maclean</span>. Also installs the <span class="kbd">maclean-scan</span> command.</p>
+    </div>
+    <div class="card" style="flex: 1 1 420px; min-width: 0; padding: 32px">
+      <p class="mono" style="margin: 0; color: #9FE1CB">Disk image</p>
+      <h4 style="font-size: 24px">Download and drag</h4>
+      <p>1. Download the latest <span class="kbd">.dmg</span> and open it.<br>2. Drag Maclean onto Applications.<br>3. Open it. macOS may ask you to allow it once in System Settings › Privacy &amp; Security.</p>
+      <a class="btn" id="dmg-link" href="https://github.com/smalhasib/maclean/releases/latest" rel="noopener" style="align-self: flex-start; margin-top: 8px; background: #3B82F6; color: #FFFFFF">Download Maclean</a>
+      <p style="font-size: 13px">macOS 14 or later · Apple silicon and Intel</p>
+    </div>
+  </div>
+</section>
+
+<section style="padding: 140px 0 0">
+  <div class="wrap" style="display: flex; flex-direction: column; align-items: center; text-align: center; gap: 20px">
+    <img src="icon.png" alt="" style="width: 88px; height: 88px; border-radius: 20px">
+    <h2 style="margin: 0; font-size: 44px; letter-spacing: -.03em; font-weight: 800; color: #F5F7F9">A lighter Mac in a minute.</h2>
+    <a class="btn" href="https://github.com/smalhasib/maclean/releases/latest" rel="noopener" style="background: #3B82F6; color: #FFFFFF">Download for macOS</a>
   </div>
 </section>
 
 </main>
 
-<footer>
-  <span>Maclean</span>
-  <span><a href="https://github.com/smalhasib/maclean/releases" rel="noopener">Releases</a> · <a href="https://github.com/smalhasib/maclean/issues" rel="noopener">Issues</a></span>
+<footer style="margin-top: 140px; border-top: 1px solid #1C2026">
+  <div class="wrap" style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; padding-top: 28px; padding-bottom: 40px; font-size: 14px; color: #8C939B">
+    <span>Maclean</span>
+    <span><a href="https://github.com/smalhasib/maclean/releases" style="color: #8C939B">Releases</a> · <a href="https://github.com/smalhasib/maclean/issues" style="color: #8C939B">Report an issue</a></span>
+  </div>
 </footer>
 
+</div>
 <script src="app.js" defer></script>
 </body>
 </html>
